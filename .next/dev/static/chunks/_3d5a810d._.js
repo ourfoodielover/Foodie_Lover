@@ -2,26 +2,25 @@
 "[project]/lib/storage.ts [app-client] (ecmascript)", ((__turbopack_context__) => {
 "use strict";
 
+// ─── Foodie Lover — Storage Layer ─────────────────────────────────────────────
+// All persistence via localStorage (no backend).
+// Exports every type and function used across pages.
 // ─── Types ────────────────────────────────────────────────────────────────────
 __turbopack_context__.s([
     "DEFAULT_MENU",
     ()=>DEFAULT_MENU,
-    "VALID_TRANSITIONS",
-    ()=>VALID_TRANSITIONS,
-    "addItemsToOrder",
-    ()=>addItemsToOrder,
     "addOrder",
     ()=>addOrder,
     "addOrderToTab",
     ()=>addOrderToTab,
-    "addWaiterCall",
-    ()=>addWaiterCall,
     "applyDiscount",
     ()=>applyDiscount,
     "applyTabDiscount",
     ()=>applyTabDiscount,
     "cancelOrder",
     ()=>cancelOrder,
+    "clearFraudAlerts",
+    ()=>clearFraudAlerts,
     "closeTab",
     ()=>closeTab,
     "createTab",
@@ -46,10 +45,6 @@ __turbopack_context__.s([
     ()=>getOrdersInPeriod,
     "getPin",
     ()=>getPin,
-    "getPriorityOrders",
-    ()=>getPriorityOrders,
-    "getStaffSessions",
-    ()=>getStaffSessions,
     "getTab",
     ()=>getTab,
     "getTabOrders",
@@ -60,30 +55,18 @@ __turbopack_context__.s([
     ()=>getTables,
     "getTabs",
     ()=>getTabs,
-    "getWaiterCalls",
-    ()=>getWaiterCalls,
-    "isValidTransition",
-    ()=>isValidTransition,
     "requestBill",
     ()=>requestBill,
-    "resolveWaiterCall",
-    ()=>resolveWaiterCall,
     "saveMenu",
     ()=>saveMenu,
     "saveOrders",
     ()=>saveOrders,
     "savePin",
     ()=>savePin,
-    "savePriorityOrders",
-    ()=>savePriorityOrders,
-    "saveStaffSessions",
-    ()=>saveStaffSessions,
     "saveTables",
     ()=>saveTables,
     "saveTabs",
     ()=>saveTabs,
-    "saveWaiterCalls",
-    ()=>saveWaiterCalls,
     "syncTabTotal",
     ()=>syncTabTotal,
     "syncTableStatus",
@@ -93,20 +76,18 @@ __turbopack_context__.s([
     "voidOrder",
     ()=>voidOrder
 ]);
-// ─── Keys ─────────────────────────────────────────────────────────────────────
+// ─── localStorage keys ────────────────────────────────────────────────────────
 const KEYS = {
     orders: 'fl_orders',
     tables: 'fl_tables',
     menu: 'fl_menu',
-    pin: 'fl_owner_pin',
-    staff: 'fl_staff_sessions',
-    calls: 'fl_waiter_calls',
-    priority: 'fl_priority_orders',
-    orderCounter: 'fl_order_counter',
-    tabs: 'fl_tabs'
+    pin: 'fl_admin_pin',
+    tabs: 'fl_customer_tabs',
+    orderNum: 'fl_order_num_counter',
+    fraudAlerts: 'fl_fraud_alerts'
 };
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function get(key, fallback) {
+// ─── Storage helpers ──────────────────────────────────────────────────────────
+function ls_get(key, fallback) {
     if ("TURBOPACK compile-time falsy", 0) //TURBOPACK unreachable
     ;
     try {
@@ -116,1022 +97,636 @@ function get(key, fallback) {
         return fallback;
     }
 }
-function set(key, value) {
+function ls_set(key, val) {
     if ("TURBOPACK compile-time falsy", 0) //TURBOPACK unreachable
     ;
-    localStorage.setItem(key, JSON.stringify(value));
+    localStorage.setItem(key, JSON.stringify(val));
 }
-const VALID_TRANSITIONS = {
-    awaiting_waiter: [
-        'pending',
-        'cancelled'
-    ],
-    pending: [
-        'preparing',
-        'cancelled'
-    ],
-    preparing: [
-        'prepared',
-        'cancelled'
-    ],
-    prepared: [
-        'served',
-        'void'
-    ],
-    served: [
-        'completed',
-        'void'
-    ],
-    completed: [],
-    void: [],
-    cancelled: []
-};
-function isValidTransition(from, to) {
-    const allowed = VALID_TRANSITIONS[from];
-    return allowed ? allowed.includes(to) : false;
-}
-const getOrders = ()=>get(KEYS.orders, []);
-const saveOrders = (o)=>set(KEYS.orders, o);
+const DEFAULT_MENU = [
+    {
+        id: 'M01',
+        category: 'Biryani',
+        name: 'Chicken Dum Biryani',
+        desc: 'Slow-cooked aromatic rice with tender chicken',
+        price: 280,
+        img: '🍗',
+        badge: 'bestseller',
+        available: true
+    },
+    {
+        id: 'M02',
+        category: 'Biryani',
+        name: 'Mutton Biryani',
+        desc: 'Rich biryani with tender mutton pieces',
+        price: 320,
+        img: '🥩',
+        badge: 'famous',
+        available: true
+    },
+    {
+        id: 'M03',
+        category: 'Biryani',
+        name: 'Veg Biryani',
+        desc: 'Fragrant basmati with fresh vegetables',
+        price: 200,
+        img: '🥦',
+        badge: 'popular',
+        available: true
+    },
+    {
+        id: 'M04',
+        category: 'Biryani',
+        name: 'Egg Biryani',
+        desc: 'Classic biryani with boiled eggs',
+        price: 220,
+        img: '🥚',
+        badge: '',
+        available: true
+    },
+    {
+        id: 'M05',
+        category: 'Starters',
+        name: 'Chicken 65',
+        desc: 'Crispy spiced fried chicken',
+        price: 180,
+        img: '🍗',
+        badge: 'bestseller',
+        available: true
+    },
+    {
+        id: 'M06',
+        category: 'Starters',
+        name: 'Gobi Manchurian',
+        desc: 'Crispy cauliflower in tangy sauce',
+        price: 150,
+        img: '🥦',
+        badge: 'popular',
+        available: true
+    },
+    {
+        id: 'M07',
+        category: 'Starters',
+        name: 'Fish Fry',
+        desc: 'Coastal spiced fried fish',
+        price: 220,
+        img: '🐟',
+        badge: 'famous',
+        available: true
+    },
+    {
+        id: 'M08',
+        category: 'Starters',
+        name: 'Paneer Tikka',
+        desc: 'Grilled cottage cheese with bell peppers',
+        price: 200,
+        img: '🧀',
+        badge: 'chef',
+        available: true
+    },
+    {
+        id: 'M09',
+        category: 'Mains',
+        name: 'Butter Chicken',
+        desc: 'Creamy tomato-based chicken curry',
+        price: 250,
+        img: '🍛',
+        badge: 'bestseller',
+        available: true
+    },
+    {
+        id: 'M10',
+        category: 'Mains',
+        name: 'Dal Tadka',
+        desc: 'Yellow lentils with spiced tempering',
+        price: 120,
+        img: '🍲',
+        badge: '',
+        available: true
+    },
+    {
+        id: 'M11',
+        category: 'Mains',
+        name: 'Palak Paneer',
+        desc: 'Cottage cheese in creamy spinach gravy',
+        price: 180,
+        img: '🍃',
+        badge: 'popular',
+        available: true
+    },
+    {
+        id: 'M12',
+        category: 'Mains',
+        name: 'Prawn Masala',
+        desc: 'Fresh prawns in spicy coconut gravy',
+        price: 300,
+        img: '🍤',
+        badge: 'chef',
+        available: true
+    },
+    {
+        id: 'M13',
+        category: 'Breads',
+        name: 'Butter Naan',
+        desc: 'Soft leavened bread with butter',
+        price: 45,
+        img: '🫓',
+        badge: '',
+        available: true
+    },
+    {
+        id: 'M14',
+        category: 'Breads',
+        name: 'Garlic Naan',
+        desc: 'Naan topped with garlic and herbs',
+        price: 55,
+        img: '🫓',
+        badge: 'popular',
+        available: true
+    },
+    {
+        id: 'M15',
+        category: 'Breads',
+        name: 'Rumali Roti',
+        desc: 'Thin handkerchief bread',
+        price: 35,
+        img: '🫓',
+        badge: '',
+        available: true
+    },
+    {
+        id: 'M16',
+        category: 'Desserts',
+        name: 'Gulab Jamun',
+        desc: 'Soft milk-solid dumplings in rose syrup',
+        price: 80,
+        img: '🍮',
+        badge: 'bestseller',
+        available: true
+    },
+    {
+        id: 'M17',
+        category: 'Desserts',
+        name: 'Phirni',
+        desc: 'Creamy rice pudding with saffron',
+        price: 90,
+        img: '🍮',
+        badge: 'chef',
+        available: true
+    },
+    {
+        id: 'M18',
+        category: 'Drinks',
+        name: 'Masala Chai',
+        desc: 'Spiced milk tea',
+        price: 40,
+        img: '☕',
+        badge: '',
+        available: true
+    },
+    {
+        id: 'M19',
+        category: 'Drinks',
+        name: 'Sweet Lassi',
+        desc: 'Chilled yogurt drink',
+        price: 70,
+        img: '🥛',
+        badge: 'popular',
+        available: true
+    },
+    {
+        id: 'M20',
+        category: 'Drinks',
+        name: 'Fresh Lime Soda',
+        desc: 'Refreshing lemon soda',
+        price: 60,
+        img: '🍋',
+        badge: '',
+        available: true
+    }
+];
+const DEFAULT_TABLES = Array.from({
+    length: 20
+}, (_, i)=>({
+        id: `T${String(i + 1).padStart(2, '0')}`,
+        status: 'available',
+        capacity: i < 4 ? 2 : i < 14 ? 4 : 6
+    }));
+const getPin = ()=>ls_get(KEYS.pin, '1234');
+const savePin = (p)=>ls_set(KEYS.pin, p);
 function getNextOrderNumber() {
-    const current = get(KEYS.orderCounter, 1000);
-    const next = current + 1;
-    set(KEYS.orderCounter, next);
-    return next;
+    const n = ls_get(KEYS.orderNum, 0) + 1;
+    ls_set(KEYS.orderNum, n);
+    return n;
 }
+const getOrders = ()=>ls_get(KEYS.orders, []);
+const saveOrders = (o)=>ls_set(KEYS.orders, o);
 function addOrder(order) {
     const orders = getOrders();
-    // Guard: block duplicate IDs (rapid double-submit protection)
-    if (orders.some((o)=>o.id === order.id)) return;
-    // Auto-assign a sequential human-readable order number if not already set
-    if (!order.orderNum) {
-        order.orderNum = getNextOrderNumber();
-    }
-    // Ensure timeline is always initialised (use the order's actual starting status)
-    if (!order.timeline || !order.timeline.length) {
-        order.timeline = [
-            {
-                status: order.status,
-                timestamp: order.timestamp
-            }
-        ];
-    }
     orders.push(order);
     saveOrders(orders);
-    // Auto-mark table as occupied when a dine-in order is placed
-    if (order.type === 'dine-in' && order.tableId) {
-        syncTableStatus(order.tableId);
-    }
 }
-function updateOrderStatus(orderId, status, by, force = false) {
+function updateOrderStatus(id, status, by = 'System', force = false) {
     const orders = getOrders();
-    const idx = orders.findIndex((o)=>o.id === orderId);
+    const idx = orders.findIndex((o)=>o.id === id);
     if (idx === -1) return false;
-    const current = orders[idx].status;
-    // Prevent any changes on already-cancelled or completed orders unless forced
-    if (!force && !isValidTransition(current, status)) return false;
-    orders[idx].status = status;
-    if (!orders[idx].timeline) orders[idx].timeline = [];
-    orders[idx].timeline.push({
-        status,
-        timestamp: new Date().toISOString(),
-        by
-    });
-    saveOrders(orders);
-    // Sync table status when a dine-in order completes or is served
-    if (orders[idx].type === 'dine-in' && orders[idx].tableId) {
-        syncTableStatus(orders[idx].tableId);
-    }
-    return true;
-}
-function cancelOrder(orderId, reason, by) {
-    const orders = getOrders();
-    const idx = orders.findIndex((o)=>o.id === orderId);
-    if (idx === -1) return false;
-    // Allow cancellation from: unconfirmed, pending, or being prepared
-    const cancellable = [
-        'awaiting_waiter',
-        'pending',
-        'preparing'
-    ];
-    if (!cancellable.includes(orders[idx].status)) return false;
-    orders[idx].status = 'cancelled';
-    orders[idx].cancelReason = reason;
-    orders[idx].cancelledAt = new Date().toISOString();
-    if (!orders[idx].timeline) orders[idx].timeline = [];
-    orders[idx].timeline.push({
-        status: 'cancelled',
-        timestamp: new Date().toISOString(),
-        by,
-        note: reason
-    });
-    saveOrders(orders);
-    // Free up the table if no other active orders remain for it
-    if (orders[idx].type === 'dine-in' && orders[idx].tableId) {
-        syncTableStatus(orders[idx].tableId);
-    }
-    return true;
-}
-function voidOrder(orderId, reason, by) {
-    const orders = getOrders();
-    const idx = orders.findIndex((o)=>o.id === orderId);
-    if (idx === -1) return false;
-    const voidable = [
-        'prepared',
-        'served'
-    ];
-    if (!voidable.includes(orders[idx].status)) return false;
-    orders[idx].status = 'void';
-    orders[idx].voidReason = reason;
-    orders[idx].voidedAt = new Date().toISOString();
-    if (!orders[idx].timeline) orders[idx].timeline = [];
-    orders[idx].timeline.push({
-        status: 'void',
-        timestamp: new Date().toISOString(),
-        by,
-        note: `VOID — ${reason}`
-    });
-    saveOrders(orders);
-    // Free table if no other active orders remain
-    if (orders[idx].type === 'dine-in' && orders[idx].tableId) {
-        syncTableStatus(orders[idx].tableId);
-    }
-    return true;
-}
-function addItemsToOrder(orderId, newItems, by) {
-    const orders = getOrders();
-    const idx = orders.findIndex((o)=>o.id === orderId);
-    if (idx === -1) return false;
-    const terminal = [
-        'completed',
-        'void',
-        'cancelled'
-    ];
-    if (terminal.includes(orders[idx].status)) return false;
-    // Merge items — bump qty for existing, push for new
-    newItems.forEach((newItem)=>{
-        const ei = orders[idx].items.findIndex((i)=>i.id === newItem.id);
-        if (ei >= 0) {
-            orders[idx].items[ei].qty += newItem.qty;
-            orders[idx].items[ei].subtotal = orders[idx].items[ei].price * orders[idx].items[ei].qty;
-        } else {
-            orders[idx].items.push({
-                ...newItem
-            });
-        }
-    });
-    // Recalculate order totals
-    const subtotal = orders[idx].items.reduce((s, i)=>s + i.subtotal, 0);
-    orders[idx].subtotal = subtotal;
-    orders[idx].total = subtotal - (orders[idx].discount || 0);
-    // Record edit history
-    if (!orders[idx].editHistory) orders[idx].editHistory = [];
-    const addedSummary = newItems.map((i)=>`${i.name} ×${i.qty}`).join(', ');
-    orders[idx].editHistory.push({
-        timestamp: new Date().toISOString(),
-        change: `Added items: ${addedSummary}`,
-        by
-    });
-    // If already prepared/served, return to kitchen for the new items
-    const needsKitchen = [
-        'prepared',
-        'served'
-    ];
-    if (needsKitchen.includes(orders[idx].status)) {
-        orders[idx].status = 'preparing';
-        orders[idx].timeline.push({
-            status: 'preparing',
-            timestamp: new Date().toISOString(),
-            by,
-            note: `🆕 Extra items ordered — back to kitchen: ${addedSummary}`
-        });
-    } else {
-        orders[idx].timeline.push({
-            status: orders[idx].status,
-            timestamp: new Date().toISOString(),
-            by,
-            note: `🆕 Items added: ${addedSummary}`
-        });
-    }
-    saveOrders(orders);
-    // Keep table occupied
-    if (orders[idx].type === 'dine-in' && orders[idx].tableId) {
-        syncTableStatus(orders[idx].tableId);
-    }
-    return true;
-}
-function applyDiscount(orderId, discount, reason, by) {
-    const orders = getOrders();
-    const idx = orders.findIndex((o)=>o.id === orderId);
-    if (idx === -1) return false;
-    const sub = orders[idx].subtotal || orders[idx].total;
-    // Clamp discount to [0, subtotal] — prevents negative totals
-    const safeDiscount = Math.min(Math.max(0, Math.round(discount)), sub);
-    orders[idx].discount = safeDiscount;
-    orders[idx].discountReason = reason;
-    orders[idx].total = sub - safeDiscount;
-    if (!orders[idx].editHistory) orders[idx].editHistory = [];
-    orders[idx].editHistory.push({
-        timestamp: new Date().toISOString(),
-        change: `Discount ₹${safeDiscount} applied: ${reason}`,
-        by
-    });
-    saveOrders(orders);
-    return true;
-}
-const getPriorityOrders = ()=>get(KEYS.priority, {});
-function savePriorityOrders(map) {
-    // Prune completed/cancelled orders from the priority map
-    const orders = getOrders();
-    const activeIds = new Set(orders.filter((o)=>[
-            'awaiting_waiter',
-            'pending',
-            'preparing',
-            'prepared'
-        ].includes(o.status)).map((o)=>o.id));
-    // Note: void/cancelled/completed are intentionally excluded from priority tracking
-    const pruned = {};
-    for (const [id, val] of Object.entries(map)){
-        if (activeIds.has(id) && val) pruned[id] = true;
-    }
-    set(KEYS.priority, pruned);
-}
-function getTables() {
-    const saved = get(KEYS.tables, null);
-    if (saved) return saved;
-    const defaults = Array.from({
-        length: 15
-    }, (_, i)=>({
-            id: i + 1,
-            chairs: 4,
-            status: 'available',
-            occupants: []
-        }));
-    set(KEYS.tables, defaults);
-    return defaults;
-}
-const saveTables = (t)=>set(KEYS.tables, t);
-function syncTableStatus(tableId) {
-    const tables = getTables();
-    const idx = tables.findIndex((t)=>t.id === tableId);
-    if (idx === -1) return;
-    // A table is occupied if it has any open or awaiting_payment tabs
-    const activeTabs = getTabs().filter((t)=>t.tableId === tableId && [
-            'open',
-            'awaiting_payment'
-        ].includes(t.tabStatus));
-    // Also check legacy orders not linked to tabs (backward compat)
-    const orders = getOrders();
-    const activeOrders = orders.filter((o)=>o.tableId === tableId && [
+    const order = orders[idx];
+    // Role-based status flow enforcement (unless force=true)
+    if (!force) {
+        const flow = [
             'awaiting_waiter',
             'pending',
             'preparing',
             'prepared',
-            'served'
-        ].includes(o.status));
-    const occupied = activeTabs.length > 0 || activeOrders.length > 0;
-    if (tables[idx].status !== 'reserved') {
-        tables[idx].status = occupied ? 'occupied' : 'available';
-        if (occupied) {
-            tables[idx].occupants = activeTabs.map((t)=>({
-                    name: t.customerName
-                }));
-            if (!tables[idx].sessionStart) tables[idx].sessionStart = new Date().toISOString();
-        } else {
-            tables[idx].occupants = [];
-            tables[idx].sessionStart = undefined;
+            'served',
+            'completed'
+        ];
+        const currIdx = flow.indexOf(order.status);
+        const nextIdx = flow.indexOf(status);
+        if (currIdx === -1 || nextIdx === -1 || nextIdx !== currIdx + 1) {
+            return false;
         }
     }
-    saveTables(tables);
+    orders[idx] = {
+        ...order,
+        status,
+        timeline: [
+            ...order.timeline || [],
+            {
+                status,
+                by,
+                at: new Date().toISOString()
+            }
+        ]
+    };
+    saveOrders(orders);
+    return true;
 }
-function getTableOccupancy() {
-    const tables = getTables();
-    const tabs = getTabs();
+function cancelOrder(id, reason, by = 'System') {
     const orders = getOrders();
-    const ACTIVE_TAB = [
-        'open',
-        'awaiting_payment'
-    ];
-    return tables.map((t)=>{
-        const activeTabs = tabs.filter((tb)=>tb.tableId === t.id && ACTIVE_TAB.includes(tb.tabStatus));
-        const chairsOccupied = activeTabs.reduce((s, tb)=>s + (tb.partySize ?? 1), 0);
-        const guests = activeTabs.map((tb)=>{
-            const tabOrders = orders.filter((o)=>tb.orderIds.includes(o.id) && ![
-                    'void',
-                    'cancelled'
-                ].includes(o.status));
-            return {
-                name: tb.customerName,
-                partySize: tb.partySize ?? 1,
-                status: tb.tabStatus,
-                orderTotal: tb.totalAmount
-            };
+    const idx = orders.findIndex((o)=>o.id === id);
+    if (idx === -1) return false;
+    orders[idx] = {
+        ...orders[idx],
+        status: 'cancelled',
+        cancelReason: reason,
+        timeline: [
+            ...orders[idx].timeline || [],
+            {
+                status: 'cancelled',
+                by,
+                at: new Date().toISOString(),
+                note: reason
+            }
+        ]
+    };
+    saveOrders(orders);
+    return true;
+}
+function voidOrder(id, reason, by = 'Manager') {
+    const orders = getOrders();
+    const idx = orders.findIndex((o)=>o.id === id);
+    if (idx === -1) return false;
+    orders[idx] = {
+        ...orders[idx],
+        status: 'void',
+        cancelReason: reason,
+        timeline: [
+            ...orders[idx].timeline || [],
+            {
+                status: 'void',
+                by,
+                at: new Date().toISOString(),
+                note: reason
+            }
+        ]
+    };
+    saveOrders(orders);
+    if ((orders[idx].total || 0) > 100) {
+        addFraudAlert({
+            type: 'void_order',
+            orderId: id,
+            detail: `Order #${orders[idx].orderNum || id.slice(-4)} voided by ${by} — ₹${orders[idx].total}`,
+            by,
+            amount: orders[idx].total
         });
-        return {
-            tableId: t.id,
-            tableName: `Table ${t.id}`,
-            capacity: t.chairs,
-            chairsOccupied,
-            partiesCount: activeTabs.length,
-            guests,
-            tableStatus: t.status,
-            sessionStart: t.sessionStart
-        };
+    }
+    return true;
+}
+function applyDiscount(id, amount, reason, by = 'Manager') {
+    const orders = getOrders();
+    const idx = orders.findIndex((o)=>o.id === id);
+    if (idx === -1) return false;
+    const order = orders[idx];
+    const subtotal = order.subtotal || order.total;
+    const pct = amount / subtotal;
+    if (pct > 0.5) {
+        addFraudAlert({
+            type: 'high_discount',
+            orderId: id,
+            detail: `${Math.round(pct * 100)}% discount (₹${amount}) applied by ${by}`,
+            by,
+            amount
+        });
+    }
+    orders[idx] = {
+        ...order,
+        discount: amount,
+        discountReason: reason,
+        total: Math.max(0, subtotal - amount),
+        timeline: [
+            ...order.timeline || [],
+            {
+                status: 'discount',
+                by,
+                at: new Date().toISOString(),
+                note: `₹${amount} — ${reason}`
+            }
+        ]
+    };
+    saveOrders(orders);
+    return true;
+}
+function getOrdersInPeriod(period) {
+    const orders = getOrders().filter((o)=>o.status === 'completed');
+    const now = new Date();
+    if (period === 'all') return orders;
+    return orders.filter((o)=>{
+        const d = new Date(o.timestamp);
+        if (period === 'today') return d.toDateString() === now.toDateString();
+        if (period === 'week') {
+            const weekAgo = new Date(now);
+            weekAgo.setDate(now.getDate() - 7);
+            return d >= weekAgo;
+        }
+        if (period === 'month') {
+            return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+        }
+        return true;
     });
 }
-function getTabs() {
-    return get(KEYS.tabs, []);
+function exportOrdersCSV() {
+    const orders = getOrders().filter((o)=>o.status === 'completed');
+    const header = 'Order ID,Order#,Customer,Table,Type,Items,Subtotal,Discount,Total,Payment,Timestamp';
+    const rows = orders.map((o)=>{
+        const items = (o.items || []).map((i)=>`${i.name}x${i.qty}`).join('|');
+        return [
+            o.id,
+            o.orderNum || '',
+            o.customerName,
+            o.tableId || '',
+            o.type,
+            `"${items}"`,
+            o.subtotal,
+            o.discount || 0,
+            o.total,
+            o.payment,
+            o.timestamp
+        ].join(',');
+    });
+    return [
+        header,
+        ...rows
+    ].join('\n');
 }
-const saveTabs = (tabs)=>set(KEYS.tabs, tabs);
-function getTab(tabId) {
-    return getTabs().find((t)=>t.id === tabId);
+const getTables = ()=>ls_get(KEYS.tables, DEFAULT_TABLES);
+const saveTables = (t)=>ls_set(KEYS.tables, t);
+function syncTableStatus(tableId) {
+    const activeTabs = getActiveTabsForTable(tableId);
+    const tables = getTables();
+    const idx = tables.findIndex((t)=>t.id === tableId);
+    if (idx === -1) return;
+    tables[idx] = {
+        ...tables[idx],
+        status: activeTabs.length > 0 ? 'occupied' : 'available'
+    };
+    saveTables(tables);
+}
+function getTableOccupancy(tableId) {
+    const activeTabs = getActiveTabsForTable(tableId);
+    if (activeTabs.length === 0) return null;
+    const tab = activeTabs[0];
+    return {
+        tableId: tab.tableId,
+        tabId: tab.id,
+        name: tab.customerName,
+        partySize: tab.partySize,
+        since: tab.createdAt,
+        status: tab.tabStatus
+    };
+}
+const getMenu = ()=>ls_get(KEYS.menu, DEFAULT_MENU);
+const saveMenu = (m)=>ls_set(KEYS.menu, m);
+const getTabs = ()=>ls_get(KEYS.tabs, []);
+const saveTabs = (t)=>ls_set(KEYS.tabs, t);
+function getTab(id) {
+    return getTabs().find((t)=>t.id === id) ?? null;
 }
 function getOpenTabForCustomer(tableId, customerName) {
-    return getTabs().find((t)=>t.tableId === tableId && t.customerName.toLowerCase() === customerName.toLowerCase() && [
-            'open',
-            'awaiting_payment'
-        ].includes(t.tabStatus));
+    const name = customerName.trim().toLowerCase();
+    return getTabs().find((t)=>t.tableId === tableId && t.customerName.trim().toLowerCase() === name && (t.tabStatus === 'open' || t.tabStatus === 'awaiting_payment')) ?? null;
 }
 function getActiveTabsForTable(tableId) {
-    return getTabs().filter((t)=>t.tableId === tableId && [
-            'open',
-            'awaiting_payment'
-        ].includes(t.tabStatus));
+    return getTabs().filter((t)=>t.tableId === tableId && (t.tabStatus === 'open' || t.tabStatus === 'awaiting_payment'));
 }
 function syncTabTotal(tabId) {
     const tabs = getTabs();
     const idx = tabs.findIndex((t)=>t.id === tabId);
     if (idx === -1) return;
     const orders = getOrders();
-    const gross = orders.filter((o)=>tabs[idx].orderIds.includes(o.id) && ![
-            'void',
-            'cancelled'
-        ].includes(o.status)).reduce((s, o)=>s + o.total, 0);
-    tabs[idx].totalAmount = Math.max(0, gross - (tabs[idx].discount || 0));
+    const total = tabs[idx].orderIds.reduce((sum, oid)=>{
+        const order = orders.find((o)=>o.id === oid);
+        if (!order || [
+            'cancelled',
+            'void'
+        ].includes(order.status)) return sum;
+        return sum + (order.total || 0);
+    }, 0);
+    tabs[idx] = {
+        ...tabs[idx],
+        totalAmount: total
+    };
     saveTabs(tabs);
 }
 function createTab(tableId, customerName, partySize) {
     const tab = {
         id: `TAB-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
         tableId,
-        customerName,
+        customerName: customerName.trim(),
         partySize,
-        tabStatus: 'open',
         orderIds: [],
+        tabStatus: 'open',
         totalAmount: 0,
+        discount: 0,
+        discountReason: '',
+        paymentMethod: 'cod',
         createdAt: new Date().toISOString()
     };
     const tabs = getTabs();
     tabs.push(tab);
     saveTabs(tabs);
-    syncTableStatus(tableId);
+    // Mark table occupied
+    const tables = getTables();
+    const tIdx = tables.findIndex((t)=>t.id === tableId);
+    if (tIdx !== -1) {
+        tables[tIdx] = {
+            ...tables[tIdx],
+            status: 'occupied'
+        };
+        saveTables(tables);
+    }
     return tab;
 }
 function addOrderToTab(tabId, orderId) {
     const tabs = getTabs();
     const idx = tabs.findIndex((t)=>t.id === tabId);
     if (idx === -1) return false;
-    if (!tabs[idx].orderIds.includes(orderId)) tabs[idx].orderIds.push(orderId);
-    saveTabs(tabs);
-    syncTabTotal(tabId);
+    if (tabs[idx].tabStatus !== 'open') return false;
+    if (!tabs[idx].orderIds.includes(orderId)) {
+        tabs[idx] = {
+            ...tabs[idx],
+            orderIds: [
+                ...tabs[idx].orderIds,
+                orderId
+            ]
+        };
+        saveTabs(tabs);
+        syncTabTotal(tabId);
+    }
     return true;
 }
 function requestBill(tabId) {
     const tabs = getTabs();
     const idx = tabs.findIndex((t)=>t.id === tabId);
-    if (idx === -1 || tabs[idx].tabStatus !== 'open') return false;
-    // Snapshot final total before locking
-    const orders = getOrders();
-    const gross = orders.filter((o)=>tabs[idx].orderIds.includes(o.id) && ![
-            'void',
-            'cancelled'
-        ].includes(o.status)).reduce((s, o)=>s + o.total, 0);
-    tabs[idx].totalAmount = Math.max(0, gross - (tabs[idx].discount || 0));
-    tabs[idx].tabStatus = 'awaiting_payment';
-    tabs[idx].requestedAt = new Date().toISOString();
-    saveTabs(tabs);
-    return true;
-}
-function applyTabDiscount(tabId, amount, reason) {
-    const tabs = getTabs();
-    const idx = tabs.findIndex((t)=>t.id === tabId);
-    if (idx === -1 || tabs[idx].tabStatus === 'closed') return false;
-    tabs[idx].discount = Math.max(0, amount);
-    tabs[idx].discountReason = reason;
+    if (idx === -1) return false;
+    if (tabs[idx].tabStatus !== 'open') return false;
+    tabs[idx] = {
+        ...tabs[idx],
+        tabStatus: 'awaiting_payment'
+    };
     saveTabs(tabs);
     syncTabTotal(tabId);
     return true;
 }
-function closeTab(tabId, payment, discount, discountReason) {
+function applyTabDiscount(tabId, amount, reason, by = 'Manager') {
     const tabs = getTabs();
     const idx = tabs.findIndex((t)=>t.id === tabId);
-    if (idx === -1 || tabs[idx].tabStatus !== 'awaiting_payment') return false;
-    if (discount && discount > 0) {
-        tabs[idx].discount = discount;
-        tabs[idx].discountReason = discountReason;
-    }
-    // Final total calculation
-    const orders = getOrders();
-    const gross = orders.filter((o)=>tabs[idx].orderIds.includes(o.id) && ![
-            'void',
-            'cancelled'
-        ].includes(o.status)).reduce((s, o)=>s + o.total, 0);
-    tabs[idx].totalAmount = Math.max(0, gross - (tabs[idx].discount || 0));
-    tabs[idx].tabStatus = 'closed';
-    tabs[idx].payment = payment;
-    tabs[idx].closedAt = new Date().toISOString();
+    if (idx === -1) return false;
+    tabs[idx] = {
+        ...tabs[idx],
+        discount: amount,
+        discountReason: reason
+    };
     saveTabs(tabs);
-    // Mark all non-terminal orders in the tab as 'completed'
-    const allOrders = getOrders();
+    if (amount / (tabs[idx].totalAmount || 1) > 0.5) {
+        addFraudAlert({
+            type: 'high_discount',
+            tabId,
+            detail: `${Math.round(amount / (tabs[idx].totalAmount || 1) * 100)}% tab discount (₹${amount}) applied by ${by}`,
+            by,
+            amount
+        });
+    }
+    return true;
+}
+function closeTab(tabId, paymentMethod, discount, discountReason, by = 'Manager') {
+    const tabs = getTabs();
+    const idx = tabs.findIndex((t)=>t.id === tabId);
+    if (idx === -1) return false;
+    syncTabTotal(tabId);
+    const refreshed = getTabs();
+    const tab = refreshed[idx];
+    const finalDiscount = discount ?? tab.discount;
+    const finalDiscReason = discountReason ?? tab.discountReason;
+    refreshed[idx] = {
+        ...tab,
+        tabStatus: 'closed',
+        discount: finalDiscount,
+        discountReason: finalDiscReason,
+        paymentMethod,
+        closedAt: new Date().toISOString()
+    };
+    saveTabs(refreshed);
+    // Mark all tab orders as completed
+    const orders = getOrders();
     let changed = false;
-    tabs[idx].orderIds.forEach((oid)=>{
-        const oi = allOrders.findIndex((o)=>o.id === oid);
-        if (oi === -1) return;
-        const closeable = [
-            'awaiting_waiter',
-            'pending',
-            'preparing',
-            'prepared',
-            'served'
-        ];
-        if (closeable.includes(allOrders[oi].status)) {
-            allOrders[oi].status = 'completed';
-            allOrders[oi].payment = payment;
-            allOrders[oi].timeline.push({
+    tab.orderIds.forEach((oid)=>{
+        const oIdx = orders.findIndex((o)=>o.id === oid);
+        if (oIdx !== -1 && ![
+            'cancelled',
+            'void',
+            'completed'
+        ].includes(orders[oIdx].status)) {
+            orders[oIdx] = {
+                ...orders[oIdx],
                 status: 'completed',
-                timestamp: new Date().toISOString(),
-                by: 'Manager',
-                note: `Tab closed · ${payment}`
-            });
+                payment: paymentMethod,
+                timeline: [
+                    ...orders[oIdx].timeline || [],
+                    {
+                        status: 'completed',
+                        by,
+                        at: new Date().toISOString(),
+                        note: `Tab closed — ${paymentMethod}`
+                    }
+                ]
+            };
             changed = true;
         }
     });
-    if (changed) saveOrders(allOrders);
-    syncTableStatus(tabs[idx].tableId);
+    if (changed) saveOrders(orders);
+    // Release table if no more active tabs
+    syncTableStatus(tab.tableId);
     return true;
 }
 function getTabOrders(tabId) {
     const tab = getTab(tabId);
     if (!tab) return [];
     const orders = getOrders();
-    return orders.filter((o)=>tab.orderIds.includes(o.id));
+    return tab.orderIds.map((oid)=>orders.find((o)=>o.id === oid)).filter((o)=>o !== undefined);
 }
-const DEFAULT_MENU = [
-    {
-        id: 1,
-        category: 'Biryani',
-        name: 'Hyderabadi Chicken Dum Biryani',
-        desc: 'Slow-cooked tender chicken layered with fragrant basmati rice & saffron',
-        price: 280,
-        img: 'https://images.unsplash.com/photo-1563379091339-03b21ab4a4f8?w=400&auto=format&fit=crop&q=80',
-        badge: 'bestseller',
-        available: true
-    },
-    {
-        id: 2,
-        category: 'Biryani',
-        name: 'Hyderabadi Mutton Dum Biryani',
-        desc: 'Tender mutton pieces slow-cooked with aromatic whole spices',
-        price: 350,
-        img: 'https://images.unsplash.com/photo-1589302168068-964664d93dc0?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 3,
-        category: 'Biryani',
-        name: 'Veg Hyderabadi Biryani',
-        desc: 'Fresh garden vegetables cooked in authentic Hyderabadi dum style',
-        price: 200,
-        img: 'https://images.unsplash.com/photo-1596797038530-2c107229654b?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 4,
-        category: 'Biryani',
-        name: 'Paneer Dum Biryani',
-        desc: 'Soft cottage cheese cubes layered with spiced aromatic basmati',
-        price: 240,
-        img: 'https://images.unsplash.com/photo-1631452180519-c014fe946bc7?w=400&auto=format&fit=crop&q=80',
-        badge: 'popular',
-        available: true
-    },
-    {
-        id: 5,
-        category: 'Biryani',
-        name: 'Egg Biryani',
-        desc: 'Perfectly boiled eggs cooked with Hyderabadi spices and basmati',
-        price: 220,
-        img: 'https://images.unsplash.com/photo-1546833998-877b37c2e5c6?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 6,
-        category: 'Biryani',
-        name: 'Special Double Dum Biryani',
-        desc: 'Our signature extra-large portion with double the flavors & dry fruits',
-        price: 420,
-        img: 'https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=400&auto=format&fit=crop&q=80',
-        badge: 'chef',
-        available: true
-    },
-    {
-        id: 7,
-        category: 'Starters',
-        name: 'Chicken 65',
-        desc: 'Crispy deep-fried chicken with fiery red marinade & curry leaves',
-        price: 220,
-        img: 'https://images.unsplash.com/photo-1599487488170-d11ec9c172f0?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 8,
-        category: 'Starters',
-        name: 'Mutton Seekh Kebab',
-        desc: 'Minced mutton blended with spices & grilled over coal',
-        price: 280,
-        img: 'https://images.unsplash.com/photo-1512058454905-6b84c2b38f50?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 9,
-        category: 'Starters',
-        name: 'Paneer Tikka',
-        desc: 'Marinated cottage cheese cubes grilled in tandoor',
-        price: 200,
-        img: 'https://images.unsplash.com/photo-1567188040759-fb8a883dc6d8?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 10,
-        category: 'Starters',
-        name: 'Veg Shammi Kebab',
-        desc: 'Soft & spicy mixed vegetable patties pan-fried golden',
-        price: 160,
-        img: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 11,
-        category: 'Mains',
-        name: 'Chicken Curry',
-        desc: 'Rich and spicy Hyderabadi style chicken curry in thick gravy',
-        price: 260,
-        img: 'https://images.unsplash.com/photo-1585937421612-70a008356fbe?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 12,
-        category: 'Mains',
-        name: 'Mutton Rogan Josh',
-        desc: 'Slow-cooked tender mutton in aromatic Kashmiri spice gravy',
-        price: 320,
-        img: 'https://images.unsplash.com/photo-1565557623262-b51c2513a641?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 13,
-        category: 'Mains',
-        name: 'Dal Makhani',
-        desc: 'Slow-cooked black lentils simmered with cream & butter overnight',
-        price: 180,
-        img: 'https://images.unsplash.com/photo-1546833998-877b37c2e5c6?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 14,
-        category: 'Mains',
-        name: 'Paneer Butter Masala',
-        desc: 'Soft paneer cubes in rich creamy tomato-cashew gravy',
-        price: 220,
-        img: 'https://images.unsplash.com/photo-1631452180519-c014fe946bc7?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 15,
-        category: 'Mains',
-        name: 'Raita',
-        desc: 'Chilled yogurt with cucumber, onion, tomato & roasted cumin',
-        price: 60,
-        img: 'https://images.unsplash.com/photo-1563805042-7684c019e1cb?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 16,
-        category: 'Breads',
-        name: 'Butter Naan',
-        desc: 'Soft leavened bread baked in tandoor brushed with fresh butter',
-        price: 40,
-        img: 'https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 17,
-        category: 'Breads',
-        name: 'Garlic Naan',
-        desc: 'Naan generously topped with garlic, butter & fresh coriander',
-        price: 50,
-        img: 'https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 18,
-        category: 'Breads',
-        name: 'Tandoori Roti',
-        desc: 'Whole wheat bread baked fresh in clay tandoor',
-        price: 30,
-        img: 'https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 19,
-        category: 'Desserts',
-        name: 'Double Ka Meetha',
-        desc: 'Iconic Hyderabadi bread pudding with cream, dry fruits & saffron',
-        price: 120,
-        img: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=400&auto=format&fit=crop&q=80',
-        badge: 'famous',
-        available: true
-    },
-    {
-        id: 20,
-        category: 'Desserts',
-        name: 'Qubani Ka Meetha',
-        desc: 'Traditional Hyderabadi apricot dessert topped with fresh cream',
-        price: 100,
-        img: 'https://images.unsplash.com/photo-1565557623262-b51c2513a641?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 21,
-        category: 'Desserts',
-        name: 'Kheer',
-        desc: 'Creamy rich rice pudding infused with saffron, cardamom & nuts',
-        price: 80,
-        img: 'https://images.unsplash.com/photo-1563805042-7684c019e1cb?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 22,
-        category: 'Drinks',
-        name: 'Sweet Lassi',
-        desc: "Chilled sweet yogurt drink - Punjab's most beloved classic",
-        price: 80,
-        img: 'https://images.unsplash.com/photo-1563805042-7684c019e1cb?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 23,
-        category: 'Drinks',
-        name: 'Salted Lassi',
-        desc: 'Refreshing salted yogurt drink with roasted cumin',
-        price: 80,
-        img: 'https://images.unsplash.com/photo-1563805042-7684c019e1cb?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 24,
-        category: 'Drinks',
-        name: 'Masala Chai',
-        desc: 'Aromatic spiced tea brewed with ginger, cardamom & cinnamon',
-        price: 40,
-        img: 'https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 25,
-        category: 'Drinks',
-        name: 'Cold Drink',
-        desc: 'Pepsi / Coke / Sprite / Thumbs Up (chilled)',
-        price: 50,
-        img: 'https://images.unsplash.com/photo-1561758033-d89a9ad46330?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 26,
-        category: 'Drinks',
-        name: 'Mineral Water',
-        desc: '500ml chilled mineral water bottle',
-        price: 20,
-        img: 'https://images.unsplash.com/photo-1560023907-5f339617ea30?w=400&auto=format&fit=crop&q=80',
-        available: true
-    }
-];
-function getMenu() {
-    const saved = get(KEYS.menu, null);
-    if (saved) return saved;
-    set(KEYS.menu, DEFAULT_MENU);
-    return DEFAULT_MENU;
-}
-const saveMenu = (items)=>set(KEYS.menu, items);
-const getPin = ()=>get(KEYS.pin, '1234');
-const savePin = (p)=>set(KEYS.pin, p);
-const getStaffSessions = ()=>get(KEYS.staff, []);
-const saveStaffSessions = (s)=>set(KEYS.staff, s);
-const getWaiterCalls = ()=>get(KEYS.calls, []);
-const saveWaiterCalls = (c)=>set(KEYS.calls, c);
-function addWaiterCall(tableId, message, customerName) {
-    const calls = getWaiterCalls();
-    calls.push({
-        id: `CALL-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        tableId,
-        customerName,
-        message,
-        timestamp: new Date().toISOString(),
-        resolved: false
+// ─── Fraud Alerts ─────────────────────────────────────────────────────────────
+function addFraudAlert(data) {
+    const alerts = ls_get(KEYS.fraudAlerts, []);
+    alerts.push({
+        ...data,
+        id: `FA-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+        at: new Date().toISOString()
     });
-    saveWaiterCalls(calls);
+    if (alerts.length > 200) alerts.splice(0, alerts.length - 200);
+    ls_set(KEYS.fraudAlerts, alerts);
 }
-function resolveWaiterCall(callId, by) {
-    const calls = getWaiterCalls();
-    const idx = calls.findIndex((c)=>c.id === callId);
-    if (idx === -1) return;
-    calls[idx].resolved = true;
-    calls[idx].resolvedAt = new Date().toISOString();
-    calls[idx].resolvedBy = by;
-    saveWaiterCalls(calls);
+function getFraudAlerts() {
+    return ls_get(KEYS.fraudAlerts, []).slice().reverse();
 }
-function getOrdersInPeriod(period) {
-    const all = getOrders();
-    const now = new Date();
-    return all.filter((o)=>{
-        // Exclude cancelled, voided, and unconfirmed orders from revenue/analytics
-        if (o.status === 'cancelled' || o.status === 'void' || o.status === 'awaiting_waiter') return false;
-        const d = new Date(o.timestamp);
-        if (period === 'today') return d.toDateString() === now.toDateString();
-        if (period === 'week') {
-            const s = new Date(now);
-            s.setDate(now.getDate() - now.getDay());
-            s.setHours(0, 0, 0, 0);
-            return d >= s;
-        }
-        if (period === 'month') return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
-        return true;
-    });
-}
-function exportOrdersCSV() {
-    const orders = getOrders();
-    if (!orders.length) {
-        alert('No orders to export.');
-        return;
-    }
-    const DAY = [
-        'Sunday',
-        'Monday',
-        'Tuesday',
-        'Wednesday',
-        'Thursday',
-        'Friday',
-        'Saturday'
-    ];
-    const MONTH = [
-        'January',
-        'February',
-        'March',
-        'April',
-        'May',
-        'June',
-        'July',
-        'August',
-        'September',
-        'October',
-        'November',
-        'December'
-    ];
-    const PAY = {
-        paytm: 'Paytm',
-        phonepe: 'PhonePe',
-        gpay: 'Google Pay',
-        cod: 'Cash'
-    };
-    const headers = [
-        'Order ID',
-        'Date',
-        'Time',
-        'Day',
-        'Week No.',
-        'Month',
-        'Year',
-        'Customer',
-        'Phone',
-        'Type',
-        'Table/Pickup',
-        'Staff',
-        'Item Name',
-        'Item Qty',
-        'Unit Price (₹)',
-        'Line Total (₹)',
-        'Subtotal (₹)',
-        'Discount (₹)',
-        'Discount Reason',
-        'Total (₹)',
-        'Payment',
-        'Status',
-        'Cancel Reason'
-    ];
-    const rows = [];
-    orders.forEach((order)=>{
-        const d = new Date(order.timestamp);
-        const date = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
-        const time = d.toLocaleTimeString('en-IN', {
-            hour: '2-digit',
-            minute: '2-digit'
-        });
-        const loc = order.type === 'dine-in' ? `Table ${order.tableId}` : 'Pickup';
-        const pay = PAY[order.payment] ?? order.payment ?? '';
-        const items = order.items ?? [];
-        if (!items.length) {
-            rows.push([
-                order.id,
-                date,
-                time,
-                DAY[d.getDay()],
-                Math.ceil(d.getDate() / 7),
-                MONTH[d.getMonth()],
-                d.getFullYear(),
-                order.customerName,
-                order.phone ?? '',
-                order.type,
-                loc,
-                order.staffName ?? '',
-                '',
-                '',
-                '',
-                '',
-                order.subtotal,
-                order.discount ?? 0,
-                order.discountReason ?? '',
-                order.total,
-                pay,
-                order.status,
-                order.cancelReason ?? ''
-            ]);
-        } else {
-            items.forEach((item, i)=>{
-                const line = item.subtotal ?? item.price * item.qty;
-                rows.push([
-                    i === 0 ? order.id : '',
-                    i === 0 ? date : '',
-                    i === 0 ? time : '',
-                    i === 0 ? DAY[d.getDay()] : '',
-                    i === 0 ? Math.ceil(d.getDate() / 7) : '',
-                    i === 0 ? MONTH[d.getMonth()] : '',
-                    i === 0 ? d.getFullYear() : '',
-                    i === 0 ? order.customerName : '',
-                    i === 0 ? order.phone ?? '' : '',
-                    i === 0 ? order.type : '',
-                    i === 0 ? loc : '',
-                    i === 0 ? order.staffName ?? '' : '',
-                    item.name,
-                    item.qty,
-                    item.price,
-                    line,
-                    i === 0 ? order.subtotal : '',
-                    i === 0 ? order.discount ?? 0 : '',
-                    i === 0 ? order.discountReason ?? '' : '',
-                    i === 0 ? order.total : '',
-                    i === 0 ? pay : '',
-                    i === 0 ? order.status : '',
-                    i === 0 ? order.cancelReason ?? '' : ''
-                ]);
-            });
-        }
-    });
-    const esc = (v)=>{
-        const s = String(v ?? '');
-        return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
-    };
-    const csv = [
-        headers,
-        ...rows
-    ].map((r)=>r.map(esc).join(',')).join('\n');
-    const blob = new Blob([
-        '\uFEFF' + csv
-    ], {
-        type: 'text/csv;charset=utf-8;'
-    });
-    const url = URL.createObjectURL(blob);
-    const now = new Date();
-    const fname = `FoodieLover_${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}.csv`;
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fname;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+function clearFraudAlerts() {
+    ls_set(KEYS.fraudAlerts, []);
 }
 function getEndOfDayReport(date) {
     const d = date || new Date();
-    const dayStr = d.toDateString();
-    const all = getOrders().filter((o)=>new Date(o.timestamp).toDateString() === dayStr);
-    const completed = all.filter((o)=>o.status === 'completed');
-    const cancelled = all.filter((o)=>o.status === 'cancelled');
-    const voided = all.filter((o)=>o.status === 'void');
-    const awaiting = all.filter((o)=>o.status === 'awaiting_waiter');
-    const gross = completed.reduce((s, o)=>s + (o.subtotal || o.total), 0);
-    const disc = completed.reduce((s, o)=>s + (o.discount || 0), 0);
-    const net = completed.reduce((s, o)=>s + o.total, 0);
-    // Payment breakdown
-    const payBreak = {};
-    completed.forEach((o)=>{
-        const pay = o.payment || 'cod';
-        if (!payBreak[pay]) payBreak[pay] = {
-            count: 0,
-            amount: 0
-        };
-        payBreak[pay].count++;
-        payBreak[pay].amount += o.total;
-    });
-    // Peak hour (by order count)
-    const hourCounts = {};
-    all.forEach((o)=>{
-        const h = new Date(o.timestamp).getHours();
-        hourCounts[h] = (hourCounts[h] || 0) + 1;
-    });
-    const peakEntry = Object.entries(hourCounts).sort((a, b)=>Number(b[1]) - Number(a[1]))[0];
-    const peakHour = peakEntry ? `${String(Number(peakEntry[0])).padStart(2, '0')}:00 – ${String(Number(peakEntry[0])).padStart(2, '0')}:59` : 'N/A';
-    // Top items (from completed orders only)
+    const dayOrders = getOrders().filter((o)=>new Date(o.timestamp).toDateString() === d.toDateString());
+    const completedOrders = dayOrders.filter((o)=>o.status === 'completed');
+    const voidedOrders = dayOrders.filter((o)=>o.status === 'void').length;
+    const totalRevenue = completedOrders.reduce((s, o)=>s + (o.total || 0), 0);
+    const discountsTotal = completedOrders.reduce((s, o)=>s + (o.discount || 0), 0);
     const itemMap = {};
-    completed.forEach((o)=>{
-        o.items.forEach((item)=>{
-            itemMap[item.name] = (itemMap[item.name] || 0) + item.qty;
-        });
-    });
-    const topItems = Object.entries(itemMap).sort((a, b)=>b[1] - a[1]).slice(0, 6).map(([name, qty])=>({
+    completedOrders.forEach((o)=>(o.items || []).forEach((i)=>{
+            itemMap[i.name] = (itemMap[i.name] || 0) + i.qty;
+        }));
+    const topItems = Object.entries(itemMap).sort((a, b)=>b[1] - a[1]).slice(0, 5).map(([name, qty])=>({
             name,
             qty
         }));
+    const completedTabs = getTabs().filter((t)=>t.tabStatus === 'closed' && t.closedAt && new Date(t.closedAt).toDateString() === d.toDateString()).length;
     return {
-        date: d.toLocaleDateString('en-IN', {
-            day: '2-digit',
-            month: 'short',
-            year: 'numeric'
-        }),
-        totalOrders: all.length,
-        completedOrders: completed.length,
-        cancelledOrders: cancelled.length,
-        voidedOrders: voided.length,
-        awaitingOrders: awaiting.length,
-        grossRevenue: gross,
-        discounts: disc,
-        netRevenue: net,
-        paymentBreakdown: payBreak,
-        avgBillValue: completed.length ? Math.round(net / completed.length) : 0,
-        peakHour,
-        topItems
+        date: d.toDateString(),
+        totalOrders: completedOrders.length,
+        totalRevenue,
+        avgOrderValue: completedOrders.length ? Math.round(totalRevenue / completedOrders.length) : 0,
+        topItems,
+        completedTabs,
+        voidedOrders,
+        discountsTotal
     };
-}
-function getFraudAlerts() {
-    const today = new Date().toDateString();
-    const orders = getOrders().filter((o)=>new Date(o.timestamp).toDateString() === today);
-    const alerts = [];
-    // Waiter/staff with many cancellations today
-    const cancelByStaff = {};
-    orders.filter((o)=>o.status === 'cancelled').forEach((o)=>{
-        const who = o.staffName || 'Unknown';
-        cancelByStaff[who] = (cancelByStaff[who] || 0) + 1;
-    });
-    Object.entries(cancelByStaff).forEach(([staff, count])=>{
-        if (count >= 3) {
-            alerts.push({
-                type: 'high_cancellations',
-                severity: count >= 5 ? 'critical' : 'warning',
-                message: `${staff} has ${count} cancellation${count > 1 ? 's' : ''} today`,
-                staff,
-                count
-            });
-        }
-    });
-    // High number of discounts today
-    const discountOrders = orders.filter((o)=>(o.discount || 0) > 0);
-    if (discountOrders.length >= 5) {
-        const totalDisc = discountOrders.reduce((s, o)=>s + (o.discount || 0), 0);
-        alerts.push({
-            type: 'high_discounts',
-            severity: discountOrders.length >= 10 ? 'critical' : 'warning',
-            message: `${discountOrders.length} discounts today totalling ₹${totalDisc}`,
-            count: discountOrders.length
-        });
-    }
-    // Large individual discounts (>₹100)
-    orders.filter((o)=>(o.discount || 0) > 100).forEach((o)=>{
-        alerts.push({
-            type: 'large_single_discount',
-            severity: 'warning',
-            message: `Large discount ₹${o.discount} on order ${o.orderNum ? `#${o.orderNum}` : o.id}`,
-            details: o.discountReason || 'No reason given'
-        });
-    });
-    // Any voided orders today
-    const voidOrders = orders.filter((o)=>o.status === 'void');
-    if (voidOrders.length > 0) {
-        alerts.push({
-            type: 'voided_orders',
-            severity: voidOrders.length >= 2 ? 'critical' : 'warning',
-            message: `${voidOrders.length} order${voidOrders.length > 1 ? 's' : ''} voided today — verify with manager`,
-            count: voidOrders.length
-        });
-    }
-    return alerts;
 }
 if (typeof globalThis.$RefreshHelpers$ === 'object' && globalThis.$RefreshHelpers !== null) {
     __turbopack_context__.k.registerExports(__turbopack_context__.m, globalThis.$RefreshHelpers$);
@@ -1154,6 +749,7 @@ var _s = __turbopack_context__.k.signature();
 ;
 ;
 ;
+// ─── Constants ────────────────────────────────────────────────────────────────
 const CATEGORIES = [
     'All',
     'Biryani',
@@ -1163,558 +759,381 @@ const CATEGORIES = [
     'Desserts',
     'Drinks'
 ];
-const BADGE_LABELS = {
+const BADGE_LABEL = {
     bestseller: '⭐ Bestseller',
     popular: '🔥 Popular',
     chef: "👨‍🍳 Chef's Special",
     famous: '🏆 Famous',
     new: '✨ New'
 };
-const UPSELL_MAP = {
-    Biryani: [
-        'Starters',
-        'Drinks',
-        'Desserts'
-    ],
-    Starters: [
-        'Breads',
-        'Drinks'
-    ],
-    Mains: [
-        'Breads',
-        'Drinks',
-        'Desserts'
-    ],
-    Breads: [
-        'Mains',
-        'Drinks'
-    ],
-    Desserts: [
-        'Drinks'
-    ],
-    Drinks: []
-};
-const STATUS_LABEL = {
-    awaiting_waiter: {
-        label: 'Awaiting Confirmation',
-        color: '#f97316',
-        icon: '⏳'
-    },
-    pending: {
-        label: 'Order Received',
-        color: '#f59e0b',
-        icon: '📋'
-    },
-    preparing: {
-        label: 'Being Prepared',
-        color: '#3b82f6',
-        icon: '👨‍🍳'
-    },
-    prepared: {
-        label: 'Ready to Serve',
-        color: '#8b5cf6',
-        icon: '✅'
-    },
-    served: {
-        label: 'Served',
-        color: '#06b6d4',
-        icon: '🍽️'
-    },
-    completed: {
-        label: 'Payment Done',
-        color: '#16a34a',
-        icon: '🎉'
-    },
-    cancelled: {
-        label: 'Cancelled',
-        color: '#ef4444',
-        icon: '❌'
+// ─── Style helpers ─────────────────────────────────────────────────────────────
+const btn = (bg = '#E65C00', c = 'white')=>({
+        background: bg,
+        color: c,
+        border: 'none',
+        borderRadius: 8,
+        fontWeight: 700,
+        cursor: 'pointer',
+        fontFamily: 'Poppins,sans-serif',
+        padding: '0.5rem 1rem',
+        fontSize: '0.85rem'
+    });
+// ─── SessionStorage helpers ────────────────────────────────────────────────────
+function ssGet(key) {
+    if ("TURBOPACK compile-time falsy", 0) //TURBOPACK unreachable
+    ;
+    try {
+        return sessionStorage.getItem(key);
+    } catch  {
+        return null;
     }
-};
-const FLOW = [
-    'pending',
-    'preparing',
-    'prepared',
-    'served',
-    'completed'
-];
-const MAX_QTY = 20;
-// ─── TrackingBar Component ────────────────────────────────────────────────────
-function TrackingBar({ order }) {
-    if (!order) return null;
-    const statusIndex = FLOW.indexOf(order.status);
-    const progress = statusIndex >= 0 ? (statusIndex + 1) / FLOW.length * 100 : 0;
-    return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-        style: {
-            margin: '16px 0'
-        },
-        children: [
-            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                style: {
-                    fontSize: '12px',
-                    color: '#666',
-                    marginBottom: '8px',
-                    fontWeight: '500'
-                },
-                children: [
-                    STATUS_LABEL[order.status]?.icon,
-                    " ",
-                    STATUS_LABEL[order.status]?.label
-                ]
-            }, void 0, true, {
-                fileName: "[project]/app/table/page.tsx",
-                lineNumber: 56,
-                columnNumber: 7
-            }, this),
-            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                style: {
-                    height: '4px',
-                    background: '#e0e0e0',
-                    borderRadius: '2px',
-                    overflow: 'hidden'
-                },
-                children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                    style: {
-                        height: '100%',
-                        background: `linear-gradient(90deg, #E65C00, #F9A826)`,
-                        width: `${progress}%`,
-                        transition: 'width 0.3s ease'
-                    }
-                }, void 0, false, {
-                    fileName: "[project]/app/table/page.tsx",
-                    lineNumber: 60,
-                    columnNumber: 9
-                }, this)
-            }, void 0, false, {
-                fileName: "[project]/app/table/page.tsx",
-                lineNumber: 59,
-                columnNumber: 7
-            }, this)
-        ]
-    }, void 0, true, {
-        fileName: "[project]/app/table/page.tsx",
-        lineNumber: 55,
-        columnNumber: 5
-    }, this);
 }
-_c = TrackingBar;
-// ─── Main Component ──────────────────────────────────────────────────────────
-function TableContent() {
+function ssSet(key, val) {
+    if ("TURBOPACK compile-time falsy", 0) //TURBOPACK unreachable
+    ;
+    try {
+        sessionStorage.setItem(key, val);
+    } catch  {}
+}
+function ssClear(tableId) {
+    if ("TURBOPACK compile-time falsy", 0) //TURBOPACK unreachable
+    ;
+    try {
+        sessionStorage.removeItem(`fl_tab_${tableId}_id`);
+        sessionStorage.removeItem(`fl_tab_${tableId}_name`);
+        sessionStorage.removeItem(`fl_tab_${tableId}_party`);
+    } catch  {}
+}
+// ─── Inner component (uses useSearchParams) ────────────────────────────────────
+function TablePageInner() {
     _s();
     const searchParams = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$navigation$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useSearchParams"])();
-    const tableId = parseInt(searchParams.get('table') || '1', 10);
-    // Session storage keys
-    const TAB_KEY = `fl_tab_${tableId}_id`;
-    const NAME_KEY = `fl_tab_${tableId}_name`;
-    const PARTY_KEY = `fl_tab_${tableId}_party`;
-    // State
+    const tableId = (searchParams.get('table') || searchParams.get('tableId') || 'T01').toUpperCase();
     const [view, setView] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('landing');
+    // ── Customer identity ──
+    const [customerName, setCustomerName] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('');
+    const [nameInput, setNameInput] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('');
+    const [partyInput, setPartyInput] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('1');
+    const [nameError, setNameError] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('');
+    // ── Tab ──
+    const [tabId, setTabId] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(null);
     const [tab, setTab] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(null);
-    const [tabOrders, setTabOrders] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])([]);
-    const [latestOrder, setLatestOrder] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(null);
+    // ── Menu & cart ──
     const [menu, setMenu] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])([]);
-    const [cart, setCart] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])([]);
-    const [name, setName] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('');
-    const [partySize, setPartySize] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(1);
-    const [selectedCategory, setSelectedCategory] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('All');
-    const [showUpsell, setShowUpsell] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(false);
-    const [upsellCategory, setUpsellCategory] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('');
-    const [error, setError] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('');
-    const [waiterCallCooldown, setWaiterCallCooldown] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(0);
-    const pollingRef = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useRef"])(null);
-    // Landing step:
-    // 'name'  → customer enters their name; system checks if they have an active tab
-    // 'party' → no existing tab found; ask party size before creating a new one
-    const [landingMode, setLandingMode] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('name');
-    // ─── Init Effect ──────────────────────────────────────────────────────────
+    const [catFilter, setCatFilter] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('All');
+    const [cart, setCart] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])({});
+    const [specialNote, setSpecialNote] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('');
+    // ── Orders (tracking) ──
+    const [orders, setOrders] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])([]);
+    // ── UI ──
+    const [orderMsg, setOrderMsg] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('');
+    const [billMsg, setBillMsg] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('');
+    const [trackingView, setTrackingView] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('aggregated');
+    // ─── Init ──────────────────────────────────────────────────────────────────
     (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useEffect"])({
-        "TableContent.useEffect": ()=>{
-            // Load menu
-            setMenu((0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getMenu"])());
-            // Check sessionStorage for saved tab
-            const savedTabId = sessionStorage.getItem(TAB_KEY);
-            const savedName = sessionStorage.getItem(NAME_KEY);
-            const savedParty = sessionStorage.getItem(PARTY_KEY);
+        "TablePageInner.useEffect": ()=>{
+            setMenu((0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getMenu"])().filter({
+                "TablePageInner.useEffect": (m)=>m.available
+            }["TablePageInner.useEffect"]));
+            // Check sessionStorage for existing session on this table
+            const savedTabId = ssGet(`fl_tab_${tableId}_id`);
+            const savedName = ssGet(`fl_tab_${tableId}_name`);
+            const savedParty = ssGet(`fl_tab_${tableId}_party`);
             if (savedTabId && savedName) {
-                const existingTab = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getTab"])(savedTabId);
+                // Verify the tab is still active in localStorage
+                const allTabs = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getTabs"])();
+                const existingTab = allTabs.find({
+                    "TablePageInner.useEffect.existingTab": (t)=>t.id === savedTabId && (t.tabStatus === 'open' || t.tabStatus === 'awaiting_payment')
+                }["TablePageInner.useEffect.existingTab"]);
                 if (existingTab) {
+                    setTabId(savedTabId);
+                    setCustomerName(savedName);
+                    setPartyInput(savedParty || '1');
                     setTab(existingTab);
-                    setName(savedName);
-                    setPartySize(parseInt(savedParty || '1', 10));
-                    // Determine view based on tab status
-                    if (existingTab.tabStatus === 'closed') {
-                        setView('receipt');
-                    } else if (existingTab.tabStatus === 'awaiting_payment') {
-                        setView('tracking');
-                    } else {
-                        setView('tracking');
-                    }
-                    // Load tab orders
-                    const orders = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getTabOrders"])(savedTabId);
-                    setTabOrders(orders);
-                    // Find latest non-completed order
-                    const latest = orders.find({
-                        "TableContent.useEffect.latest": (o)=>o.status !== 'completed' && o.status !== 'void' && o.status !== 'cancelled'
-                    }["TableContent.useEffect.latest"]);
-                    setLatestOrder(latest || null);
-                } else {
-                    // Saved tab no longer exists, start fresh
-                    sessionStorage.removeItem(TAB_KEY);
-                    sessionStorage.removeItem(NAME_KEY);
-                    sessionStorage.removeItem(PARTY_KEY);
-                    setView('landing');
-                }
-            } else {
-                setView('landing');
-            }
-        }
-    }["TableContent.useEffect"], [
-        TAB_KEY,
-        NAME_KEY,
-        PARTY_KEY
-    ]);
-    // ─── Polling Effect ──────────────────────────────────────────────────────
-    (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useEffect"])({
-        "TableContent.useEffect": ()=>{
-            if (view !== 'tracking' || !tab) {
-                if (pollingRef.current) clearInterval(pollingRef.current);
-                return;
-            }
-            const pollTab = {
-                "TableContent.useEffect.pollTab": ()=>{
-                    const updatedTab = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getTab"])(tab.id);
-                    if (!updatedTab) return;
-                    setTab(updatedTab);
-                    // If tab is now closed, switch to receipt
-                    if (updatedTab.tabStatus === 'closed') {
-                        setView('receipt');
-                        if (pollingRef.current) clearInterval(pollingRef.current);
-                        return;
-                    }
-                    // Reload orders
-                    const orders = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getTabOrders"])(updatedTab.id);
-                    setTabOrders(orders);
-                    // Find latest non-completed order
-                    const latest = orders.find({
-                        "TableContent.useEffect.pollTab.latest": (o)=>o.status !== 'completed' && o.status !== 'void' && o.status !== 'cancelled'
-                    }["TableContent.useEffect.pollTab.latest"]);
-                    setLatestOrder(latest || null);
-                }
-            }["TableContent.useEffect.pollTab"];
-            pollingRef.current = setInterval(pollTab, 4000);
-            return ({
-                "TableContent.useEffect": ()=>{
-                    if (pollingRef.current) clearInterval(pollingRef.current);
-                }
-            })["TableContent.useEffect"];
-        }
-    }["TableContent.useEffect"], [
-        view,
-        tab
-    ]);
-    // ─── Waiter Call Cooldown ─────────────────────────────────────────────────
-    (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useEffect"])({
-        "TableContent.useEffect": ()=>{
-            if (waiterCallCooldown <= 0) return;
-            const timer = setTimeout({
-                "TableContent.useEffect.timer": ()=>setWaiterCallCooldown({
-                        "TableContent.useEffect.timer": (c)=>c - 1
-                    }["TableContent.useEffect.timer"])
-            }["TableContent.useEffect.timer"], 1000);
-            return ({
-                "TableContent.useEffect": ()=>clearTimeout(timer)
-            })["TableContent.useEffect"];
-        }
-    }["TableContent.useEffect"], [
-        waiterCallCooldown
-    ]);
-    // ─── Landing Submit ───────────────────────────────────────────────────────
-    const submitLanding = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useCallback"])({
-        "TableContent.useCallback[submitLanding]": ()=>{
-            setError('');
-            if (!name.trim()) {
-                setError('Please enter your name');
-                return;
-            }
-            if (landingMode === 'name') {
-                // Smart lookup: check if this customer already has an active tab at this table.
-                // This covers: first-time visitor, customer who lost session, customer who requested
-                // bill and came back to check status — the system just handles it automatically.
-                const existingTab = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getOpenTabForCustomer"])(tableId, name.trim());
-                if (existingTab) {
-                    // Restore their session seamlessly — no "join" button needed
-                    const tabParty = existingTab.partySize ?? 1;
-                    sessionStorage.setItem(TAB_KEY, existingTab.id);
-                    sessionStorage.setItem(NAME_KEY, name.trim());
-                    sessionStorage.setItem(PARTY_KEY, String(tabParty));
-                    setPartySize(tabParty);
-                    const orders = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getTabOrders"])(existingTab.id);
-                    setTab(existingTab);
-                    setTabOrders(orders);
-                    const latest = orders.find({
-                        "TableContent.useCallback[submitLanding].latest": (o)=>o.status !== 'completed' && o.status !== 'void' && o.status !== 'cancelled'
-                    }["TableContent.useCallback[submitLanding].latest"]);
-                    setLatestOrder(latest || null);
-                    setCart([]);
                     setView('tracking');
+                    return;
                 } else {
-                    // No active tab found — move to party size step, then create a fresh tab
-                    setLandingMode('party');
+                    ssClear(tableId);
                 }
-            } else {
-                // landingMode === 'party': customer confirmed party size, create the tab now
-                const newTab = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["createTab"])(tableId, name.trim(), partySize);
-                sessionStorage.setItem(TAB_KEY, newTab.id);
-                sessionStorage.setItem(NAME_KEY, name.trim());
-                sessionStorage.setItem(PARTY_KEY, partySize.toString());
-                setTab(newTab);
-                setCart([]);
-                setView('menu');
             }
         }
-    }["TableContent.useCallback[submitLanding]"], [
-        name,
-        partySize,
-        landingMode,
-        tableId,
-        TAB_KEY,
-        NAME_KEY,
-        PARTY_KEY
-    ]);
-    // ─── Place Order ──────────────────────────────────────────────────────────
-    const placeOrder = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useCallback"])({
-        "TableContent.useCallback[placeOrder]": ()=>{
-            if (!tab || cart.length === 0) return;
-            const subtotal = cart.reduce({
-                "TableContent.useCallback[placeOrder].subtotal": (sum, item)=>sum + item.subtotal
-            }["TableContent.useCallback[placeOrder].subtotal"], 0);
-            const newOrder = {
-                id: `order_${Date.now()}_${Math.random().toString(36).slice(2)}`,
-                type: 'dine-in',
-                tableId,
-                customerName: name,
-                items: cart,
-                subtotal,
-                discount: 0,
-                total: subtotal,
-                payment: 'pending',
-                status: 'awaiting_waiter',
-                partySize,
-                timestamp: new Date().toISOString(),
-                timeline: []
-            };
-            (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["addOrder"])(newOrder);
-            (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["addOrderToTab"])(tab.id, newOrder.id);
-            // Reload tab and orders
-            const updatedTab = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getTab"])(tab.id);
-            if (updatedTab) {
-                setTab(updatedTab);
-                const orders = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getTabOrders"])(updatedTab.id);
-                setTabOrders(orders);
-                const latest = orders.find({
-                    "TableContent.useCallback[placeOrder].latest": (o)=>o.status !== 'completed' && o.status !== 'void' && o.status !== 'cancelled'
-                }["TableContent.useCallback[placeOrder].latest"]);
-                setLatestOrder(latest || null);
-            }
-            setCart([]);
-            setView('tracking');
-        }
-    }["TableContent.useCallback[placeOrder]"], [
-        tab,
-        cart,
-        name,
-        partySize,
+    }["TablePageInner.useEffect"], [
         tableId
     ]);
-    // ─── Request Bill ─────────────────────────────────────────────────────────
-    const handleRequestBill = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useCallback"])({
-        "TableContent.useCallback[handleRequestBill]": ()=>{
-            if (!tab) return;
-            (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["requestBill"])(tab.id);
-            const updatedTab = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getTab"])(tab.id);
-            if (updatedTab) setTab(updatedTab);
-        }
-    }["TableContent.useCallback[handleRequestBill]"], [
-        tab
-    ]);
-    // ─── Call Waiter ──────────────────────────────────────────────────────────
-    const callWaiter = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useCallback"])({
-        "TableContent.useCallback[callWaiter]": ()=>{
-            if (waiterCallCooldown > 0 || !tab) return;
-            (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["addWaiterCall"])(tableId, 'Customer called', name);
-            setWaiterCallCooldown(60);
-        }
-    }["TableContent.useCallback[callWaiter]"], [
-        waiterCallCooldown,
-        tab,
-        tableId,
-        name
-    ]);
-    // ─── Add/Remove from Cart ──────────────────────────────────────────────────
-    const addToCart = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useCallback"])({
-        "TableContent.useCallback[addToCart]": (item)=>{
-            setCart({
-                "TableContent.useCallback[addToCart]": (prev)=>{
-                    const existing = prev.find({
-                        "TableContent.useCallback[addToCart].existing": (i)=>i.id === item.id
-                    }["TableContent.useCallback[addToCart].existing"]);
-                    if (existing && existing.qty < MAX_QTY) {
-                        return prev.map({
-                            "TableContent.useCallback[addToCart]": (i)=>i.id === item.id ? {
-                                    ...i,
-                                    qty: i.qty + 1,
-                                    subtotal: (i.qty + 1) * i.price
-                                } : i
-                        }["TableContent.useCallback[addToCart]"]);
-                    }
-                    if (!existing) {
-                        return [
-                            ...prev,
-                            {
-                                id: item.id,
-                                name: item.name,
-                                category: item.category,
-                                price: item.price,
-                                qty: 1,
-                                subtotal: item.price
-                            }
-                        ];
-                    }
-                    return prev;
-                }
-            }["TableContent.useCallback[addToCart]"]);
-            setShowUpsell(true);
-            setUpsellCategory(UPSELL_MAP[item.category]?.[0] || '');
-        }
-    }["TableContent.useCallback[addToCart]"], []);
-    const removeFromCart = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useCallback"])({
-        "TableContent.useCallback[removeFromCart]": (itemId)=>{
-            setCart({
-                "TableContent.useCallback[removeFromCart]": (prev)=>prev.filter({
-                        "TableContent.useCallback[removeFromCart]": (i)=>i.id !== itemId
-                    }["TableContent.useCallback[removeFromCart]"])
-            }["TableContent.useCallback[removeFromCart]"]);
-        }
-    }["TableContent.useCallback[removeFromCart]"], []);
-    const updateQty = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useCallback"])({
-        "TableContent.useCallback[updateQty]": (itemId, qty)=>{
-            if (qty < 1) {
-                removeFromCart(itemId);
-                return;
+    // ─── Periodic refresh ─────────────────────────────────────────────────────
+    const refresh = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useCallback"])({
+        "TablePageInner.useCallback[refresh]": ()=>{
+            if (!tabId) return;
+            const allTabs = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getTabs"])();
+            const currentTab = allTabs.find({
+                "TablePageInner.useCallback[refresh].currentTab": (t)=>t.id === tabId
+            }["TablePageInner.useCallback[refresh].currentTab"]);
+            if (currentTab) {
+                setTab(currentTab);
+                (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["syncTabTotal"])(tabId);
             }
-            if (qty > MAX_QTY) qty = MAX_QTY;
-            setCart({
-                "TableContent.useCallback[updateQty]": (prev)=>prev.map({
-                        "TableContent.useCallback[updateQty]": (i)=>i.id === itemId ? {
-                                ...i,
-                                qty,
-                                subtotal: qty * i.price
-                            } : i
-                    }["TableContent.useCallback[updateQty]"])
-            }["TableContent.useCallback[updateQty]"]);
+            setOrders((0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getOrders"])());
         }
-    }["TableContent.useCallback[updateQty]"], [
-        removeFromCart
+    }["TablePageInner.useCallback[refresh]"], [
+        tabId
     ]);
-    // ─── Aggregated Items (all orders in tab) ──────────────────────────────────
-    // For receipt: include completed orders (manager has closed tab → all orders are 'completed').
-    // For tracking: only show active (in-progress) orders to reflect current kitchen state.
-    const aggregatedItems = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useMemo"])({
-        "TableContent.useMemo[aggregatedItems]": ()=>{
-            const agg = {};
-            tabOrders.forEach({
-                "TableContent.useMemo[aggregatedItems]": (order)=>{
-                    // Always skip voided/cancelled items — they were reversed
-                    if (order.status === 'void' || order.status === 'cancelled') return;
-                    // In tracking view, skip orders that are already completed (clean bill view)
-                    // In receipt view, we want everything including completed so the receipt isn't blank
-                    if (view !== 'receipt' && order.status === 'completed') return;
-                    order.items.forEach({
-                        "TableContent.useMemo[aggregatedItems]": (item)=>{
-                            if (!agg[item.id]) {
-                                agg[item.id] = {
-                                    ...item,
-                                    qty: 0,
-                                    subtotal: 0
-                                };
-                            }
-                            agg[item.id].qty += item.qty;
-                            agg[item.id].subtotal += item.subtotal;
-                        }
-                    }["TableContent.useMemo[aggregatedItems]"]);
+    (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useEffect"])({
+        "TablePageInner.useEffect": ()=>{
+            if (!tabId) return;
+            refresh();
+            const t = setInterval(refresh, 3000);
+            return ({
+                "TablePageInner.useEffect": ()=>clearInterval(t)
+            })["TablePageInner.useEffect"];
+        }
+    }["TablePageInner.useEffect"], [
+        refresh,
+        tabId
+    ]);
+    // ─── Landing — start or resume session ────────────────────────────────────
+    function handleStartSession() {
+        const name = nameInput.trim();
+        if (!name) {
+            setNameError('Please enter your name');
+            return;
+        }
+        if (name.length < 2) {
+            setNameError('Name must be at least 2 characters');
+            return;
+        }
+        const party = Math.max(1, parseInt(partyInput) || 1);
+        // Check if there's already an active tab for this name at this table
+        const existingTab = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getOpenTabForCustomer"])(tableId, name);
+        if (existingTab) {
+            setTabId(existingTab.id);
+            setCustomerName(name);
+            setTab(existingTab);
+            ssSet(`fl_tab_${tableId}_id`, existingTab.id);
+            ssSet(`fl_tab_${tableId}_name`, name);
+            ssSet(`fl_tab_${tableId}_party`, String(party));
+            setView('tracking');
+            return;
+        }
+        // Check if the table is occupied by someone else
+        const activeTabs = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getActiveTabsForTable"])(tableId);
+        if (activeTabs.length > 0) {
+            const occupantName = activeTabs[0].customerName;
+            setNameError(`Table ${tableId} is currently occupied by ${occupantName}. If you're part of their group, ask them to add you to the same order.`);
+            return;
+        }
+        // Create new tab
+        const newTab = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["createTab"])(tableId, name, party);
+        setTabId(newTab.id);
+        setCustomerName(name);
+        setTab(newTab);
+        ssSet(`fl_tab_${tableId}_id`, newTab.id);
+        ssSet(`fl_tab_${tableId}_name`, name);
+        ssSet(`fl_tab_${tableId}_party`, String(party));
+        setNameError('');
+        setView('menu');
+    }
+    // ─── Place order ──────────────────────────────────────────────────────────
+    function handlePlaceOrder() {
+        if (!tabId || !customerName) return;
+        const entries = Object.entries(cart).filter(([, qty])=>qty > 0);
+        if (!entries.length) return;
+        const menuMap = Object.fromEntries(menu.map((m)=>[
+                m.id,
+                m
+            ]));
+        const items = entries.map(([id, qty])=>{
+            const m = menuMap[id];
+            return {
+                name: m.name,
+                qty,
+                price: m.price,
+                subtotal: m.price * qty
+            };
+        });
+        const subtotal = items.reduce((s, i)=>s + i.subtotal, 0);
+        const orderNum = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getNextOrderNumber"])();
+        const orderId = `ORD-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+        const order = {
+            id: orderId,
+            orderNum,
+            customerName,
+            tableId,
+            type: 'dine-in',
+            items,
+            status: 'awaiting_waiter',
+            total: subtotal,
+            subtotal,
+            discount: 0,
+            discountReason: '',
+            payment: 'cod',
+            timestamp: new Date().toISOString(),
+            timeline: [
+                {
+                    status: 'awaiting_waiter',
+                    by: customerName,
+                    at: new Date().toISOString()
                 }
-            }["TableContent.useMemo[aggregatedItems]"]);
-            return Object.values(agg);
-        }
-    }["TableContent.useMemo[aggregatedItems]"], [
-        tabOrders,
-        view
-    ]);
-    // ─── Filtered Menu ────────────────────────────────────────────────────────
-    const filteredMenu = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useMemo"])({
-        "TableContent.useMemo[filteredMenu]": ()=>{
-            if (selectedCategory === 'All') return menu;
-            return menu.filter({
-                "TableContent.useMemo[filteredMenu]": (item)=>item.category === selectedCategory
-            }["TableContent.useMemo[filteredMenu]"]);
-        }
-    }["TableContent.useMemo[filteredMenu]"], [
-        menu,
-        selectedCategory
-    ]);
-    // ─── Render Landing View ──────────────────────────────────────────────────
-    if (view === 'landing') {
-        const inputStyle = {
-            width: '100%',
-            padding: '14px',
-            border: '1px solid #E65C00',
-            borderRadius: '6px',
-            fontSize: '15px',
-            boxSizing: 'border-box',
-            background: '#2D0F00',
-            color: 'white',
-            outline: 'none'
+            ]
         };
+        (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["addOrder"])(order);
+        (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["addOrderToTab"])(tabId, orderId);
+        setCart({});
+        setSpecialNote('');
+        setOrderMsg(`✅ Order #${orderNum} placed! Your waiter will be with you shortly.`);
+        setTimeout(()=>setOrderMsg(''), 4000);
+        setView('tracking');
+        refresh();
+    }
+    // ─── Request bill ─────────────────────────────────────────────────────────
+    function handleRequestBill() {
+        if (!tabId) return;
+        const ok = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["requestBill"])(tabId);
+        if (ok) {
+            setBillMsg('🧾 Bill requested! Please proceed to the counter when ready.');
+            refresh();
+            setTimeout(()=>setBillMsg(''), 5000);
+        }
+    }
+    // ─── Cart helpers ─────────────────────────────────────────────────────────
+    const cartTotal = Object.entries(cart).reduce((s, [id, qty])=>{
+        const m = menu.find((x)=>x.id === id);
+        return s + (m ? m.price * qty : 0);
+    }, 0);
+    const cartCount = Object.values(cart).reduce((s, q)=>s + q, 0);
+    function setQty(id, delta) {
+        setCart((prev)=>{
+            const next = {
+                ...prev,
+                [id]: Math.max(0, (prev[id] || 0) + delta)
+            };
+            if (next[id] === 0) delete next[id];
+            return next;
+        });
+    }
+    // ─── Derived tab data ─────────────────────────────────────────────────────
+    const tabOrders = tab ? orders.filter((o)=>tab.orderIds.includes(o.id)) : [];
+    const activeTabOrders = tabOrders.filter((o)=>![
+            'cancelled',
+            'void'
+        ].includes(o.status));
+    const hasUnservedOrders = activeTabOrders.some((o)=>[
+            'awaiting_waiter',
+            'pending',
+            'preparing',
+            'prepared'
+        ].includes(o.status));
+    // Aggregated view: group by item name across all orders
+    const aggregatedItems = (()=>{
+        const map = {};
+        activeTabOrders.forEach((order)=>{
+            (order.items || []).forEach((item)=>{
+                if (!map[item.name]) map[item.name] = {
+                    qty: 0,
+                    price: item.price,
+                    statuses: []
+                };
+                map[item.name].qty += item.qty;
+                map[item.name].statuses.push(order.status);
+            });
+        });
+        return Object.entries(map).map(([name, v])=>({
+                name,
+                qty: v.qty,
+                price: v.price,
+                // Worst status wins for display
+                status: v.statuses.includes('awaiting_waiter') ? 'awaiting_waiter' : v.statuses.includes('pending') ? 'pending' : v.statuses.includes('preparing') ? 'preparing' : v.statuses.includes('prepared') ? 'prepared' : v.statuses.includes('served') ? 'served' : 'completed'
+            }));
+    })();
+    const tabTotal = tab ? tab.totalAmount || 0 : 0;
+    const tabDiscount = tab ? tab.discount || 0 : 0;
+    const billTotal = Math.max(0, tabTotal - tabDiscount);
+    const STATUS_ICON = {
+        awaiting_waiter: '⏳',
+        pending: '⏱️',
+        preparing: '🔥',
+        prepared: '✅',
+        served: '🍽️',
+        completed: '💳',
+        cancelled: '❌',
+        void: '🚫'
+    };
+    const STATUS_LABEL = {
+        awaiting_waiter: 'Waiting for waiter',
+        pending: 'Queued in kitchen',
+        preparing: 'Being prepared',
+        prepared: 'Ready — being brought to you',
+        served: 'Served',
+        completed: 'Completed',
+        cancelled: 'Cancelled',
+        void: 'Voided'
+    };
+    const STATUS_COLOR = {
+        awaiting_waiter: '#f59e0b',
+        pending: '#f59e0b',
+        preparing: '#3b82f6',
+        prepared: '#8b5cf6',
+        served: '#06b6d4',
+        completed: '#16a34a',
+        cancelled: '#ef4444',
+        void: '#9ca3af'
+    };
+    // ─── Landing view ─────────────────────────────────────────────────────────
+    if (view === 'landing') {
         return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
             style: {
                 minHeight: '100vh',
-                background: 'linear-gradient(135deg,#1A0800,#2D0F00)',
-                color: 'white',
-                padding: '20px',
-                fontFamily: 'Poppins, sans-serif',
+                background: 'linear-gradient(135deg,#1A0800,#3D1C00)',
                 display: 'flex',
-                flexDirection: 'column',
                 alignItems: 'center',
-                justifyContent: 'center'
+                justifyContent: 'center',
+                padding: '1rem',
+                fontFamily: 'Poppins,sans-serif'
             },
             children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                 style: {
-                    maxWidth: '400px',
-                    width: '100%'
+                    background: 'white',
+                    borderRadius: 20,
+                    padding: '2rem 1.75rem',
+                    width: '100%',
+                    maxWidth: 400,
+                    boxShadow: '0 20px 60px rgba(0,0,0,0.4)'
                 },
                 children: [
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                         style: {
                             textAlign: 'center',
-                            marginBottom: '36px'
+                            marginBottom: '1.5rem'
                         },
                         children: [
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                 style: {
-                                    fontSize: '40px',
-                                    marginBottom: '8px'
+                                    fontSize: '3rem',
+                                    marginBottom: '0.4rem'
                                 },
                                 children: "🍽️"
                             }, void 0, false, {
                                 fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 386,
+                                lineNumber: 297,
                                 columnNumber: 13
                             }, this),
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("h1", {
+                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                 style: {
-                                    fontSize: '28px',
-                                    margin: '0 0 8px 0',
-                                    fontFamily: 'Playfair Display, serif'
+                                    fontFamily: "'Playfair Display',serif",
+                                    fontSize: '1.6rem',
+                                    fontWeight: 900,
+                                    color: '#1A0800'
+                                },
+                                children: "Foodie Lover"
+                            }, void 0, false, {
+                                fileName: "[project]/app/table/page.tsx",
+                                lineNumber: 298,
+                                columnNumber: 13
+                            }, this),
+                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                style: {
+                                    color: '#888',
+                                    fontSize: '0.82rem',
+                                    marginTop: '0.2rem'
                                 },
                                 children: [
                                     "Table ",
@@ -1722,1522 +1141,1818 @@ function TableContent() {
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 387,
-                                columnNumber: 13
-                            }, this),
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
-                                style: {
-                                    margin: 0,
-                                    fontSize: '14px',
-                                    color: '#bbb'
-                                },
-                                children: landingMode === 'name' ? 'Enter your name to start or resume your order' : 'How many guests are at your table?'
-                            }, void 0, false, {
-                                fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 390,
+                                lineNumber: 299,
                                 columnNumber: 13
                             }, this)
                         ]
                     }, void 0, true, {
                         fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 385,
+                        lineNumber: 296,
                         columnNumber: 11
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                         style: {
-                            marginBottom: '16px'
+                            marginBottom: '1rem'
                         },
                         children: [
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("label", {
                                 style: {
+                                    fontSize: '0.78rem',
+                                    fontWeight: 700,
+                                    color: '#555',
                                     display: 'block',
-                                    marginBottom: '8px',
-                                    fontSize: '13px',
-                                    color: '#ccc'
+                                    marginBottom: '0.35rem'
                                 },
-                                children: "Your Name"
+                                children: "Your Name *"
                             }, void 0, false, {
                                 fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 399,
+                                lineNumber: 303,
                                 columnNumber: 13
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
-                                type: "text",
-                                value: name,
+                                value: nameInput,
                                 onChange: (e)=>{
-                                    setName(e.target.value);
-                                    setError('');
+                                    setNameInput(e.target.value);
+                                    setNameError('');
                                 },
-                                onKeyDown: (e)=>e.key === 'Enter' && submitLanding(),
-                                placeholder: "e.g. Rahul",
-                                disabled: landingMode === 'party',
+                                onKeyDown: (e)=>e.key === 'Enter' && handleStartSession(),
+                                placeholder: "e.g. Rahul Sharma",
+                                autoFocus: true,
                                 style: {
-                                    ...inputStyle,
-                                    opacity: landingMode === 'party' ? 0.6 : 1
-                                },
-                                autoFocus: true
+                                    width: '100%',
+                                    boxSizing: 'border-box',
+                                    padding: '0.7rem 0.9rem',
+                                    border: `2px solid ${nameError ? '#ef4444' : '#e5e7eb'}`,
+                                    borderRadius: 10,
+                                    fontFamily: 'Poppins,sans-serif',
+                                    fontSize: '0.95rem',
+                                    outline: 'none'
+                                }
                             }, void 0, false, {
                                 fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 402,
+                                lineNumber: 304,
                                 columnNumber: 13
                             }, this)
                         ]
                     }, void 0, true, {
                         fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 398,
+                        lineNumber: 302,
                         columnNumber: 11
                     }, this),
-                    landingMode === 'party' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                         style: {
-                            marginBottom: '16px'
+                            marginBottom: '1.25rem'
                         },
                         children: [
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("label", {
                                 style: {
+                                    fontSize: '0.78rem',
+                                    fontWeight: 700,
+                                    color: '#555',
                                     display: 'block',
-                                    marginBottom: '8px',
-                                    fontSize: '13px',
-                                    color: '#ccc'
+                                    marginBottom: '0.35rem'
                                 },
-                                children: "Number of Guests (including you)"
+                                children: "Party Size"
                             }, void 0, false, {
                                 fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 420,
-                                columnNumber: 15
+                                lineNumber: 315,
+                                columnNumber: 13
                             }, this),
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("select", {
-                                value: partySize,
-                                onChange: (e)=>setPartySize(parseInt(e.target.value, 10)),
-                                style: inputStyle,
+                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                style: {
+                                    display: 'flex',
+                                    gap: '0.5rem'
+                                },
                                 children: [
                                     1,
                                     2,
                                     3,
                                     4,
                                     5,
-                                    6,
-                                    7,
-                                    8
-                                ].map((n)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("option", {
-                                        value: n,
-                                        children: [
-                                            n,
-                                            " ",
-                                            n === 1 ? 'person' : 'people'
-                                        ]
-                                    }, n, true, {
+                                    6
+                                ].map((n)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                        onClick: ()=>setPartyInput(String(n)),
+                                        style: {
+                                            flex: 1,
+                                            padding: '0.5rem 0',
+                                            borderRadius: 8,
+                                            border: `2px solid ${partyInput === String(n) ? '#E65C00' : '#e5e7eb'}`,
+                                            background: partyInput === String(n) ? '#fff5ee' : 'white',
+                                            color: partyInput === String(n) ? '#E65C00' : '#555',
+                                            fontWeight: 700,
+                                            cursor: 'pointer',
+                                            fontFamily: 'Poppins,sans-serif',
+                                            fontSize: '0.9rem'
+                                        },
+                                        children: n
+                                    }, n, false, {
                                         fileName: "[project]/app/table/page.tsx",
-                                        lineNumber: 429,
-                                        columnNumber: 19
+                                        lineNumber: 318,
+                                        columnNumber: 17
                                     }, this))
                             }, void 0, false, {
                                 fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 423,
-                                columnNumber: 15
-                            }, this)
-                        ]
-                    }, void 0, true, {
-                        fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 419,
-                        columnNumber: 13
-                    }, this),
-                    error && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                        style: {
-                            color: '#ff6b6b',
-                            fontSize: '13px',
-                            marginBottom: '16px'
-                        },
-                        children: error
-                    }, void 0, false, {
-                        fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 437,
-                        columnNumber: 13
-                    }, this),
-                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                        style: {
-                            display: 'flex',
-                            gap: '12px'
-                        },
-                        children: [
-                            landingMode === 'party' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
-                                onClick: ()=>{
-                                    setLandingMode('name');
-                                    setError('');
-                                },
-                                style: {
-                                    flex: '0 0 80px',
-                                    padding: '14px',
-                                    background: 'rgba(255,255,255,0.1)',
-                                    border: '1px solid rgba(255,255,255,0.2)',
-                                    color: 'white',
-                                    fontSize: '14px',
-                                    borderRadius: '6px',
-                                    cursor: 'pointer'
-                                },
-                                children: "← Back"
-                            }, void 0, false, {
-                                fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 445,
-                                columnNumber: 15
-                            }, this),
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
-                                onClick: submitLanding,
-                                style: {
-                                    flex: 1,
-                                    padding: '14px',
-                                    background: '#E65C00',
-                                    border: 'none',
-                                    color: 'white',
-                                    fontSize: '15px',
-                                    fontWeight: 'bold',
-                                    borderRadius: '6px',
-                                    cursor: 'pointer'
-                                },
-                                children: landingMode === 'name' ? 'Continue →' : '🍴 Start Ordering'
-                            }, void 0, false, {
-                                fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 461,
+                                lineNumber: 316,
                                 columnNumber: 13
                             }, this)
                         ]
                     }, void 0, true, {
                         fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 443,
+                        lineNumber: 314,
+                        columnNumber: 11
+                    }, this),
+                    nameError && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                        style: {
+                            background: '#fef2f2',
+                            border: '1px solid #fecaca',
+                            borderRadius: 8,
+                            padding: '0.6rem 0.8rem',
+                            fontSize: '0.78rem',
+                            color: '#ef4444',
+                            marginBottom: '1rem'
+                        },
+                        children: nameError
+                    }, void 0, false, {
+                        fileName: "[project]/app/table/page.tsx",
+                        lineNumber: 334,
+                        columnNumber: 13
+                    }, this),
+                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                        onClick: handleStartSession,
+                        style: {
+                            ...btn(),
+                            width: '100%',
+                            padding: '0.85rem',
+                            fontSize: '1rem',
+                            borderRadius: 12
+                        },
+                        children: "🚀 Start Ordering"
+                    }, void 0, false, {
+                        fileName: "[project]/app/table/page.tsx",
+                        lineNumber: 339,
+                        columnNumber: 11
+                    }, this),
+                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
+                        style: {
+                            textAlign: 'center',
+                            fontSize: '0.72rem',
+                            color: '#aaa',
+                            marginTop: '0.75rem'
+                        },
+                        children: "Scan QR at your table to begin. Returning customers — enter the same name."
+                    }, void 0, false, {
+                        fileName: "[project]/app/table/page.tsx",
+                        lineNumber: 346,
                         columnNumber: 11
                     }, this)
                 ]
             }, void 0, true, {
                 fileName: "[project]/app/table/page.tsx",
-                lineNumber: 382,
+                lineNumber: 295,
                 columnNumber: 9
             }, this)
         }, void 0, false, {
             fileName: "[project]/app/table/page.tsx",
-            lineNumber: 371,
+            lineNumber: 294,
             columnNumber: 7
         }, this);
     }
-    // ─── Render Menu View ──────────────────────────────────────────────────────
+    // ─── Menu view ────────────────────────────────────────────────────────────
     if (view === 'menu') {
+        const filtered = catFilter === 'All' ? menu : menu.filter((m)=>m.category === catFilter);
         return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
             style: {
                 minHeight: '100vh',
-                background: 'linear-gradient(135deg,#faf8f3,#f5f0e8)',
-                color: '#1A0800',
-                padding: '0',
-                fontFamily: 'Poppins, sans-serif'
+                background: '#faf8f3',
+                fontFamily: 'Poppins,sans-serif',
+                paddingBottom: cartCount > 0 ? '100px' : 0
             },
             children: [
                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                     style: {
-                        background: '#E65C00',
+                        background: 'linear-gradient(135deg,#1A0800,#3D1C00)',
                         color: 'white',
-                        padding: '16px',
+                        padding: '0.9rem 1rem',
                         position: 'sticky',
                         top: 0,
-                        zIndex: 100
+                        zIndex: 50
                     },
-                    children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                        style: {
-                            maxWidth: '440px',
-                            margin: '0 auto',
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center'
-                        },
-                        children: [
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("h1", {
-                                style: {
-                                    fontSize: '20px',
-                                    margin: 0,
-                                    fontFamily: 'Playfair Display, serif'
-                                },
-                                children: "Menu"
-                            }, void 0, false, {
-                                fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 504,
-                                columnNumber: 13
-                            }, this),
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                style: {
-                                    fontSize: '14px'
-                                },
-                                children: [
-                                    "Table ",
-                                    tableId
-                                ]
-                            }, void 0, true, {
-                                fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 505,
-                                columnNumber: 13
-                            }, this)
-                        ]
-                    }, void 0, true, {
-                        fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 503,
-                        columnNumber: 11
-                    }, this)
-                }, void 0, false, {
-                    fileName: "[project]/app/table/page.tsx",
-                    lineNumber: 495,
-                    columnNumber: 9
-                }, this),
-                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                    style: {
-                        padding: '16px',
-                        borderBottom: '1px solid #ddd',
-                        maxWidth: '440px',
-                        margin: '0 auto',
-                        overflowX: 'auto',
-                        display: 'flex',
-                        gap: '12px'
-                    },
-                    children: CATEGORIES.map((cat)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
-                            onClick: ()=>setSelectedCategory(cat),
+                    children: [
+                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                             style: {
-                                padding: '8px 16px',
-                                border: 'none',
-                                borderRadius: '20px',
-                                background: selectedCategory === cat ? '#E65C00' : '#fff',
-                                color: selectedCategory === cat ? 'white' : '#1A0800',
-                                cursor: 'pointer',
-                                fontWeight: selectedCategory === cat ? 'bold' : 'normal',
-                                fontSize: '13px',
-                                whiteSpace: 'nowrap'
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center'
                             },
-                            children: cat
-                        }, cat, false, {
+                            children: [
+                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                    children: [
+                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                            style: {
+                                                fontFamily: "'Playfair Display',serif",
+                                                fontSize: '1.1rem',
+                                                fontWeight: 900
+                                            },
+                                            children: "🍽️ Foodie Lover"
+                                        }, void 0, false, {
+                                            fileName: "[project]/app/table/page.tsx",
+                                            lineNumber: 364,
+                                            columnNumber: 15
+                                        }, this),
+                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                            style: {
+                                                fontSize: '0.68rem',
+                                                color: '#F9A826'
+                                            },
+                                            children: [
+                                                "Table ",
+                                                tableId,
+                                                " · ",
+                                                customerName
+                                            ]
+                                        }, void 0, true, {
+                                            fileName: "[project]/app/table/page.tsx",
+                                            lineNumber: 365,
+                                            columnNumber: 15
+                                        }, this)
+                                    ]
+                                }, void 0, true, {
+                                    fileName: "[project]/app/table/page.tsx",
+                                    lineNumber: 363,
+                                    columnNumber: 13
+                                }, this),
+                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                    style: {
+                                        display: 'flex',
+                                        gap: '0.5rem'
+                                    },
+                                    children: tab && tab.orderIds.length > 0 && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                        onClick: ()=>setView('tracking'),
+                                        style: {
+                                            ...btn('#ffffff20', 'white'),
+                                            fontSize: '0.75rem',
+                                            border: '1px solid #ffffff40'
+                                        },
+                                        children: "📋 My Tab"
+                                    }, void 0, false, {
+                                        fileName: "[project]/app/table/page.tsx",
+                                        lineNumber: 369,
+                                        columnNumber: 17
+                                    }, this)
+                                }, void 0, false, {
+                                    fileName: "[project]/app/table/page.tsx",
+                                    lineNumber: 367,
+                                    columnNumber: 13
+                                }, this)
+                            ]
+                        }, void 0, true, {
                             fileName: "[project]/app/table/page.tsx",
-                            lineNumber: 520,
-                            columnNumber: 13
-                        }, this))
-                }, void 0, false, {
+                            lineNumber: 362,
+                            columnNumber: 11
+                        }, this),
+                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                            style: {
+                                display: 'flex',
+                                gap: '0.4rem',
+                                marginTop: '0.6rem',
+                                overflowX: 'auto',
+                                paddingBottom: '0.1rem'
+                            },
+                            children: CATEGORIES.map((c)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                    onClick: ()=>setCatFilter(c),
+                                    style: {
+                                        padding: '0.25rem 0.7rem',
+                                        borderRadius: 20,
+                                        whiteSpace: 'nowrap',
+                                        border: `1.5px solid ${catFilter === c ? '#F9A826' : '#ffffff30'}`,
+                                        background: catFilter === c ? '#F9A826' : 'transparent',
+                                        color: catFilter === c ? '#1A0800' : 'white',
+                                        fontWeight: catFilter === c ? 700 : 400,
+                                        cursor: 'pointer',
+                                        fontFamily: 'Poppins,sans-serif',
+                                        fontSize: '0.75rem'
+                                    },
+                                    children: c
+                                }, c, false, {
+                                    fileName: "[project]/app/table/page.tsx",
+                                    lineNumber: 378,
+                                    columnNumber: 15
+                                }, this))
+                        }, void 0, false, {
+                            fileName: "[project]/app/table/page.tsx",
+                            lineNumber: 376,
+                            columnNumber: 11
+                        }, this)
+                    ]
+                }, void 0, true, {
                     fileName: "[project]/app/table/page.tsx",
-                    lineNumber: 510,
+                    lineNumber: 361,
                     columnNumber: 9
                 }, this),
                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                     style: {
-                        maxWidth: '440px',
-                        margin: '0 auto',
-                        padding: '16px'
+                        padding: '1rem',
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fill,minmax(160px,1fr))',
+                        gap: '0.75rem'
                     },
-                    children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                        style: {
-                            display: 'grid',
-                            gridTemplateColumns: 'repeat(2, 1fr)',
-                            gap: '12px',
-                            marginBottom: '80px'
-                        },
-                        children: filteredMenu.map((item)=>{
-                            const inCart = cart.find((c)=>c.id === item.id);
-                            return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                style: {
-                                    background: 'white',
-                                    borderRadius: '8px',
-                                    padding: '12px',
-                                    boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-                                    position: 'relative'
-                                },
-                                children: [
-                                    item.badge && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                        style: {
-                                            position: 'absolute',
-                                            top: '8px',
-                                            right: '8px',
-                                            background: '#F9A826',
-                                            color: '#1A0800',
-                                            padding: '4px 8px',
-                                            borderRadius: '4px',
-                                            fontSize: '11px',
-                                            fontWeight: 'bold'
-                                        },
-                                        children: BADGE_LABELS[item.badge] || item.badge
-                                    }, void 0, false, {
-                                        fileName: "[project]/app/table/page.tsx",
-                                        lineNumber: 557,
-                                        columnNumber: 21
-                                    }, this),
-                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("h3", {
-                                        style: {
-                                            fontSize: '14px',
-                                            fontWeight: 'bold',
-                                            margin: '0 0 4px 0'
-                                        },
-                                        children: item.name
-                                    }, void 0, false, {
-                                        fileName: "[project]/app/table/page.tsx",
-                                        lineNumber: 571,
-                                        columnNumber: 19
-                                    }, this),
-                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
-                                        style: {
-                                            fontSize: '12px',
-                                            color: '#666',
-                                            margin: '0 0 8px 0',
-                                            lineHeight: '1.3'
-                                        },
-                                        children: item.desc
-                                    }, void 0, false, {
-                                        fileName: "[project]/app/table/page.tsx",
-                                        lineNumber: 572,
-                                        columnNumber: 19
-                                    }, this),
-                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                        style: {
-                                            display: 'flex',
-                                            justifyContent: 'space-between',
-                                            alignItems: 'center'
-                                        },
-                                        children: [
-                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
-                                                style: {
-                                                    fontSize: '14px',
-                                                    fontWeight: 'bold',
-                                                    color: '#E65C00'
-                                                },
-                                                children: [
-                                                    "₹",
-                                                    item.price
-                                                ]
-                                            }, void 0, true, {
-                                                fileName: "[project]/app/table/page.tsx",
-                                                lineNumber: 574,
-                                                columnNumber: 21
-                                            }, this),
-                                            !inCart ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
-                                                onClick: ()=>addToCart(item),
-                                                style: {
-                                                    padding: '6px 12px',
-                                                    background: '#E65C00',
-                                                    color: 'white',
-                                                    border: 'none',
-                                                    borderRadius: '4px',
-                                                    cursor: 'pointer',
-                                                    fontSize: '12px',
-                                                    fontWeight: 'bold'
-                                                },
-                                                children: "Add"
-                                            }, void 0, false, {
-                                                fileName: "[project]/app/table/page.tsx",
-                                                lineNumber: 576,
-                                                columnNumber: 23
-                                            }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                                style: {
-                                                    display: 'flex',
-                                                    gap: '6px',
-                                                    alignItems: 'center'
-                                                },
-                                                children: [
-                                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
-                                                        onClick: ()=>updateQty(item.id, inCart.qty - 1),
-                                                        style: {
-                                                            padding: '4px 8px',
-                                                            background: '#ddd',
-                                                            border: 'none',
-                                                            borderRadius: '4px',
-                                                            cursor: 'pointer'
-                                                        },
-                                                        children: "−"
-                                                    }, void 0, false, {
-                                                        fileName: "[project]/app/table/page.tsx",
-                                                        lineNumber: 593,
-                                                        columnNumber: 25
-                                                    }, this),
-                                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
-                                                        style: {
-                                                            fontSize: '12px',
-                                                            fontWeight: 'bold',
-                                                            minWidth: '20px',
-                                                            textAlign: 'center'
-                                                        },
-                                                        children: inCart.qty
-                                                    }, void 0, false, {
-                                                        fileName: "[project]/app/table/page.tsx",
-                                                        lineNumber: 605,
-                                                        columnNumber: 25
-                                                    }, this),
-                                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
-                                                        onClick: ()=>updateQty(item.id, inCart.qty + 1),
-                                                        style: {
-                                                            padding: '4px 8px',
-                                                            background: '#E65C00',
-                                                            color: 'white',
-                                                            border: 'none',
-                                                            borderRadius: '4px',
-                                                            cursor: 'pointer'
-                                                        },
-                                                        children: "+"
-                                                    }, void 0, false, {
-                                                        fileName: "[project]/app/table/page.tsx",
-                                                        lineNumber: 606,
-                                                        columnNumber: 25
-                                                    }, this)
-                                                ]
-                                            }, void 0, true, {
-                                                fileName: "[project]/app/table/page.tsx",
-                                                lineNumber: 592,
-                                                columnNumber: 23
-                                            }, this)
-                                        ]
-                                    }, void 0, true, {
-                                        fileName: "[project]/app/table/page.tsx",
-                                        lineNumber: 573,
-                                        columnNumber: 19
-                                    }, this)
-                                ]
-                            }, item.id, true, {
-                                fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 546,
-                                columnNumber: 17
-                            }, this);
-                        })
-                    }, void 0, false, {
-                        fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 542,
-                        columnNumber: 11
-                    }, this)
+                    children: filtered.map((item)=>{
+                        const qty = cart[item.id] || 0;
+                        return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                            style: {
+                                background: 'white',
+                                borderRadius: 14,
+                                overflow: 'hidden',
+                                boxShadow: '0 2px 8px rgba(0,0,0,0.07)',
+                                border: qty > 0 ? '2px solid #E65C00' : '2px solid transparent'
+                            },
+                            children: [
+                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                    style: {
+                                        fontSize: '2.5rem',
+                                        textAlign: 'center',
+                                        padding: '0.75rem 0 0.4rem',
+                                        background: '#faf5ee'
+                                    },
+                                    children: item.img
+                                }, void 0, false, {
+                                    fileName: "[project]/app/table/page.tsx",
+                                    lineNumber: 400,
+                                    columnNumber: 17
+                                }, this),
+                                item.badge && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                    style: {
+                                        fontSize: '0.62rem',
+                                        fontWeight: 700,
+                                        color: '#E65C00',
+                                        textAlign: 'center',
+                                        marginBottom: '0.2rem'
+                                    },
+                                    children: BADGE_LABEL[item.badge] || item.badge
+                                }, void 0, false, {
+                                    fileName: "[project]/app/table/page.tsx",
+                                    lineNumber: 402,
+                                    columnNumber: 19
+                                }, this),
+                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                    style: {
+                                        padding: '0.4rem 0.6rem 0.6rem'
+                                    },
+                                    children: [
+                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                            style: {
+                                                fontWeight: 700,
+                                                fontSize: '0.82rem',
+                                                color: '#1A0800',
+                                                marginBottom: '0.15rem'
+                                            },
+                                            children: item.name
+                                        }, void 0, false, {
+                                            fileName: "[project]/app/table/page.tsx",
+                                            lineNumber: 407,
+                                            columnNumber: 19
+                                        }, this),
+                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                            style: {
+                                                fontSize: '0.68rem',
+                                                color: '#888',
+                                                marginBottom: '0.35rem',
+                                                lineHeight: 1.3
+                                            },
+                                            children: item.desc
+                                        }, void 0, false, {
+                                            fileName: "[project]/app/table/page.tsx",
+                                            lineNumber: 408,
+                                            columnNumber: 19
+                                        }, this),
+                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                            style: {
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'space-between'
+                                            },
+                                            children: [
+                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                                    style: {
+                                                        fontWeight: 900,
+                                                        color: '#E65C00',
+                                                        fontSize: '0.9rem'
+                                                    },
+                                                    children: [
+                                                        "₹",
+                                                        item.price
+                                                    ]
+                                                }, void 0, true, {
+                                                    fileName: "[project]/app/table/page.tsx",
+                                                    lineNumber: 410,
+                                                    columnNumber: 21
+                                                }, this),
+                                                qty === 0 ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                                    onClick: ()=>setQty(item.id, 1),
+                                                    style: {
+                                                        ...btn(),
+                                                        fontSize: '0.75rem',
+                                                        padding: '0.3rem 0.7rem',
+                                                        borderRadius: 20
+                                                    },
+                                                    children: "+ Add"
+                                                }, void 0, false, {
+                                                    fileName: "[project]/app/table/page.tsx",
+                                                    lineNumber: 412,
+                                                    columnNumber: 23
+                                                }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                    style: {
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        gap: '0.4rem'
+                                                    },
+                                                    children: [
+                                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                                            onClick: ()=>setQty(item.id, -1),
+                                                            style: {
+                                                                width: 26,
+                                                                height: 26,
+                                                                borderRadius: '50%',
+                                                                border: '2px solid #E65C00',
+                                                                background: 'white',
+                                                                color: '#E65C00',
+                                                                fontWeight: 900,
+                                                                cursor: 'pointer',
+                                                                fontSize: '1rem',
+                                                                display: 'flex',
+                                                                alignItems: 'center',
+                                                                justifyContent: 'center'
+                                                            },
+                                                            children: "−"
+                                                        }, void 0, false, {
+                                                            fileName: "[project]/app/table/page.tsx",
+                                                            lineNumber: 415,
+                                                            columnNumber: 25
+                                                        }, this),
+                                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                                            style: {
+                                                                fontWeight: 700,
+                                                                color: '#1A0800',
+                                                                fontSize: '0.85rem',
+                                                                minWidth: 16,
+                                                                textAlign: 'center'
+                                                            },
+                                                            children: qty
+                                                        }, void 0, false, {
+                                                            fileName: "[project]/app/table/page.tsx",
+                                                            lineNumber: 416,
+                                                            columnNumber: 25
+                                                        }, this),
+                                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                                            onClick: ()=>setQty(item.id, 1),
+                                                            style: {
+                                                                width: 26,
+                                                                height: 26,
+                                                                borderRadius: '50%',
+                                                                border: 'none',
+                                                                background: '#E65C00',
+                                                                color: 'white',
+                                                                fontWeight: 900,
+                                                                cursor: 'pointer',
+                                                                fontSize: '1rem',
+                                                                display: 'flex',
+                                                                alignItems: 'center',
+                                                                justifyContent: 'center'
+                                                            },
+                                                            children: "+"
+                                                        }, void 0, false, {
+                                                            fileName: "[project]/app/table/page.tsx",
+                                                            lineNumber: 417,
+                                                            columnNumber: 25
+                                                        }, this)
+                                                    ]
+                                                }, void 0, true, {
+                                                    fileName: "[project]/app/table/page.tsx",
+                                                    lineNumber: 414,
+                                                    columnNumber: 23
+                                                }, this)
+                                            ]
+                                        }, void 0, true, {
+                                            fileName: "[project]/app/table/page.tsx",
+                                            lineNumber: 409,
+                                            columnNumber: 19
+                                        }, this)
+                                    ]
+                                }, void 0, true, {
+                                    fileName: "[project]/app/table/page.tsx",
+                                    lineNumber: 406,
+                                    columnNumber: 17
+                                }, this)
+                            ]
+                        }, item.id, true, {
+                            fileName: "[project]/app/table/page.tsx",
+                            lineNumber: 399,
+                            columnNumber: 15
+                        }, this);
+                    })
                 }, void 0, false, {
                     fileName: "[project]/app/table/page.tsx",
-                    lineNumber: 541,
+                    lineNumber: 395,
                     columnNumber: 9
                 }, this),
-                showUpsell && upsellCategory && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                    style: {
-                        position: 'fixed',
-                        inset: 0,
-                        background: 'rgba(0,0,0,0.5)',
-                        display: 'flex',
-                        alignItems: 'flex-end',
-                        zIndex: 200
-                    },
-                    children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                        style: {
-                            width: '100%',
-                            background: 'white',
-                            padding: '24px 16px',
-                            borderRadius: '16px 16px 0 0',
-                            maxWidth: '440px',
-                            margin: '0 auto'
-                        },
-                        children: [
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("h2", {
-                                style: {
-                                    fontSize: '18px',
-                                    fontWeight: 'bold',
-                                    marginBottom: '16px',
-                                    fontFamily: 'Playfair Display, serif'
-                                },
-                                children: "Don't forget..."
-                            }, void 0, false, {
-                                fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 646,
-                                columnNumber: 15
-                            }, this),
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                style: {
-                                    display: 'grid',
-                                    gridTemplateColumns: 'repeat(2, 1fr)',
-                                    gap: '12px',
-                                    marginBottom: '16px'
-                                },
-                                children: menu.filter((item)=>item.category === upsellCategory).slice(0, 4).map((item)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                        style: {
-                                            background: '#f5f0e8',
-                                            padding: '12px',
-                                            borderRadius: '8px',
-                                            cursor: 'pointer',
-                                            textAlign: 'center'
-                                        },
-                                        onClick: ()=>{
-                                            addToCart(item);
-                                            setShowUpsell(false);
-                                        },
-                                        children: [
-                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                                style: {
-                                                    fontSize: '12px',
-                                                    fontWeight: 'bold'
-                                                },
-                                                children: item.name
-                                            }, void 0, false, {
-                                                fileName: "[project]/app/table/page.tsx",
-                                                lineNumber: 668,
-                                                columnNumber: 23
-                                            }, this),
-                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                                style: {
-                                                    fontSize: '12px',
-                                                    color: '#E65C00',
-                                                    marginTop: '4px'
-                                                },
-                                                children: [
-                                                    "₹",
-                                                    item.price
-                                                ]
-                                            }, void 0, true, {
-                                                fileName: "[project]/app/table/page.tsx",
-                                                lineNumber: 669,
-                                                columnNumber: 23
-                                            }, this)
-                                        ]
-                                    }, item.id, true, {
-                                        fileName: "[project]/app/table/page.tsx",
-                                        lineNumber: 654,
-                                        columnNumber: 21
-                                    }, this))
-                            }, void 0, false, {
-                                fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 649,
-                                columnNumber: 15
-                            }, this),
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
-                                onClick: ()=>setShowUpsell(false),
-                                style: {
-                                    width: '100%',
-                                    padding: '12px',
-                                    background: '#E65C00',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '4px',
-                                    cursor: 'pointer',
-                                    fontWeight: 'bold'
-                                },
-                                children: "Continue"
-                            }, void 0, false, {
-                                fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 673,
-                                columnNumber: 15
-                            }, this)
-                        ]
-                    }, void 0, true, {
-                        fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 638,
-                        columnNumber: 13
-                    }, this)
-                }, void 0, false, {
-                    fileName: "[project]/app/table/page.tsx",
-                    lineNumber: 630,
-                    columnNumber: 11
-                }, this),
-                cart.length > 0 && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                cartCount > 0 && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                     style: {
                         position: 'fixed',
                         bottom: 0,
                         left: 0,
                         right: 0,
+                        padding: '0.75rem 1rem',
                         background: 'white',
-                        borderTop: '1px solid #ddd',
-                        padding: '16px',
-                        maxWidth: '440px',
-                        margin: '0 auto',
+                        boxShadow: '0 -4px 20px rgba(0,0,0,0.12)',
                         zIndex: 100
                     },
-                    children: [
-                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                            style: {
-                                marginBottom: '12px'
-                            },
-                            children: [
-                                cart.map((item)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                        style: {
-                                            display: 'flex',
-                                            justifyContent: 'space-between',
-                                            fontSize: '13px',
-                                            marginBottom: '6px'
-                                        },
-                                        children: [
-                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
-                                                children: [
-                                                    item.name,
-                                                    " x",
-                                                    item.qty
-                                                ]
-                                            }, void 0, true, {
-                                                fileName: "[project]/app/table/page.tsx",
-                                                lineNumber: 709,
-                                                columnNumber: 19
-                                            }, this),
-                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
-                                                children: [
-                                                    "₹",
-                                                    item.subtotal
-                                                ]
-                                            }, void 0, true, {
-                                                fileName: "[project]/app/table/page.tsx",
-                                                lineNumber: 710,
-                                                columnNumber: 19
-                                            }, this)
-                                        ]
-                                    }, item.id, true, {
-                                        fileName: "[project]/app/table/page.tsx",
-                                        lineNumber: 708,
-                                        columnNumber: 17
-                                    }, this)),
-                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                    style: {
-                                        borderTop: '1px solid #ddd',
-                                        paddingTop: '8px',
-                                        marginTop: '8px',
-                                        fontSize: '14px',
-                                        fontWeight: 'bold',
-                                        display: 'flex',
-                                        justifyContent: 'space-between'
-                                    },
-                                    children: [
-                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
-                                            children: "Total:"
-                                        }, void 0, false, {
-                                            fileName: "[project]/app/table/page.tsx",
-                                            lineNumber: 722,
-                                            columnNumber: 17
-                                        }, this),
-                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
-                                            children: [
-                                                "₹",
-                                                cart.reduce((sum, item)=>sum + item.subtotal, 0)
-                                            ]
-                                        }, void 0, true, {
-                                            fileName: "[project]/app/table/page.tsx",
-                                            lineNumber: 723,
-                                            columnNumber: 17
-                                        }, this)
-                                    ]
-                                }, void 0, true, {
-                                    fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 713,
-                                    columnNumber: 15
-                                }, this)
-                            ]
-                        }, void 0, true, {
-                            fileName: "[project]/app/table/page.tsx",
-                            lineNumber: 706,
-                            columnNumber: 13
-                        }, this),
-                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
-                            onClick: placeOrder,
-                            style: {
-                                width: '100%',
-                                padding: '12px',
-                                background: '#E65C00',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '4px',
-                                cursor: 'pointer',
-                                fontWeight: 'bold',
-                                fontSize: '14px'
-                            },
-                            children: "Place Order →"
-                        }, void 0, false, {
-                            fileName: "[project]/app/table/page.tsx",
-                            lineNumber: 726,
-                            columnNumber: 13
-                        }, this)
-                    ]
-                }, void 0, true, {
+                    children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                        onClick: ()=>setView('cart'),
+                        style: {
+                            ...btn(),
+                            width: '100%',
+                            padding: '0.8rem',
+                            fontSize: '0.95rem',
+                            borderRadius: 12,
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center'
+                        },
+                        children: [
+                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                children: [
+                                    "🛒 ",
+                                    cartCount,
+                                    " item",
+                                    cartCount !== 1 ? 's' : ''
+                                ]
+                            }, void 0, true, {
+                                fileName: "[project]/app/table/page.tsx",
+                                lineNumber: 431,
+                                columnNumber: 15
+                            }, this),
+                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                children: [
+                                    "₹",
+                                    cartTotal,
+                                    " →"
+                                ]
+                            }, void 0, true, {
+                                fileName: "[project]/app/table/page.tsx",
+                                lineNumber: 432,
+                                columnNumber: 15
+                            }, this)
+                        ]
+                    }, void 0, true, {
+                        fileName: "[project]/app/table/page.tsx",
+                        lineNumber: 430,
+                        columnNumber: 13
+                    }, this)
+                }, void 0, false, {
                     fileName: "[project]/app/table/page.tsx",
-                    lineNumber: 694,
+                    lineNumber: 429,
                     columnNumber: 11
                 }, this)
             ]
         }, void 0, true, {
             fileName: "[project]/app/table/page.tsx",
-            lineNumber: 487,
+            lineNumber: 359,
             columnNumber: 7
         }, this);
     }
-    // ─── Render Tracking View ──────────────────────────────────────────────────
-    if (view === 'tracking') {
-        const tabIsOpen = tab?.tabStatus === 'open';
-        const tabAwaitingPayment = tab?.tabStatus === 'awaiting_payment';
-        // Tab is active if open or awaiting payment — customer is still seated
-        const tabIsActive = tabIsOpen || tabAwaitingPayment;
-        // Block "Request Bill" if ANY order in this tab is still in the kitchen/waiting to be served.
-        // It makes no sense to generate a bill while food hasn't arrived at the table yet.
-        const hasUnservedOrders = tabOrders.some((o)=>[
-                'awaiting_waiter',
-                'pending',
-                'preparing',
-                'prepared'
-            ].includes(o.status));
+    // ─── Cart view ────────────────────────────────────────────────────────────
+    if (view === 'cart') {
+        const cartItems = Object.entries(cart).filter(([, qty])=>qty > 0).map(([id, qty])=>{
+            const m = menu.find((x)=>x.id === id);
+            return {
+                ...m,
+                qty
+            };
+        });
         return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
             style: {
                 minHeight: '100vh',
-                background: 'linear-gradient(135deg,#1A0800,#2D0F00)',
-                color: 'white',
-                padding: '16px',
-                fontFamily: 'Poppins, sans-serif'
+                background: '#faf8f3',
+                fontFamily: 'Poppins,sans-serif',
+                paddingBottom: '100px'
             },
-            children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                style: {
-                    maxWidth: '440px',
-                    margin: '0 auto'
-                },
-                children: [
-                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                        style: {
-                            marginBottom: '24px'
-                        },
-                        children: [
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("h1", {
+            children: [
+                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                    style: {
+                        background: 'linear-gradient(135deg,#1A0800,#3D1C00)',
+                        color: 'white',
+                        padding: '0.9rem 1rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.75rem'
+                    },
+                    children: [
+                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                            onClick: ()=>setView('menu'),
+                            style: {
+                                background: 'none',
+                                border: 'none',
+                                color: 'white',
+                                fontSize: '1.4rem',
+                                cursor: 'pointer',
+                                lineHeight: 1
+                            },
+                            children: "←"
+                        }, void 0, false, {
+                            fileName: "[project]/app/table/page.tsx",
+                            lineNumber: 452,
+                            columnNumber: 11
+                        }, this),
+                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                            children: [
+                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                    style: {
+                                        fontWeight: 800,
+                                        fontSize: '1rem'
+                                    },
+                                    children: "🛒 Your Cart"
+                                }, void 0, false, {
+                                    fileName: "[project]/app/table/page.tsx",
+                                    lineNumber: 454,
+                                    columnNumber: 13
+                                }, this),
+                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                    style: {
+                                        fontSize: '0.68rem',
+                                        color: '#F9A826'
+                                    },
+                                    children: [
+                                        "Table ",
+                                        tableId,
+                                        " · ",
+                                        customerName
+                                    ]
+                                }, void 0, true, {
+                                    fileName: "[project]/app/table/page.tsx",
+                                    lineNumber: 455,
+                                    columnNumber: 13
+                                }, this)
+                            ]
+                        }, void 0, true, {
+                            fileName: "[project]/app/table/page.tsx",
+                            lineNumber: 453,
+                            columnNumber: 11
+                        }, this)
+                    ]
+                }, void 0, true, {
+                    fileName: "[project]/app/table/page.tsx",
+                    lineNumber: 451,
+                    columnNumber: 9
+                }, this),
+                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                    style: {
+                        padding: '1rem'
+                    },
+                    children: [
+                        cartItems.map((item)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                 style: {
-                                    fontSize: '28px',
-                                    margin: '0 0 8px 0',
-                                    fontFamily: 'Playfair Display, serif'
+                                    background: 'white',
+                                    borderRadius: 12,
+                                    padding: '0.75rem 1rem',
+                                    marginBottom: '0.6rem',
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    alignItems: 'center',
+                                    boxShadow: '0 1px 4px rgba(0,0,0,0.06)'
                                 },
                                 children: [
-                                    "Table ",
-                                    tableId
-                                ]
-                            }, void 0, true, {
-                                fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 772,
-                                columnNumber: 13
-                            }, this),
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
-                                style: {
-                                    margin: 0,
-                                    fontSize: '14px',
-                                    color: '#ccc'
-                                },
-                                children: [
-                                    name,
-                                    " ",
-                                    partySize > 1 ? `• ${partySize} people` : ''
-                                ]
-                            }, void 0, true, {
-                                fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 775,
-                                columnNumber: 13
-                            }, this)
-                        ]
-                    }, void 0, true, {
-                        fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 771,
-                        columnNumber: 11
-                    }, this),
-                    tabAwaitingPayment && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                        style: {
-                            background: '#E65C00',
-                            padding: '20px 16px',
-                            borderRadius: '8px',
-                            marginBottom: '20px',
-                            textAlign: 'center'
-                        },
-                        children: [
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                style: {
-                                    fontSize: '20px',
-                                    marginBottom: '8px'
-                                },
-                                children: "🧾"
-                            }, void 0, false, {
-                                fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 789,
-                                columnNumber: 15
-                            }, this),
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                style: {
-                                    fontSize: '18px',
-                                    fontWeight: 'bold',
-                                    marginBottom: '8px'
-                                },
-                                children: "Please pay at the counter"
-                            }, void 0, false, {
-                                fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 790,
-                                columnNumber: 15
-                            }, this),
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                style: {
-                                    fontSize: '13px',
-                                    opacity: 0.9,
-                                    marginBottom: '12px'
-                                },
-                                children: "Your bill total is ready. Please visit the counter to complete payment."
-                            }, void 0, false, {
-                                fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 793,
-                                columnNumber: 15
-                            }, this),
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                style: {
-                                    background: 'rgba(0,0,0,0.2)',
-                                    borderRadius: '6px',
-                                    padding: '10px',
-                                    fontSize: '20px',
-                                    fontWeight: 'bold',
-                                    letterSpacing: '1px'
-                                },
-                                children: [
-                                    "₹",
-                                    tab?.totalAmount || 0
-                                ]
-                            }, void 0, true, {
-                                fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 796,
-                                columnNumber: 15
-                            }, this)
-                        ]
-                    }, void 0, true, {
-                        fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 782,
-                        columnNumber: 13
-                    }, this),
-                    latestOrder && tabIsActive && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                        style: {
-                            marginBottom: '24px'
-                        },
-                        children: [
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("h2", {
-                                style: {
-                                    fontSize: '16px',
-                                    fontWeight: 'bold',
-                                    margin: '0 0 12px 0'
-                                },
-                                children: [
-                                    "Latest Order #",
-                                    latestOrder.orderNum
-                                ]
-                            }, void 0, true, {
-                                fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 813,
-                                columnNumber: 15
-                            }, this),
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(TrackingBar, {
-                                order: latestOrder
-                            }, void 0, false, {
-                                fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 816,
-                                columnNumber: 15
-                            }, this)
-                        ]
-                    }, void 0, true, {
-                        fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 812,
-                        columnNumber: 13
-                    }, this),
-                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                        style: {
-                            marginBottom: '24px'
-                        },
-                        children: [
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("h2", {
-                                style: {
-                                    fontSize: '16px',
-                                    fontWeight: 'bold',
-                                    margin: '0 0 12px 0'
-                                },
-                                children: "Items"
-                            }, void 0, false, {
-                                fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 822,
-                                columnNumber: 13
-                            }, this),
-                            aggregatedItems.length > 0 ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                style: {
-                                    background: 'rgba(255,255,255,0.1)',
-                                    padding: '12px',
-                                    borderRadius: '8px'
-                                },
-                                children: aggregatedItems.map((item)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                         style: {
                                             display: 'flex',
-                                            justifyContent: 'space-between',
-                                            fontSize: '13px',
-                                            marginBottom: '8px'
+                                            alignItems: 'center',
+                                            gap: '0.6rem'
                                         },
                                         children: [
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
-                                                children: [
-                                                    item.name,
-                                                    " x",
-                                                    item.qty
-                                                ]
-                                            }, void 0, true, {
+                                                style: {
+                                                    fontSize: '1.6rem'
+                                                },
+                                                children: item.img
+                                            }, void 0, false, {
                                                 fileName: "[project]/app/table/page.tsx",
-                                                lineNumber: 827,
-                                                columnNumber: 21
+                                                lineNumber: 463,
+                                                columnNumber: 17
                                             }, this),
-                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                                 children: [
-                                                    "₹",
-                                                    item.subtotal
+                                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                        style: {
+                                                            fontWeight: 700,
+                                                            fontSize: '0.85rem',
+                                                            color: '#1A0800'
+                                                        },
+                                                        children: item.name
+                                                    }, void 0, false, {
+                                                        fileName: "[project]/app/table/page.tsx",
+                                                        lineNumber: 465,
+                                                        columnNumber: 19
+                                                    }, this),
+                                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                        style: {
+                                                            fontSize: '0.72rem',
+                                                            color: '#888'
+                                                        },
+                                                        children: [
+                                                            "₹",
+                                                            item.price,
+                                                            " each"
+                                                        ]
+                                                    }, void 0, true, {
+                                                        fileName: "[project]/app/table/page.tsx",
+                                                        lineNumber: 466,
+                                                        columnNumber: 19
+                                                    }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/table/page.tsx",
-                                                lineNumber: 828,
-                                                columnNumber: 21
+                                                lineNumber: 464,
+                                                columnNumber: 17
                                             }, this)
                                         ]
-                                    }, item.id, true, {
+                                    }, void 0, true, {
                                         fileName: "[project]/app/table/page.tsx",
-                                        lineNumber: 826,
-                                        columnNumber: 19
-                                    }, this))
-                            }, void 0, false, {
+                                        lineNumber: 462,
+                                        columnNumber: 15
+                                    }, this),
+                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                        style: {
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '0.5rem'
+                                        },
+                                        children: [
+                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                                onClick: ()=>setQty(item.id, -1),
+                                                style: {
+                                                    width: 28,
+                                                    height: 28,
+                                                    borderRadius: '50%',
+                                                    border: '2px solid #E65C00',
+                                                    background: 'white',
+                                                    color: '#E65C00',
+                                                    fontWeight: 900,
+                                                    cursor: 'pointer',
+                                                    fontSize: '1.1rem',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center'
+                                                },
+                                                children: "−"
+                                            }, void 0, false, {
+                                                fileName: "[project]/app/table/page.tsx",
+                                                lineNumber: 470,
+                                                columnNumber: 17
+                                            }, this),
+                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                                style: {
+                                                    fontWeight: 700,
+                                                    fontSize: '0.9rem',
+                                                    minWidth: 20,
+                                                    textAlign: 'center'
+                                                },
+                                                children: item.qty
+                                            }, void 0, false, {
+                                                fileName: "[project]/app/table/page.tsx",
+                                                lineNumber: 471,
+                                                columnNumber: 17
+                                            }, this),
+                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                                onClick: ()=>setQty(item.id, 1),
+                                                style: {
+                                                    width: 28,
+                                                    height: 28,
+                                                    borderRadius: '50%',
+                                                    border: 'none',
+                                                    background: '#E65C00',
+                                                    color: 'white',
+                                                    fontWeight: 900,
+                                                    cursor: 'pointer',
+                                                    fontSize: '1.1rem',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center'
+                                                },
+                                                children: "+"
+                                            }, void 0, false, {
+                                                fileName: "[project]/app/table/page.tsx",
+                                                lineNumber: 472,
+                                                columnNumber: 17
+                                            }, this),
+                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                                style: {
+                                                    fontWeight: 800,
+                                                    color: '#1A0800',
+                                                    fontSize: '0.9rem',
+                                                    minWidth: 50,
+                                                    textAlign: 'right'
+                                                },
+                                                children: [
+                                                    "₹",
+                                                    item.price * item.qty
+                                                ]
+                                            }, void 0, true, {
+                                                fileName: "[project]/app/table/page.tsx",
+                                                lineNumber: 473,
+                                                columnNumber: 17
+                                            }, this)
+                                        ]
+                                    }, void 0, true, {
+                                        fileName: "[project]/app/table/page.tsx",
+                                        lineNumber: 469,
+                                        columnNumber: 15
+                                    }, this)
+                                ]
+                            }, item.id, true, {
                                 fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 824,
-                                columnNumber: 15
-                            }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
-                                style: {
-                                    fontSize: '13px',
-                                    color: '#ccc',
-                                    margin: 0
-                                },
-                                children: "No items yet"
-                            }, void 0, false, {
-                                fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 833,
-                                columnNumber: 15
-                            }, this)
+                                lineNumber: 461,
+                                columnNumber: 13
+                            }, this)),
+                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                            style: {
+                                margin: '0.75rem 0'
+                            },
+                            children: [
+                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("label", {
+                                    style: {
+                                        fontSize: '0.75rem',
+                                        fontWeight: 700,
+                                        color: '#555',
+                                        display: 'block',
+                                        marginBottom: '0.35rem'
+                                    },
+                                    children: "Special Instructions (optional)"
+                                }, void 0, false, {
+                                    fileName: "[project]/app/table/page.tsx",
+                                    lineNumber: 479,
+                                    columnNumber: 13
+                                }, this),
+                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("textarea", {
+                                    value: specialNote,
+                                    onChange: (e)=>setSpecialNote(e.target.value),
+                                    placeholder: "e.g. Less spicy, no onions...",
+                                    rows: 2,
+                                    style: {
+                                        width: '100%',
+                                        boxSizing: 'border-box',
+                                        padding: '0.6rem 0.75rem',
+                                        border: '2px solid #e5e7eb',
+                                        borderRadius: 10,
+                                        fontFamily: 'Poppins,sans-serif',
+                                        fontSize: '0.85rem',
+                                        resize: 'none'
+                                    }
+                                }, void 0, false, {
+                                    fileName: "[project]/app/table/page.tsx",
+                                    lineNumber: 480,
+                                    columnNumber: 13
+                                }, this)
+                            ]
+                        }, void 0, true, {
+                            fileName: "[project]/app/table/page.tsx",
+                            lineNumber: 478,
+                            columnNumber: 11
+                        }, this),
+                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                            style: {
+                                background: 'white',
+                                borderRadius: 12,
+                                padding: '0.85rem 1rem',
+                                marginBottom: '0.75rem',
+                                boxShadow: '0 1px 4px rgba(0,0,0,0.06)'
+                            },
+                            children: [
+                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                    style: {
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        fontSize: '0.85rem',
+                                        color: '#666',
+                                        marginBottom: '0.25rem'
+                                    },
+                                    children: [
+                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                            children: [
+                                                cartCount,
+                                                " item",
+                                                cartCount !== 1 ? 's' : ''
+                                            ]
+                                        }, void 0, true, {
+                                            fileName: "[project]/app/table/page.tsx",
+                                            lineNumber: 491,
+                                            columnNumber: 15
+                                        }, this),
+                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                            children: [
+                                                "₹",
+                                                cartTotal
+                                            ]
+                                        }, void 0, true, {
+                                            fileName: "[project]/app/table/page.tsx",
+                                            lineNumber: 492,
+                                            columnNumber: 15
+                                        }, this)
+                                    ]
+                                }, void 0, true, {
+                                    fileName: "[project]/app/table/page.tsx",
+                                    lineNumber: 490,
+                                    columnNumber: 13
+                                }, this),
+                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                    style: {
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        fontWeight: 900,
+                                        fontSize: '1rem',
+                                        color: '#1A0800',
+                                        borderTop: '2px solid #f5f0e8',
+                                        paddingTop: '0.4rem',
+                                        marginTop: '0.25rem'
+                                    },
+                                    children: [
+                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                            children: "Order Total"
+                                        }, void 0, false, {
+                                            fileName: "[project]/app/table/page.tsx",
+                                            lineNumber: 495,
+                                            columnNumber: 15
+                                        }, this),
+                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                            children: [
+                                                "₹",
+                                                cartTotal
+                                            ]
+                                        }, void 0, true, {
+                                            fileName: "[project]/app/table/page.tsx",
+                                            lineNumber: 496,
+                                            columnNumber: 15
+                                        }, this)
+                                    ]
+                                }, void 0, true, {
+                                    fileName: "[project]/app/table/page.tsx",
+                                    lineNumber: 494,
+                                    columnNumber: 13
+                                }, this)
+                            ]
+                        }, void 0, true, {
+                            fileName: "[project]/app/table/page.tsx",
+                            lineNumber: 489,
+                            columnNumber: 11
+                        }, this)
+                    ]
+                }, void 0, true, {
+                    fileName: "[project]/app/table/page.tsx",
+                    lineNumber: 459,
+                    columnNumber: 9
+                }, this),
+                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                    style: {
+                        position: 'fixed',
+                        bottom: 0,
+                        left: 0,
+                        right: 0,
+                        padding: '0.75rem 1rem',
+                        background: 'white',
+                        boxShadow: '0 -4px 20px rgba(0,0,0,0.12)',
+                        zIndex: 100
+                    },
+                    children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                        onClick: handlePlaceOrder,
+                        style: {
+                            ...btn('#16a34a'),
+                            width: '100%',
+                            padding: '0.85rem',
+                            fontSize: '1rem',
+                            borderRadius: 12
+                        },
+                        children: [
+                            "✅ Place Order — ₹",
+                            cartTotal
                         ]
                     }, void 0, true, {
                         fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 821,
+                        lineNumber: 502,
                         columnNumber: 11
-                    }, this),
-                    tabOrders.length > 1 && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                        style: {
-                            marginBottom: '24px'
-                        },
-                        children: [
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("h2", {
+                    }, this)
+                }, void 0, false, {
+                    fileName: "[project]/app/table/page.tsx",
+                    lineNumber: 501,
+                    columnNumber: 9
+                }, this)
+            ]
+        }, void 0, true, {
+            fileName: "[project]/app/table/page.tsx",
+            lineNumber: 450,
+            columnNumber: 7
+        }, this);
+    }
+    // ─── Tracking view ────────────────────────────────────────────────────────
+    return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+        style: {
+            minHeight: '100vh',
+            background: '#faf8f3',
+            fontFamily: 'Poppins,sans-serif',
+            paddingBottom: '80px'
+        },
+        children: [
+            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                style: {
+                    background: 'linear-gradient(135deg,#1A0800,#3D1C00)',
+                    color: 'white',
+                    padding: '0.9rem 1rem'
+                },
+                children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                    style: {
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center'
+                    },
+                    children: [
+                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                            children: [
+                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                    style: {
+                                        fontFamily: "'Playfair Display',serif",
+                                        fontSize: '1.1rem',
+                                        fontWeight: 900
+                                    },
+                                    children: "🍽️ My Tab"
+                                }, void 0, false, {
+                                    fileName: "[project]/app/table/page.tsx",
+                                    lineNumber: 520,
+                                    columnNumber: 13
+                                }, this),
+                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                    style: {
+                                        fontSize: '0.68rem',
+                                        color: '#F9A826'
+                                    },
+                                    children: [
+                                        "Table ",
+                                        tableId,
+                                        " · ",
+                                        customerName
+                                    ]
+                                }, void 0, true, {
+                                    fileName: "[project]/app/table/page.tsx",
+                                    lineNumber: 521,
+                                    columnNumber: 13
+                                }, this)
+                            ]
+                        }, void 0, true, {
+                            fileName: "[project]/app/table/page.tsx",
+                            lineNumber: 519,
+                            columnNumber: 11
+                        }, this),
+                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                            style: {
+                                display: 'flex',
+                                gap: '0.5rem'
+                            },
+                            children: tab?.tabStatus === 'open' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                onClick: ()=>setView('menu'),
                                 style: {
-                                    fontSize: '16px',
-                                    fontWeight: 'bold',
-                                    margin: '0 0 12px 0'
+                                    ...btn('#F9A826', '#1A0800'),
+                                    fontSize: '0.75rem',
+                                    padding: '0.4rem 0.8rem'
                                 },
-                                children: "Order History"
+                                children: "+ Add More"
                             }, void 0, false, {
                                 fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 840,
+                                lineNumber: 525,
                                 columnNumber: 15
-                            }, this),
-                            tabOrders.map((order)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                            }, this)
+                        }, void 0, false, {
+                            fileName: "[project]/app/table/page.tsx",
+                            lineNumber: 523,
+                            columnNumber: 11
+                        }, this)
+                    ]
+                }, void 0, true, {
+                    fileName: "[project]/app/table/page.tsx",
+                    lineNumber: 518,
+                    columnNumber: 9
+                }, this)
+            }, void 0, false, {
+                fileName: "[project]/app/table/page.tsx",
+                lineNumber: 517,
+                columnNumber: 7
+            }, this),
+            orderMsg && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                style: {
+                    background: '#dcfce7',
+                    borderBottom: '2px solid #16a34a',
+                    padding: '0.75rem 1rem',
+                    textAlign: 'center',
+                    fontWeight: 700,
+                    fontSize: '0.85rem',
+                    color: '#16a34a'
+                },
+                children: orderMsg
+            }, void 0, false, {
+                fileName: "[project]/app/table/page.tsx",
+                lineNumber: 535,
+                columnNumber: 9
+            }, this),
+            billMsg && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                style: {
+                    background: '#fef9c3',
+                    borderBottom: '2px solid #f59e0b',
+                    padding: '0.75rem 1rem',
+                    textAlign: 'center',
+                    fontWeight: 700,
+                    fontSize: '0.85rem',
+                    color: '#854d0e'
+                },
+                children: billMsg
+            }, void 0, false, {
+                fileName: "[project]/app/table/page.tsx",
+                lineNumber: 542,
+                columnNumber: 9
+            }, this),
+            tab?.tabStatus === 'awaiting_payment' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                style: {
+                    background: '#fffbeb',
+                    borderBottom: '2px solid #f59e0b',
+                    padding: '0.75rem 1rem',
+                    textAlign: 'center',
+                    fontSize: '0.85rem',
+                    color: '#854d0e',
+                    fontWeight: 700
+                },
+                children: "💳 Bill Requested — Please proceed to the counter to pay"
+            }, void 0, false, {
+                fileName: "[project]/app/table/page.tsx",
+                lineNumber: 549,
+                columnNumber: 9
+            }, this),
+            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                style: {
+                    padding: '1rem'
+                },
+                children: activeTabOrders.length === 0 ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                    style: {
+                        textAlign: 'center',
+                        padding: '3rem 1rem',
+                        color: '#999'
+                    },
+                    children: [
+                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                            style: {
+                                fontSize: '3rem',
+                                marginBottom: '0.5rem'
+                            },
+                            children: "🍽️"
+                        }, void 0, false, {
+                            fileName: "[project]/app/table/page.tsx",
+                            lineNumber: 558,
+                            columnNumber: 13
+                        }, this),
+                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                            style: {
+                                fontWeight: 700,
+                                marginBottom: '0.4rem'
+                            },
+                            children: "No orders yet"
+                        }, void 0, false, {
+                            fileName: "[project]/app/table/page.tsx",
+                            lineNumber: 559,
+                            columnNumber: 13
+                        }, this),
+                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                            style: {
+                                fontSize: '0.82rem',
+                                marginBottom: '1.25rem'
+                            },
+                            children: "Browse our menu and place your first order!"
+                        }, void 0, false, {
+                            fileName: "[project]/app/table/page.tsx",
+                            lineNumber: 560,
+                            columnNumber: 13
+                        }, this),
+                        tab?.tabStatus === 'open' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                            onClick: ()=>setView('menu'),
+                            style: {
+                                ...btn(),
+                                padding: '0.7rem 1.5rem',
+                                borderRadius: 12
+                            },
+                            children: "🍛 Browse Menu"
+                        }, void 0, false, {
+                            fileName: "[project]/app/table/page.tsx",
+                            lineNumber: 562,
+                            columnNumber: 15
+                        }, this)
+                    ]
+                }, void 0, true, {
+                    fileName: "[project]/app/table/page.tsx",
+                    lineNumber: 557,
+                    columnNumber: 11
+                }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["Fragment"], {
+                    children: [
+                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                            style: {
+                                display: 'flex',
+                                gap: '0.4rem',
+                                marginBottom: '0.75rem'
+                            },
+                            children: [
+                                'aggregated',
+                                'individual'
+                            ].map((v)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                    onClick: ()=>setTrackingView(v),
                                     style: {
-                                        background: 'rgba(255,255,255,0.05)',
-                                        padding: '12px',
-                                        borderRadius: '4px',
-                                        marginBottom: '8px',
-                                        fontSize: '12px'
+                                        padding: '0.3rem 0.8rem',
+                                        borderRadius: 20,
+                                        cursor: 'pointer',
+                                        fontFamily: 'Poppins,sans-serif',
+                                        fontWeight: 600,
+                                        fontSize: '0.75rem',
+                                        border: `2px solid ${trackingView === v ? '#E65C00' : '#ddd'}`,
+                                        background: trackingView === v ? '#E65C00' : 'white',
+                                        color: trackingView === v ? 'white' : '#666'
+                                    },
+                                    children: v === 'aggregated' ? '📋 Summary' : '🗃️ By Order'
+                                }, v, false, {
+                                    fileName: "[project]/app/table/page.tsx",
+                                    lineNumber: 572,
+                                    columnNumber: 17
+                                }, this))
+                        }, void 0, false, {
+                            fileName: "[project]/app/table/page.tsx",
+                            lineNumber: 570,
+                            columnNumber: 13
+                        }, this),
+                        trackingView === 'aggregated' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                            style: {
+                                background: 'white',
+                                borderRadius: 14,
+                                overflow: 'hidden',
+                                boxShadow: '0 2px 8px rgba(0,0,0,0.07)',
+                                marginBottom: '0.75rem'
+                            },
+                            children: aggregatedItems.map((item, i)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                    style: {
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        alignItems: 'center',
+                                        padding: '0.65rem 1rem',
+                                        borderBottom: '1px solid #f5f0e8'
                                     },
                                     children: [
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                            style: {
-                                                display: 'flex',
-                                                justifyContent: 'space-between',
-                                                marginBottom: '6px'
-                                            },
                                             children: [
-                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                                     style: {
-                                                        fontWeight: 'bold'
+                                                        fontWeight: 700,
+                                                        fontSize: '0.85rem',
+                                                        color: '#1A0800'
                                                     },
                                                     children: [
-                                                        "Order #",
-                                                        order.orderNum
+                                                        item.name,
+                                                        " ",
+                                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                                            style: {
+                                                                color: '#aaa',
+                                                                fontWeight: 400
+                                                            },
+                                                            children: [
+                                                                "×",
+                                                                item.qty
+                                                            ]
+                                                        }, void 0, true, {
+                                                            fileName: "[project]/app/table/page.tsx",
+                                                            lineNumber: 594,
+                                                            columnNumber: 107
+                                                        }, this)
                                                     ]
                                                 }, void 0, true, {
                                                     fileName: "[project]/app/table/page.tsx",
-                                                    lineNumber: 850,
-                                                    columnNumber: 21
+                                                    lineNumber: 594,
+                                                    columnNumber: 23
                                                 }, this),
-                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                                     style: {
-                                                        color: '#ccc'
+                                                        fontSize: '0.7rem',
+                                                        marginTop: '0.1rem'
                                                     },
-                                                    children: STATUS_LABEL[order.status]?.label
+                                                    children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                                        style: {
+                                                            color: STATUS_COLOR[item.status] || '#888'
+                                                        },
+                                                        children: [
+                                                            STATUS_ICON[item.status],
+                                                            " ",
+                                                            STATUS_LABEL[item.status]
+                                                        ]
+                                                    }, void 0, true, {
+                                                        fileName: "[project]/app/table/page.tsx",
+                                                        lineNumber: 596,
+                                                        columnNumber: 25
+                                                    }, this)
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/table/page.tsx",
-                                                    lineNumber: 851,
-                                                    columnNumber: 21
+                                                    lineNumber: 595,
+                                                    columnNumber: 23
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/table/page.tsx",
-                                            lineNumber: 849,
-                                            columnNumber: 19
+                                            lineNumber: 593,
+                                            columnNumber: 21
                                         }, this),
-                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
                                             style: {
-                                                color: '#ccc'
+                                                fontWeight: 800,
+                                                color: '#E65C00',
+                                                fontSize: '0.88rem'
                                             },
                                             children: [
-                                                order.items.length,
-                                                " items • ₹",
-                                                order.total
+                                                "₹",
+                                                item.price * item.qty
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/table/page.tsx",
-                                            lineNumber: 853,
-                                            columnNumber: 19
+                                            lineNumber: 599,
+                                            columnNumber: 21
                                         }, this)
                                     ]
-                                }, order.id, true, {
+                                }, i, true, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 842,
-                                    columnNumber: 17
+                                    lineNumber: 592,
+                                    columnNumber: 19
                                 }, this))
-                        ]
-                    }, void 0, true, {
-                        fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 839,
-                        columnNumber: 13
-                    }, this),
-                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                        style: {
-                            background: 'rgba(255,255,255,0.1)',
-                            padding: '16px',
-                            borderRadius: '8px',
-                            marginBottom: '24px'
-                        },
-                        children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                        }, void 0, false, {
+                            fileName: "[project]/app/table/page.tsx",
+                            lineNumber: 590,
+                            columnNumber: 15
+                        }, this),
+                        trackingView === 'individual' && activeTabOrders.map((order)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                style: {
+                                    background: 'white',
+                                    borderRadius: 14,
+                                    overflow: 'hidden',
+                                    boxShadow: '0 2px 8px rgba(0,0,0,0.07)',
+                                    marginBottom: '0.75rem',
+                                    borderLeft: `4px solid ${STATUS_COLOR[order.status] || '#ddd'}`
+                                },
+                                children: [
+                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                        style: {
+                                            padding: '0.65rem 1rem',
+                                            display: 'flex',
+                                            justifyContent: 'space-between',
+                                            alignItems: 'center',
+                                            borderBottom: '1px solid #f5f0e8'
+                                        },
+                                        children: [
+                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                children: [
+                                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                        style: {
+                                                            fontWeight: 700,
+                                                            fontSize: '0.82rem',
+                                                            color: '#1A0800'
+                                                        },
+                                                        children: [
+                                                            "Order #",
+                                                            order.orderNum || order.id.slice(-4)
+                                                        ]
+                                                    }, void 0, true, {
+                                                        fileName: "[project]/app/table/page.tsx",
+                                                        lineNumber: 610,
+                                                        columnNumber: 21
+                                                    }, this),
+                                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                        style: {
+                                                            fontSize: '0.7rem',
+                                                            color: STATUS_COLOR[order.status] || '#888',
+                                                            marginTop: '0.1rem'
+                                                        },
+                                                        children: [
+                                                            STATUS_ICON[order.status],
+                                                            " ",
+                                                            STATUS_LABEL[order.status]
+                                                        ]
+                                                    }, void 0, true, {
+                                                        fileName: "[project]/app/table/page.tsx",
+                                                        lineNumber: 611,
+                                                        columnNumber: 21
+                                                    }, this)
+                                                ]
+                                            }, void 0, true, {
+                                                fileName: "[project]/app/table/page.tsx",
+                                                lineNumber: 609,
+                                                columnNumber: 19
+                                            }, this),
+                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                                style: {
+                                                    fontWeight: 800,
+                                                    color: '#E65C00'
+                                                },
+                                                children: [
+                                                    "₹",
+                                                    order.total
+                                                ]
+                                            }, void 0, true, {
+                                                fileName: "[project]/app/table/page.tsx",
+                                                lineNumber: 613,
+                                                columnNumber: 19
+                                            }, this)
+                                        ]
+                                    }, void 0, true, {
+                                        fileName: "[project]/app/table/page.tsx",
+                                        lineNumber: 608,
+                                        columnNumber: 17
+                                    }, this),
+                                    (order.items || []).map((item, i)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                            style: {
+                                                display: 'flex',
+                                                justifyContent: 'space-between',
+                                                padding: '0.4rem 1rem',
+                                                fontSize: '0.8rem',
+                                                color: '#555'
+                                            },
+                                            children: [
+                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                                    children: [
+                                                        item.name,
+                                                        " ",
+                                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                                            style: {
+                                                                color: '#aaa'
+                                                            },
+                                                            children: [
+                                                                "×",
+                                                                item.qty
+                                                            ]
+                                                        }, void 0, true, {
+                                                            fileName: "[project]/app/table/page.tsx",
+                                                            lineNumber: 617,
+                                                            columnNumber: 39
+                                                        }, this)
+                                                    ]
+                                                }, void 0, true, {
+                                                    fileName: "[project]/app/table/page.tsx",
+                                                    lineNumber: 617,
+                                                    columnNumber: 21
+                                                }, this),
+                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                                    children: [
+                                                        "₹",
+                                                        item.subtotal
+                                                    ]
+                                                }, void 0, true, {
+                                                    fileName: "[project]/app/table/page.tsx",
+                                                    lineNumber: 618,
+                                                    columnNumber: 21
+                                                }, this)
+                                            ]
+                                        }, i, true, {
+                                            fileName: "[project]/app/table/page.tsx",
+                                            lineNumber: 616,
+                                            columnNumber: 19
+                                        }, this))
+                                ]
+                            }, order.id, true, {
+                                fileName: "[project]/app/table/page.tsx",
+                                lineNumber: 607,
+                                columnNumber: 15
+                            }, this)),
+                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                             style: {
-                                display: 'flex',
-                                justifyContent: 'space-between',
-                                fontSize: '18px',
-                                fontWeight: 'bold'
+                                background: 'white',
+                                borderRadius: 14,
+                                padding: '0.85rem 1rem',
+                                boxShadow: '0 2px 8px rgba(0,0,0,0.07)',
+                                marginBottom: '0.75rem'
                             },
                             children: [
-                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
-                                    children: "Total:"
-                                }, void 0, false, {
-                                    fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 867,
-                                    columnNumber: 15
-                                }, this),
-                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                    style: {
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        fontSize: '0.85rem',
+                                        color: '#666',
+                                        marginBottom: '0.2rem'
+                                    },
                                     children: [
-                                        "₹",
-                                        tab?.totalAmount || 0
+                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                            children: "Subtotal"
+                                        }, void 0, false, {
+                                            fileName: "[project]/app/table/page.tsx",
+                                            lineNumber: 627,
+                                            columnNumber: 17
+                                        }, this),
+                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                            children: [
+                                                "₹",
+                                                tabTotal
+                                            ]
+                                        }, void 0, true, {
+                                            fileName: "[project]/app/table/page.tsx",
+                                            lineNumber: 628,
+                                            columnNumber: 17
+                                        }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 868,
+                                    lineNumber: 626,
+                                    columnNumber: 15
+                                }, this),
+                                tabDiscount > 0 && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                    style: {
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        fontSize: '0.85rem',
+                                        color: '#16a34a',
+                                        marginBottom: '0.2rem'
+                                    },
+                                    children: [
+                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                            children: "Discount"
+                                        }, void 0, false, {
+                                            fileName: "[project]/app/table/page.tsx",
+                                            lineNumber: 632,
+                                            columnNumber: 19
+                                        }, this),
+                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                            children: [
+                                                "−₹",
+                                                tabDiscount
+                                            ]
+                                        }, void 0, true, {
+                                            fileName: "[project]/app/table/page.tsx",
+                                            lineNumber: 633,
+                                            columnNumber: 19
+                                        }, this)
+                                    ]
+                                }, void 0, true, {
+                                    fileName: "[project]/app/table/page.tsx",
+                                    lineNumber: 631,
+                                    columnNumber: 17
+                                }, this),
+                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                    style: {
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        fontWeight: 900,
+                                        fontSize: '1rem',
+                                        color: '#1A0800',
+                                        borderTop: '2px solid #f5f0e8',
+                                        paddingTop: '0.4rem',
+                                        marginTop: '0.2rem'
+                                    },
+                                    children: [
+                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                            children: "Total"
+                                        }, void 0, false, {
+                                            fileName: "[project]/app/table/page.tsx",
+                                            lineNumber: 637,
+                                            columnNumber: 17
+                                        }, this),
+                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                            children: [
+                                                "₹",
+                                                billTotal
+                                            ]
+                                        }, void 0, true, {
+                                            fileName: "[project]/app/table/page.tsx",
+                                            lineNumber: 638,
+                                            columnNumber: 17
+                                        }, this)
+                                    ]
+                                }, void 0, true, {
+                                    fileName: "[project]/app/table/page.tsx",
+                                    lineNumber: 636,
                                     columnNumber: 15
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/table/page.tsx",
-                            lineNumber: 866,
+                            lineNumber: 625,
                             columnNumber: 13
+                        }, this),
+                        tab?.tabStatus === 'open' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                            style: {
+                                marginBottom: '0.75rem'
+                            },
+                            children: [
+                                hasUnservedOrders && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                    style: {
+                                        background: 'rgba(249,168,38,0.12)',
+                                        border: '1px solid #F9A826',
+                                        borderRadius: 8,
+                                        padding: '0.65rem 0.9rem',
+                                        fontSize: '0.78rem',
+                                        color: '#92400e',
+                                        textAlign: 'center',
+                                        lineHeight: 1.5,
+                                        marginBottom: '0.5rem'
+                                    },
+                                    children: "⏳ Your food is still being prepared. You can request the bill once everything is served."
+                                }, void 0, false, {
+                                    fileName: "[project]/app/table/page.tsx",
+                                    lineNumber: 646,
+                                    columnNumber: 19
+                                }, this),
+                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                    onClick: hasUnservedOrders ? undefined : handleRequestBill,
+                                    disabled: hasUnservedOrders,
+                                    style: {
+                                        ...btn(hasUnservedOrders ? '#e5e7eb' : '#1A0800', hasUnservedOrders ? '#9ca3af' : 'white'),
+                                        width: '100%',
+                                        padding: '0.8rem',
+                                        fontSize: '0.95rem',
+                                        borderRadius: 12,
+                                        cursor: hasUnservedOrders ? 'not-allowed' : 'pointer',
+                                        opacity: hasUnservedOrders ? 0.7 : 1
+                                    },
+                                    children: "🧾 Request Bill"
+                                }, void 0, false, {
+                                    fileName: "[project]/app/table/page.tsx",
+                                    lineNumber: 654,
+                                    columnNumber: 17
+                                }, this)
+                            ]
+                        }, void 0, true, {
+                            fileName: "[project]/app/table/page.tsx",
+                            lineNumber: 644,
+                            columnNumber: 15
+                        }, this),
+                        tab?.tabStatus === 'awaiting_payment' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                            style: {
+                                background: '#fef9c3',
+                                border: '2px solid #f59e0b',
+                                borderRadius: 12,
+                                padding: '1rem',
+                                textAlign: 'center',
+                                marginBottom: '0.75rem'
+                            },
+                            children: [
+                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                    style: {
+                                        fontSize: '1.5rem',
+                                        marginBottom: '0.3rem'
+                                    },
+                                    children: "💳"
+                                }, void 0, false, {
+                                    fileName: "[project]/app/table/page.tsx",
+                                    lineNumber: 671,
+                                    columnNumber: 17
+                                }, this),
+                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                    style: {
+                                        fontWeight: 800,
+                                        color: '#854d0e',
+                                        marginBottom: '0.2rem'
+                                    },
+                                    children: "Bill Requested!"
+                                }, void 0, false, {
+                                    fileName: "[project]/app/table/page.tsx",
+                                    lineNumber: 672,
+                                    columnNumber: 17
+                                }, this),
+                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                    style: {
+                                        fontSize: '0.8rem',
+                                        color: '#713f12'
+                                    },
+                                    children: [
+                                        "Please proceed to the counter to complete payment of ₹",
+                                        billTotal
+                                    ]
+                                }, void 0, true, {
+                                    fileName: "[project]/app/table/page.tsx",
+                                    lineNumber: 673,
+                                    columnNumber: 17
+                                }, this)
+                            ]
+                        }, void 0, true, {
+                            fileName: "[project]/app/table/page.tsx",
+                            lineNumber: 670,
+                            columnNumber: 15
                         }, this)
-                    }, void 0, false, {
-                        fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 860,
-                        columnNumber: 11
-                    }, this),
-                    tabIsActive && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                        style: {
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: '12px',
-                            marginBottom: '24px'
-                        },
-                        children: [
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
-                                onClick: callWaiter,
-                                disabled: waiterCallCooldown > 0,
-                                style: {
-                                    padding: '12px',
-                                    background: waiterCallCooldown > 0 ? '#555' : '#F9A826',
-                                    color: waiterCallCooldown > 0 ? '#ccc' : '#1A0800',
-                                    border: 'none',
-                                    borderRadius: '4px',
-                                    cursor: waiterCallCooldown > 0 ? 'not-allowed' : 'pointer',
-                                    fontWeight: 'bold',
-                                    fontSize: '14px'
-                                },
-                                children: [
-                                    "🔔 Call Waiter ",
-                                    waiterCallCooldown > 0 && `(${waiterCallCooldown}s)`
-                                ]
-                            }, void 0, true, {
-                                fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 876,
-                                columnNumber: 15
-                            }, this),
-                            tabIsOpen && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["Fragment"], {
-                                children: [
-                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
-                                        onClick: ()=>setView('menu'),
-                                        style: {
-                                            padding: '12px',
-                                            background: '#E65C00',
-                                            color: 'white',
-                                            border: 'none',
-                                            borderRadius: '4px',
-                                            cursor: 'pointer',
-                                            fontWeight: 'bold',
-                                            fontSize: '14px'
-                                        },
-                                        children: "➕ Order More"
-                                    }, void 0, false, {
-                                        fileName: "[project]/app/table/page.tsx",
-                                        lineNumber: 896,
-                                        columnNumber: 19
-                                    }, this),
-                                    hasUnservedOrders && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                        style: {
-                                            background: 'rgba(249,168,38,0.15)',
-                                            border: '1px solid #F9A826',
-                                            borderRadius: '4px',
-                                            padding: '10px 12px',
-                                            fontSize: '12px',
-                                            color: '#F9A826',
-                                            textAlign: 'center',
-                                            lineHeight: '1.5'
-                                        },
-                                        children: "⏳ Your food is still being prepared. You can request the bill once everything is served."
-                                    }, void 0, false, {
-                                        fileName: "[project]/app/table/page.tsx",
-                                        lineNumber: 914,
-                                        columnNumber: 21
-                                    }, this),
-                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
-                                        onClick: hasUnservedOrders ? undefined : handleRequestBill,
-                                        disabled: hasUnservedOrders,
-                                        style: {
-                                            padding: '12px',
-                                            background: hasUnservedOrders ? '#333' : '#555',
-                                            color: hasUnservedOrders ? '#666' : 'white',
-                                            border: hasUnservedOrders ? '1px solid #444' : 'none',
-                                            borderRadius: '4px',
-                                            cursor: hasUnservedOrders ? 'not-allowed' : 'pointer',
-                                            fontWeight: 'bold',
-                                            fontSize: '14px',
-                                            opacity: hasUnservedOrders ? 0.5 : 1
-                                        },
-                                        children: "🧾 Request Bill"
-                                    }, void 0, false, {
-                                        fileName: "[project]/app/table/page.tsx",
-                                        lineNumber: 928,
-                                        columnNumber: 19
-                                    }, this)
-                                ]
-                            }, void 0, true)
-                        ]
-                    }, void 0, true, {
-                        fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 874,
-                        columnNumber: 13
-                    }, this)
-                ]
-            }, void 0, true, {
+                    ]
+                }, void 0, true)
+            }, void 0, false, {
                 fileName: "[project]/app/table/page.tsx",
-                lineNumber: 769,
-                columnNumber: 9
-            }, this)
-        }, void 0, false, {
-            fileName: "[project]/app/table/page.tsx",
-            lineNumber: 762,
-            columnNumber: 7
-        }, this);
-    }
-    // ─── Render Receipt View ───────────────────────────────────────────────────
-    if (view === 'receipt') {
-        return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-            style: {
-                minHeight: '100vh',
-                background: 'linear-gradient(135deg,#1A0800,#2D0F00)',
-                color: 'white',
-                padding: '20px',
-                fontFamily: 'Poppins, sans-serif',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center'
-            },
-            children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                lineNumber: 554,
+                columnNumber: 7
+            }, this),
+            tab?.tabStatus === 'open' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                 style: {
-                    maxWidth: '440px',
-                    width: '100%',
-                    textAlign: 'center'
+                    position: 'fixed',
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    background: 'white',
+                    boxShadow: '0 -4px 20px rgba(0,0,0,0.1)',
+                    padding: '0.6rem 1rem',
+                    display: 'flex',
+                    gap: '0.5rem',
+                    zIndex: 100
                 },
-                children: [
-                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("h1", {
-                        style: {
-                            fontSize: '48px',
-                            margin: '0 0 16px 0'
-                        },
-                        children: "🎉"
-                    }, void 0, false, {
-                        fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 969,
-                        columnNumber: 11
-                    }, this),
-                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("h2", {
-                        style: {
-                            fontSize: '28px',
-                            margin: '0 0 16px 0',
-                            fontFamily: 'Playfair Display, serif'
-                        },
-                        children: "Thank You!"
-                    }, void 0, false, {
-                        fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 970,
-                        columnNumber: 11
-                    }, this),
-                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
-                        style: {
-                            fontSize: '16px',
-                            color: '#ccc',
-                            margin: '0 0 32px 0'
-                        },
-                        children: [
-                            "We loved serving you at Table ",
-                            tableId
-                        ]
-                    }, void 0, true, {
-                        fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 971,
-                        columnNumber: 11
-                    }, this),
-                    tab && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                        style: {
-                            background: 'rgba(255,255,255,0.1)',
-                            padding: '16px',
-                            borderRadius: '8px',
-                            marginBottom: '32px',
-                            textAlign: 'left'
-                        },
-                        children: [
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                style: {
-                                    marginBottom: '12px',
-                                    borderBottom: '1px solid rgba(255,255,255,0.2)',
-                                    paddingBottom: '12px'
-                                },
-                                children: [
-                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                        style: {
-                                            display: 'flex',
-                                            justifyContent: 'space-between',
-                                            fontSize: '13px',
-                                            marginBottom: '6px'
-                                        },
-                                        children: [
-                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
-                                                children: "Customer:"
-                                            }, void 0, false, {
-                                                fileName: "[project]/app/table/page.tsx",
-                                                lineNumber: 986,
-                                                columnNumber: 19
-                                            }, this),
-                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
-                                                children: name
-                                            }, void 0, false, {
-                                                fileName: "[project]/app/table/page.tsx",
-                                                lineNumber: 987,
-                                                columnNumber: 19
-                                            }, this)
-                                        ]
-                                    }, void 0, true, {
-                                        fileName: "[project]/app/table/page.tsx",
-                                        lineNumber: 985,
-                                        columnNumber: 17
-                                    }, this),
-                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                        style: {
-                                            display: 'flex',
-                                            justifyContent: 'space-between',
-                                            fontSize: '13px'
-                                        },
-                                        children: [
-                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
-                                                children: "Party Size:"
-                                            }, void 0, false, {
-                                                fileName: "[project]/app/table/page.tsx",
-                                                lineNumber: 990,
-                                                columnNumber: 19
-                                            }, this),
-                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
-                                                children: partySize
-                                            }, void 0, false, {
-                                                fileName: "[project]/app/table/page.tsx",
-                                                lineNumber: 991,
-                                                columnNumber: 19
-                                            }, this)
-                                        ]
-                                    }, void 0, true, {
-                                        fileName: "[project]/app/table/page.tsx",
-                                        lineNumber: 989,
-                                        columnNumber: 17
-                                    }, this)
-                                ]
-                            }, void 0, true, {
-                                fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 984,
-                                columnNumber: 15
-                            }, this),
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                style: {
-                                    marginBottom: '12px',
-                                    borderBottom: '1px solid rgba(255,255,255,0.2)',
-                                    paddingBottom: '12px'
-                                },
-                                children: aggregatedItems.map((item)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                        style: {
-                                            display: 'flex',
-                                            justifyContent: 'space-between',
-                                            fontSize: '13px',
-                                            marginBottom: '6px'
-                                        },
-                                        children: [
-                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
-                                                children: [
-                                                    item.name,
-                                                    " x",
-                                                    item.qty
-                                                ]
-                                            }, void 0, true, {
-                                                fileName: "[project]/app/table/page.tsx",
-                                                lineNumber: 997,
-                                                columnNumber: 21
-                                            }, this),
-                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
-                                                children: [
-                                                    "₹",
-                                                    item.subtotal
-                                                ]
-                                            }, void 0, true, {
-                                                fileName: "[project]/app/table/page.tsx",
-                                                lineNumber: 998,
-                                                columnNumber: 21
-                                            }, this)
-                                        ]
-                                    }, item.id, true, {
-                                        fileName: "[project]/app/table/page.tsx",
-                                        lineNumber: 996,
-                                        columnNumber: 19
-                                    }, this))
-                            }, void 0, false, {
-                                fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 994,
-                                columnNumber: 15
-                            }, this),
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                style: {
-                                    display: 'flex',
-                                    justifyContent: 'space-between',
-                                    fontSize: '16px',
-                                    fontWeight: 'bold'
-                                },
-                                children: [
-                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
-                                        children: "Total:"
-                                    }, void 0, false, {
-                                        fileName: "[project]/app/table/page.tsx",
-                                        lineNumber: 1003,
-                                        columnNumber: 17
-                                    }, this),
-                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
-                                        children: [
-                                            "₹",
-                                            tab.totalAmount
-                                        ]
-                                    }, void 0, true, {
-                                        fileName: "[project]/app/table/page.tsx",
-                                        lineNumber: 1004,
-                                        columnNumber: 17
-                                    }, this)
-                                ]
-                            }, void 0, true, {
-                                fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 1002,
-                                columnNumber: 15
-                            }, this)
-                        ]
-                    }, void 0, true, {
-                        fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 977,
-                        columnNumber: 13
-                    }, this),
-                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
-                        onClick: ()=>{
-                            sessionStorage.removeItem(TAB_KEY);
-                            sessionStorage.removeItem(NAME_KEY);
-                            sessionStorage.removeItem(PARTY_KEY);
-                            setView('landing');
-                            setTab(null);
-                            setTabOrders([]);
-                            setLatestOrder(null);
-                            setCart([]);
-                            setName('');
-                            setPartySize(1);
-                            setLandingMode('name');
-                        },
-                        style: {
-                            width: '100%',
-                            padding: '12px',
-                            background: '#E65C00',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: 'pointer',
-                            fontWeight: 'bold',
-                            fontSize: '14px'
-                        },
-                        children: "Start New Tab"
-                    }, void 0, false, {
-                        fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 1009,
-                        columnNumber: 11
-                    }, this)
-                ]
-            }, void 0, true, {
+                children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                    onClick: ()=>setView('menu'),
+                    style: {
+                        ...btn('#E65C00'),
+                        flex: 1,
+                        padding: '0.7rem',
+                        borderRadius: 10,
+                        fontSize: '0.85rem'
+                    },
+                    children: "🍛 Order More"
+                }, void 0, false, {
+                    fileName: "[project]/app/table/page.tsx",
+                    lineNumber: 683,
+                    columnNumber: 11
+                }, this)
+            }, void 0, false, {
                 fileName: "[project]/app/table/page.tsx",
-                lineNumber: 968,
+                lineNumber: 682,
                 columnNumber: 9
             }, this)
-        }, void 0, false, {
-            fileName: "[project]/app/table/page.tsx",
-            lineNumber: 957,
-            columnNumber: 7
-        }, this);
-    }
-    return null;
+        ]
+    }, void 0, true, {
+        fileName: "[project]/app/table/page.tsx",
+        lineNumber: 515,
+        columnNumber: 5
+    }, this);
 }
-_s(TableContent, "YryR1N/4lTH2mnlmiMaKW3kIeU8=", false, function() {
+_s(TablePageInner, "29lUH63EzPHOIlT7qdfUotSUKOU=", false, function() {
     return [
         __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$navigation$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useSearchParams"]
     ];
 });
-_c1 = TableContent;
+_c = TablePageInner;
 function TablePage() {
     return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["Suspense"], {
         fallback: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
             style: {
                 minHeight: '100vh',
-                background: '#1A0800',
+                background: 'linear-gradient(135deg,#1A0800,#3D1C00)',
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: 'center',
-                color: 'white'
+                justifyContent: 'center'
             },
-            children: "Loading..."
+            children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                style: {
+                    color: 'white',
+                    textAlign: 'center'
+                },
+                children: [
+                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                        style: {
+                            fontSize: '2.5rem',
+                            marginBottom: '0.5rem'
+                        },
+                        children: "🍽️"
+                    }, void 0, false, {
+                        fileName: "[project]/app/table/page.tsx",
+                        lineNumber: 698,
+                        columnNumber: 11
+                    }, void 0),
+                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                        style: {
+                            fontFamily: 'Poppins,sans-serif'
+                        },
+                        children: "Loading…"
+                    }, void 0, false, {
+                        fileName: "[project]/app/table/page.tsx",
+                        lineNumber: 699,
+                        columnNumber: 11
+                    }, void 0)
+                ]
+            }, void 0, true, {
+                fileName: "[project]/app/table/page.tsx",
+                lineNumber: 697,
+                columnNumber: 9
+            }, void 0)
         }, void 0, false, {
             fileName: "[project]/app/table/page.tsx",
-            lineNumber: 1047,
-            columnNumber: 25
+            lineNumber: 696,
+            columnNumber: 7
         }, void 0),
-        children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(TableContent, {}, void 0, false, {
+        children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(TablePageInner, {}, void 0, false, {
             fileName: "[project]/app/table/page.tsx",
-            lineNumber: 1048,
+            lineNumber: 703,
             columnNumber: 7
         }, this)
     }, void 0, false, {
         fileName: "[project]/app/table/page.tsx",
-        lineNumber: 1047,
+        lineNumber: 695,
         columnNumber: 5
     }, this);
 }
-_c2 = TablePage;
-var _c, _c1, _c2;
-__turbopack_context__.k.register(_c, "TrackingBar");
-__turbopack_context__.k.register(_c1, "TableContent");
-__turbopack_context__.k.register(_c2, "TablePage");
+_c1 = TablePage;
+var _c, _c1;
+__turbopack_context__.k.register(_c, "TablePageInner");
+__turbopack_context__.k.register(_c1, "TablePage");
 if (typeof globalThis.$RefreshHelpers$ === 'object' && globalThis.$RefreshHelpers !== null) {
     __turbopack_context__.k.registerExports(__turbopack_context__.m, globalThis.$RefreshHelpers$);
 }

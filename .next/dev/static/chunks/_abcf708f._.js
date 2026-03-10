@@ -2,71 +2,92 @@
 "[project]/lib/storage.ts [app-client] (ecmascript)", ((__turbopack_context__) => {
 "use strict";
 
+// ─── Foodie Lover — Storage Layer ─────────────────────────────────────────────
+// All persistence via localStorage (no backend).
+// Exports every type and function used across pages.
 // ─── Types ────────────────────────────────────────────────────────────────────
 __turbopack_context__.s([
     "DEFAULT_MENU",
     ()=>DEFAULT_MENU,
-    "VALID_TRANSITIONS",
-    ()=>VALID_TRANSITIONS,
     "addOrder",
     ()=>addOrder,
-    "addWaiterCall",
-    ()=>addWaiterCall,
+    "addOrderToTab",
+    ()=>addOrderToTab,
     "applyDiscount",
     ()=>applyDiscount,
+    "applyTabDiscount",
+    ()=>applyTabDiscount,
     "cancelOrder",
     ()=>cancelOrder,
+    "clearFraudAlerts",
+    ()=>clearFraudAlerts,
+    "closeTab",
+    ()=>closeTab,
+    "createTab",
+    ()=>createTab,
     "exportOrdersCSV",
     ()=>exportOrdersCSV,
+    "getActiveTabsForTable",
+    ()=>getActiveTabsForTable,
+    "getEndOfDayReport",
+    ()=>getEndOfDayReport,
+    "getFraudAlerts",
+    ()=>getFraudAlerts,
     "getMenu",
     ()=>getMenu,
+    "getNextOrderNumber",
+    ()=>getNextOrderNumber,
+    "getOpenTabForCustomer",
+    ()=>getOpenTabForCustomer,
     "getOrders",
     ()=>getOrders,
     "getOrdersInPeriod",
     ()=>getOrdersInPeriod,
     "getPin",
     ()=>getPin,
-    "getPriorityOrders",
-    ()=>getPriorityOrders,
-    "getStaffSessions",
-    ()=>getStaffSessions,
+    "getTab",
+    ()=>getTab,
+    "getTabOrders",
+    ()=>getTabOrders,
+    "getTableOccupancy",
+    ()=>getTableOccupancy,
     "getTables",
     ()=>getTables,
-    "getWaiterCalls",
-    ()=>getWaiterCalls,
-    "isValidTransition",
-    ()=>isValidTransition,
-    "resolveWaiterCall",
-    ()=>resolveWaiterCall,
+    "getTabs",
+    ()=>getTabs,
+    "requestBill",
+    ()=>requestBill,
     "saveMenu",
     ()=>saveMenu,
     "saveOrders",
     ()=>saveOrders,
     "savePin",
     ()=>savePin,
-    "savePriorityOrders",
-    ()=>savePriorityOrders,
-    "saveStaffSessions",
-    ()=>saveStaffSessions,
     "saveTables",
     ()=>saveTables,
-    "saveWaiterCalls",
-    ()=>saveWaiterCalls,
+    "saveTabs",
+    ()=>saveTabs,
+    "syncTabTotal",
+    ()=>syncTabTotal,
+    "syncTableStatus",
+    ()=>syncTableStatus,
     "updateOrderStatus",
-    ()=>updateOrderStatus
+    ()=>updateOrderStatus,
+    "voidOrder",
+    ()=>voidOrder
 ]);
-// ─── Keys ─────────────────────────────────────────────────────────────────────
+// ─── localStorage keys ────────────────────────────────────────────────────────
 const KEYS = {
     orders: 'fl_orders',
     tables: 'fl_tables',
     menu: 'fl_menu',
-    pin: 'fl_owner_pin',
-    staff: 'fl_staff_sessions',
-    calls: 'fl_waiter_calls',
-    priority: 'fl_priority_orders'
+    pin: 'fl_admin_pin',
+    tabs: 'fl_customer_tabs',
+    orderNum: 'fl_order_num_counter',
+    fraudAlerts: 'fl_fraud_alerts'
 };
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function get(key, fallback) {
+// ─── Storage helpers ──────────────────────────────────────────────────────────
+function ls_get(key, fallback) {
     if ("TURBOPACK compile-time falsy", 0) //TURBOPACK unreachable
     ;
     try {
@@ -76,582 +97,636 @@ function get(key, fallback) {
         return fallback;
     }
 }
-function set(key, value) {
+function ls_set(key, val) {
     if ("TURBOPACK compile-time falsy", 0) //TURBOPACK unreachable
     ;
-    localStorage.setItem(key, JSON.stringify(value));
+    localStorage.setItem(key, JSON.stringify(val));
 }
-const VALID_TRANSITIONS = {
-    pending: [
-        'preparing',
-        'cancelled'
-    ],
-    preparing: [
-        'prepared',
-        'cancelled'
-    ],
-    prepared: [
-        'served'
-    ],
-    served: [
-        'completed'
-    ],
-    completed: [],
-    cancelled: []
-};
-function isValidTransition(from, to) {
-    const allowed = VALID_TRANSITIONS[from];
-    return allowed ? allowed.includes(to) : false;
-}
-const getOrders = ()=>get(KEYS.orders, []);
-const saveOrders = (o)=>set(KEYS.orders, o);
-function addOrder(order) {
-    const orders = getOrders();
-    // Guard: block duplicate IDs (rapid double-submit protection)
-    if (orders.some((o)=>o.id === order.id)) return;
-    // Ensure timeline is always initialised
-    if (!order.timeline || !order.timeline.length) {
-        order.timeline = [
-            {
-                status: 'pending',
-                timestamp: order.timestamp
-            }
-        ];
-    }
-    orders.push(order);
-    saveOrders(orders);
-}
-function updateOrderStatus(orderId, status, by, force = false) {
-    const orders = getOrders();
-    const idx = orders.findIndex((o)=>o.id === orderId);
-    if (idx === -1) return false;
-    const current = orders[idx].status;
-    // Prevent any changes on already-cancelled or completed orders unless forced
-    if (!force && !isValidTransition(current, status)) return false;
-    orders[idx].status = status;
-    if (!orders[idx].timeline) orders[idx].timeline = [];
-    orders[idx].timeline.push({
-        status,
-        timestamp: new Date().toISOString(),
-        by
-    });
-    saveOrders(orders);
-    return true;
-}
-function cancelOrder(orderId, reason, by) {
-    const orders = getOrders();
-    const idx = orders.findIndex((o)=>o.id === orderId);
-    if (idx === -1) return false;
-    // Only allow cancellation from cancellable states
-    const cancellable = [
-        'pending',
-        'preparing'
-    ];
-    if (!cancellable.includes(orders[idx].status)) return false;
-    orders[idx].status = 'cancelled';
-    orders[idx].cancelReason = reason;
-    orders[idx].cancelledAt = new Date().toISOString();
-    if (!orders[idx].timeline) orders[idx].timeline = [];
-    orders[idx].timeline.push({
-        status: 'cancelled',
-        timestamp: new Date().toISOString(),
-        by,
-        note: reason
-    });
-    saveOrders(orders);
-    return true;
-}
-function applyDiscount(orderId, discount, reason, by) {
-    const orders = getOrders();
-    const idx = orders.findIndex((o)=>o.id === orderId);
-    if (idx === -1) return false;
-    const sub = orders[idx].subtotal || orders[idx].total;
-    // Clamp discount to [0, subtotal] — prevents negative totals
-    const safeDiscount = Math.min(Math.max(0, Math.round(discount)), sub);
-    orders[idx].discount = safeDiscount;
-    orders[idx].discountReason = reason;
-    orders[idx].total = sub - safeDiscount;
-    if (!orders[idx].editHistory) orders[idx].editHistory = [];
-    orders[idx].editHistory.push({
-        timestamp: new Date().toISOString(),
-        change: `Discount ₹${safeDiscount} applied: ${reason}`,
-        by
-    });
-    saveOrders(orders);
-    return true;
-}
-const getPriorityOrders = ()=>get(KEYS.priority, {});
-function savePriorityOrders(map) {
-    // Prune completed/cancelled orders from the priority map
-    const orders = getOrders();
-    const activeIds = new Set(orders.filter((o)=>[
-            'pending',
-            'preparing',
-            'prepared'
-        ].includes(o.status)).map((o)=>o.id));
-    const pruned = {};
-    for (const [id, val] of Object.entries(map)){
-        if (activeIds.has(id) && val) pruned[id] = true;
-    }
-    set(KEYS.priority, pruned);
-}
-function getTables() {
-    const saved = get(KEYS.tables, null);
-    if (saved) return saved;
-    const defaults = Array.from({
-        length: 15
-    }, (_, i)=>({
-            id: i + 1,
-            chairs: 4,
-            status: 'available',
-            occupants: []
-        }));
-    set(KEYS.tables, defaults);
-    return defaults;
-}
-const saveTables = (t)=>set(KEYS.tables, t);
 const DEFAULT_MENU = [
     {
-        id: 1,
+        id: 'M01',
         category: 'Biryani',
-        name: 'Hyderabadi Chicken Dum Biryani',
-        desc: 'Slow-cooked tender chicken layered with fragrant basmati rice & saffron',
+        name: 'Chicken Dum Biryani',
+        desc: 'Slow-cooked aromatic rice with tender chicken',
         price: 280,
-        img: 'https://images.unsplash.com/photo-1563379091339-03b21ab4a4f8?w=400&auto=format&fit=crop&q=80',
+        img: '🍗',
         badge: 'bestseller',
         available: true
     },
     {
-        id: 2,
+        id: 'M02',
         category: 'Biryani',
-        name: 'Hyderabadi Mutton Dum Biryani',
-        desc: 'Tender mutton pieces slow-cooked with aromatic whole spices',
-        price: 350,
-        img: 'https://images.unsplash.com/photo-1589302168068-964664d93dc0?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 3,
-        category: 'Biryani',
-        name: 'Veg Hyderabadi Biryani',
-        desc: 'Fresh garden vegetables cooked in authentic Hyderabadi dum style',
-        price: 200,
-        img: 'https://images.unsplash.com/photo-1596797038530-2c107229654b?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 4,
-        category: 'Biryani',
-        name: 'Paneer Dum Biryani',
-        desc: 'Soft cottage cheese cubes layered with spiced aromatic basmati',
-        price: 240,
-        img: 'https://images.unsplash.com/photo-1631452180519-c014fe946bc7?w=400&auto=format&fit=crop&q=80',
-        badge: 'popular',
-        available: true
-    },
-    {
-        id: 5,
-        category: 'Biryani',
-        name: 'Egg Biryani',
-        desc: 'Perfectly boiled eggs cooked with Hyderabadi spices and basmati',
-        price: 220,
-        img: 'https://images.unsplash.com/photo-1546833998-877b37c2e5c6?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 6,
-        category: 'Biryani',
-        name: 'Special Double Dum Biryani',
-        desc: 'Our signature extra-large portion with double the flavors & dry fruits',
-        price: 420,
-        img: 'https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=400&auto=format&fit=crop&q=80',
-        badge: 'chef',
-        available: true
-    },
-    {
-        id: 7,
-        category: 'Starters',
-        name: 'Chicken 65',
-        desc: 'Crispy deep-fried chicken with fiery red marinade & curry leaves',
-        price: 220,
-        img: 'https://images.unsplash.com/photo-1599487488170-d11ec9c172f0?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 8,
-        category: 'Starters',
-        name: 'Mutton Seekh Kebab',
-        desc: 'Minced mutton blended with spices & grilled over coal',
-        price: 280,
-        img: 'https://images.unsplash.com/photo-1512058454905-6b84c2b38f50?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 9,
-        category: 'Starters',
-        name: 'Paneer Tikka',
-        desc: 'Marinated cottage cheese cubes grilled in tandoor',
-        price: 200,
-        img: 'https://images.unsplash.com/photo-1567188040759-fb8a883dc6d8?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 10,
-        category: 'Starters',
-        name: 'Veg Shammi Kebab',
-        desc: 'Soft & spicy mixed vegetable patties pan-fried golden',
-        price: 160,
-        img: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 11,
-        category: 'Mains',
-        name: 'Chicken Curry',
-        desc: 'Rich and spicy Hyderabadi style chicken curry in thick gravy',
-        price: 260,
-        img: 'https://images.unsplash.com/photo-1585937421612-70a008356fbe?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 12,
-        category: 'Mains',
-        name: 'Mutton Rogan Josh',
-        desc: 'Slow-cooked tender mutton in aromatic Kashmiri spice gravy',
+        name: 'Mutton Biryani',
+        desc: 'Rich biryani with tender mutton pieces',
         price: 320,
-        img: 'https://images.unsplash.com/photo-1565557623262-b51c2513a641?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 13,
-        category: 'Mains',
-        name: 'Dal Makhani',
-        desc: 'Slow-cooked black lentils simmered with cream & butter overnight',
-        price: 180,
-        img: 'https://images.unsplash.com/photo-1546833998-877b37c2e5c6?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 14,
-        category: 'Mains',
-        name: 'Paneer Butter Masala',
-        desc: 'Soft paneer cubes in rich creamy tomato-cashew gravy',
-        price: 220,
-        img: 'https://images.unsplash.com/photo-1631452180519-c014fe946bc7?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 15,
-        category: 'Mains',
-        name: 'Raita',
-        desc: 'Chilled yogurt with cucumber, onion, tomato & roasted cumin',
-        price: 60,
-        img: 'https://images.unsplash.com/photo-1563805042-7684c019e1cb?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 16,
-        category: 'Breads',
-        name: 'Butter Naan',
-        desc: 'Soft leavened bread baked in tandoor brushed with fresh butter',
-        price: 40,
-        img: 'https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 17,
-        category: 'Breads',
-        name: 'Garlic Naan',
-        desc: 'Naan generously topped with garlic, butter & fresh coriander',
-        price: 50,
-        img: 'https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 18,
-        category: 'Breads',
-        name: 'Tandoori Roti',
-        desc: 'Whole wheat bread baked fresh in clay tandoor',
-        price: 30,
-        img: 'https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 19,
-        category: 'Desserts',
-        name: 'Double Ka Meetha',
-        desc: 'Iconic Hyderabadi bread pudding with cream, dry fruits & saffron',
-        price: 120,
-        img: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=400&auto=format&fit=crop&q=80',
+        img: '🥩',
         badge: 'famous',
         available: true
     },
     {
-        id: 20,
+        id: 'M03',
+        category: 'Biryani',
+        name: 'Veg Biryani',
+        desc: 'Fragrant basmati with fresh vegetables',
+        price: 200,
+        img: '🥦',
+        badge: 'popular',
+        available: true
+    },
+    {
+        id: 'M04',
+        category: 'Biryani',
+        name: 'Egg Biryani',
+        desc: 'Classic biryani with boiled eggs',
+        price: 220,
+        img: '🥚',
+        badge: '',
+        available: true
+    },
+    {
+        id: 'M05',
+        category: 'Starters',
+        name: 'Chicken 65',
+        desc: 'Crispy spiced fried chicken',
+        price: 180,
+        img: '🍗',
+        badge: 'bestseller',
+        available: true
+    },
+    {
+        id: 'M06',
+        category: 'Starters',
+        name: 'Gobi Manchurian',
+        desc: 'Crispy cauliflower in tangy sauce',
+        price: 150,
+        img: '🥦',
+        badge: 'popular',
+        available: true
+    },
+    {
+        id: 'M07',
+        category: 'Starters',
+        name: 'Fish Fry',
+        desc: 'Coastal spiced fried fish',
+        price: 220,
+        img: '🐟',
+        badge: 'famous',
+        available: true
+    },
+    {
+        id: 'M08',
+        category: 'Starters',
+        name: 'Paneer Tikka',
+        desc: 'Grilled cottage cheese with bell peppers',
+        price: 200,
+        img: '🧀',
+        badge: 'chef',
+        available: true
+    },
+    {
+        id: 'M09',
+        category: 'Mains',
+        name: 'Butter Chicken',
+        desc: 'Creamy tomato-based chicken curry',
+        price: 250,
+        img: '🍛',
+        badge: 'bestseller',
+        available: true
+    },
+    {
+        id: 'M10',
+        category: 'Mains',
+        name: 'Dal Tadka',
+        desc: 'Yellow lentils with spiced tempering',
+        price: 120,
+        img: '🍲',
+        badge: '',
+        available: true
+    },
+    {
+        id: 'M11',
+        category: 'Mains',
+        name: 'Palak Paneer',
+        desc: 'Cottage cheese in creamy spinach gravy',
+        price: 180,
+        img: '🍃',
+        badge: 'popular',
+        available: true
+    },
+    {
+        id: 'M12',
+        category: 'Mains',
+        name: 'Prawn Masala',
+        desc: 'Fresh prawns in spicy coconut gravy',
+        price: 300,
+        img: '🍤',
+        badge: 'chef',
+        available: true
+    },
+    {
+        id: 'M13',
+        category: 'Breads',
+        name: 'Butter Naan',
+        desc: 'Soft leavened bread with butter',
+        price: 45,
+        img: '🫓',
+        badge: '',
+        available: true
+    },
+    {
+        id: 'M14',
+        category: 'Breads',
+        name: 'Garlic Naan',
+        desc: 'Naan topped with garlic and herbs',
+        price: 55,
+        img: '🫓',
+        badge: 'popular',
+        available: true
+    },
+    {
+        id: 'M15',
+        category: 'Breads',
+        name: 'Rumali Roti',
+        desc: 'Thin handkerchief bread',
+        price: 35,
+        img: '🫓',
+        badge: '',
+        available: true
+    },
+    {
+        id: 'M16',
         category: 'Desserts',
-        name: 'Qubani Ka Meetha',
-        desc: 'Traditional Hyderabadi apricot dessert topped with fresh cream',
-        price: 100,
-        img: 'https://images.unsplash.com/photo-1565557623262-b51c2513a641?w=400&auto=format&fit=crop&q=80',
+        name: 'Gulab Jamun',
+        desc: 'Soft milk-solid dumplings in rose syrup',
+        price: 80,
+        img: '🍮',
+        badge: 'bestseller',
         available: true
     },
     {
-        id: 21,
+        id: 'M17',
         category: 'Desserts',
-        name: 'Kheer',
-        desc: 'Creamy rich rice pudding infused with saffron, cardamom & nuts',
-        price: 80,
-        img: 'https://images.unsplash.com/photo-1563805042-7684c019e1cb?w=400&auto=format&fit=crop&q=80',
+        name: 'Phirni',
+        desc: 'Creamy rice pudding with saffron',
+        price: 90,
+        img: '🍮',
+        badge: 'chef',
         available: true
     },
     {
-        id: 22,
-        category: 'Drinks',
-        name: 'Sweet Lassi',
-        desc: "Chilled sweet yogurt drink - Punjab's most beloved classic",
-        price: 80,
-        img: 'https://images.unsplash.com/photo-1563805042-7684c019e1cb?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 23,
-        category: 'Drinks',
-        name: 'Salted Lassi',
-        desc: 'Refreshing salted yogurt drink with roasted cumin',
-        price: 80,
-        img: 'https://images.unsplash.com/photo-1563805042-7684c019e1cb?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 24,
+        id: 'M18',
         category: 'Drinks',
         name: 'Masala Chai',
-        desc: 'Aromatic spiced tea brewed with ginger, cardamom & cinnamon',
+        desc: 'Spiced milk tea',
         price: 40,
-        img: 'https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?w=400&auto=format&fit=crop&q=80',
+        img: '☕',
+        badge: '',
         available: true
     },
     {
-        id: 25,
+        id: 'M19',
         category: 'Drinks',
-        name: 'Cold Drink',
-        desc: 'Pepsi / Coke / Sprite / Thumbs Up (chilled)',
-        price: 50,
-        img: 'https://images.unsplash.com/photo-1561758033-d89a9ad46330?w=400&auto=format&fit=crop&q=80',
+        name: 'Sweet Lassi',
+        desc: 'Chilled yogurt drink',
+        price: 70,
+        img: '🥛',
+        badge: 'popular',
         available: true
     },
     {
-        id: 26,
+        id: 'M20',
         category: 'Drinks',
-        name: 'Mineral Water',
-        desc: '500ml chilled mineral water bottle',
-        price: 20,
-        img: 'https://images.unsplash.com/photo-1560023907-5f339617ea30?w=400&auto=format&fit=crop&q=80',
+        name: 'Fresh Lime Soda',
+        desc: 'Refreshing lemon soda',
+        price: 60,
+        img: '🍋',
+        badge: '',
         available: true
     }
 ];
-function getMenu() {
-    const saved = get(KEYS.menu, null);
-    if (saved) return saved;
-    set(KEYS.menu, DEFAULT_MENU);
-    return DEFAULT_MENU;
+const DEFAULT_TABLES = Array.from({
+    length: 20
+}, (_, i)=>({
+        id: `T${String(i + 1).padStart(2, '0')}`,
+        status: 'available',
+        capacity: i < 4 ? 2 : i < 14 ? 4 : 6
+    }));
+const getPin = ()=>ls_get(KEYS.pin, '1234');
+const savePin = (p)=>ls_set(KEYS.pin, p);
+function getNextOrderNumber() {
+    const n = ls_get(KEYS.orderNum, 0) + 1;
+    ls_set(KEYS.orderNum, n);
+    return n;
 }
-const saveMenu = (items)=>set(KEYS.menu, items);
-const getPin = ()=>get(KEYS.pin, '1234');
-const savePin = (p)=>set(KEYS.pin, p);
-const getStaffSessions = ()=>get(KEYS.staff, []);
-const saveStaffSessions = (s)=>set(KEYS.staff, s);
-const getWaiterCalls = ()=>get(KEYS.calls, []);
-const saveWaiterCalls = (c)=>set(KEYS.calls, c);
-function addWaiterCall(tableId, message, customerName) {
-    const calls = getWaiterCalls();
-    calls.push({
-        id: `CALL-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        tableId,
-        customerName,
-        message,
-        timestamp: new Date().toISOString(),
-        resolved: false
-    });
-    saveWaiterCalls(calls);
+const getOrders = ()=>ls_get(KEYS.orders, []);
+const saveOrders = (o)=>ls_set(KEYS.orders, o);
+function addOrder(order) {
+    const orders = getOrders();
+    orders.push(order);
+    saveOrders(orders);
 }
-function resolveWaiterCall(callId, by) {
-    const calls = getWaiterCalls();
-    const idx = calls.findIndex((c)=>c.id === callId);
-    if (idx === -1) return;
-    calls[idx].resolved = true;
-    calls[idx].resolvedAt = new Date().toISOString();
-    calls[idx].resolvedBy = by;
-    saveWaiterCalls(calls);
+function updateOrderStatus(id, status, by = 'System', force = false) {
+    const orders = getOrders();
+    const idx = orders.findIndex((o)=>o.id === id);
+    if (idx === -1) return false;
+    const order = orders[idx];
+    // Role-based status flow enforcement (unless force=true)
+    if (!force) {
+        const flow = [
+            'awaiting_waiter',
+            'pending',
+            'preparing',
+            'prepared',
+            'served',
+            'completed'
+        ];
+        const currIdx = flow.indexOf(order.status);
+        const nextIdx = flow.indexOf(status);
+        if (currIdx === -1 || nextIdx === -1 || nextIdx !== currIdx + 1) {
+            return false;
+        }
+    }
+    orders[idx] = {
+        ...order,
+        status,
+        timeline: [
+            ...order.timeline || [],
+            {
+                status,
+                by,
+                at: new Date().toISOString()
+            }
+        ]
+    };
+    saveOrders(orders);
+    return true;
+}
+function cancelOrder(id, reason, by = 'System') {
+    const orders = getOrders();
+    const idx = orders.findIndex((o)=>o.id === id);
+    if (idx === -1) return false;
+    orders[idx] = {
+        ...orders[idx],
+        status: 'cancelled',
+        cancelReason: reason,
+        timeline: [
+            ...orders[idx].timeline || [],
+            {
+                status: 'cancelled',
+                by,
+                at: new Date().toISOString(),
+                note: reason
+            }
+        ]
+    };
+    saveOrders(orders);
+    return true;
+}
+function voidOrder(id, reason, by = 'Manager') {
+    const orders = getOrders();
+    const idx = orders.findIndex((o)=>o.id === id);
+    if (idx === -1) return false;
+    orders[idx] = {
+        ...orders[idx],
+        status: 'void',
+        cancelReason: reason,
+        timeline: [
+            ...orders[idx].timeline || [],
+            {
+                status: 'void',
+                by,
+                at: new Date().toISOString(),
+                note: reason
+            }
+        ]
+    };
+    saveOrders(orders);
+    if ((orders[idx].total || 0) > 100) {
+        addFraudAlert({
+            type: 'void_order',
+            orderId: id,
+            detail: `Order #${orders[idx].orderNum || id.slice(-4)} voided by ${by} — ₹${orders[idx].total}`,
+            by,
+            amount: orders[idx].total
+        });
+    }
+    return true;
+}
+function applyDiscount(id, amount, reason, by = 'Manager') {
+    const orders = getOrders();
+    const idx = orders.findIndex((o)=>o.id === id);
+    if (idx === -1) return false;
+    const order = orders[idx];
+    const subtotal = order.subtotal || order.total;
+    const pct = amount / subtotal;
+    if (pct > 0.5) {
+        addFraudAlert({
+            type: 'high_discount',
+            orderId: id,
+            detail: `${Math.round(pct * 100)}% discount (₹${amount}) applied by ${by}`,
+            by,
+            amount
+        });
+    }
+    orders[idx] = {
+        ...order,
+        discount: amount,
+        discountReason: reason,
+        total: Math.max(0, subtotal - amount),
+        timeline: [
+            ...order.timeline || [],
+            {
+                status: 'discount',
+                by,
+                at: new Date().toISOString(),
+                note: `₹${amount} — ${reason}`
+            }
+        ]
+    };
+    saveOrders(orders);
+    return true;
 }
 function getOrdersInPeriod(period) {
-    const all = getOrders();
+    const orders = getOrders().filter((o)=>o.status === 'completed');
     const now = new Date();
-    return all.filter((o)=>{
-        if (o.status === 'cancelled') return false; // exclude cancelled from revenue
+    if (period === 'all') return orders;
+    return orders.filter((o)=>{
         const d = new Date(o.timestamp);
         if (period === 'today') return d.toDateString() === now.toDateString();
         if (period === 'week') {
-            const s = new Date(now);
-            s.setDate(now.getDate() - now.getDay());
-            s.setHours(0, 0, 0, 0);
-            return d >= s;
+            const weekAgo = new Date(now);
+            weekAgo.setDate(now.getDate() - 7);
+            return d >= weekAgo;
         }
-        if (period === 'month') return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+        if (period === 'month') {
+            return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+        }
         return true;
     });
 }
 function exportOrdersCSV() {
-    const orders = getOrders();
-    if (!orders.length) {
-        alert('No orders to export.');
-        return;
-    }
-    const DAY = [
-        'Sunday',
-        'Monday',
-        'Tuesday',
-        'Wednesday',
-        'Thursday',
-        'Friday',
-        'Saturday'
-    ];
-    const MONTH = [
-        'January',
-        'February',
-        'March',
-        'April',
-        'May',
-        'June',
-        'July',
-        'August',
-        'September',
-        'October',
-        'November',
-        'December'
-    ];
-    const PAY = {
-        paytm: 'Paytm',
-        phonepe: 'PhonePe',
-        gpay: 'Google Pay',
-        cod: 'Cash'
+    const orders = getOrders().filter((o)=>o.status === 'completed');
+    const header = 'Order ID,Order#,Customer,Table,Type,Items,Subtotal,Discount,Total,Payment,Timestamp';
+    const rows = orders.map((o)=>{
+        const items = (o.items || []).map((i)=>`${i.name}x${i.qty}`).join('|');
+        return [
+            o.id,
+            o.orderNum || '',
+            o.customerName,
+            o.tableId || '',
+            o.type,
+            `"${items}"`,
+            o.subtotal,
+            o.discount || 0,
+            o.total,
+            o.payment,
+            o.timestamp
+        ].join(',');
+    });
+    return [
+        header,
+        ...rows
+    ].join('\n');
+}
+const getTables = ()=>ls_get(KEYS.tables, DEFAULT_TABLES);
+const saveTables = (t)=>ls_set(KEYS.tables, t);
+function syncTableStatus(tableId) {
+    const activeTabs = getActiveTabsForTable(tableId);
+    const tables = getTables();
+    const idx = tables.findIndex((t)=>t.id === tableId);
+    if (idx === -1) return;
+    tables[idx] = {
+        ...tables[idx],
+        status: activeTabs.length > 0 ? 'occupied' : 'available'
     };
-    const headers = [
-        'Order ID',
-        'Date',
-        'Time',
-        'Day',
-        'Week No.',
-        'Month',
-        'Year',
-        'Customer',
-        'Phone',
-        'Type',
-        'Table/Pickup',
-        'Staff',
-        'Item Name',
-        'Item Qty',
-        'Unit Price (₹)',
-        'Line Total (₹)',
-        'Subtotal (₹)',
-        'Discount (₹)',
-        'Discount Reason',
-        'Total (₹)',
-        'Payment',
-        'Status',
-        'Cancel Reason'
-    ];
-    const rows = [];
-    orders.forEach((order)=>{
-        const d = new Date(order.timestamp);
-        const date = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
-        const time = d.toLocaleTimeString('en-IN', {
-            hour: '2-digit',
-            minute: '2-digit'
+    saveTables(tables);
+}
+function getTableOccupancy(tableId) {
+    const activeTabs = getActiveTabsForTable(tableId);
+    if (activeTabs.length === 0) return null;
+    const tab = activeTabs[0];
+    return {
+        tableId: tab.tableId,
+        tabId: tab.id,
+        name: tab.customerName,
+        partySize: tab.partySize,
+        since: tab.createdAt,
+        status: tab.tabStatus
+    };
+}
+const getMenu = ()=>ls_get(KEYS.menu, DEFAULT_MENU);
+const saveMenu = (m)=>ls_set(KEYS.menu, m);
+const getTabs = ()=>ls_get(KEYS.tabs, []);
+const saveTabs = (t)=>ls_set(KEYS.tabs, t);
+function getTab(id) {
+    return getTabs().find((t)=>t.id === id) ?? null;
+}
+function getOpenTabForCustomer(tableId, customerName) {
+    const name = customerName.trim().toLowerCase();
+    return getTabs().find((t)=>t.tableId === tableId && t.customerName.trim().toLowerCase() === name && (t.tabStatus === 'open' || t.tabStatus === 'awaiting_payment')) ?? null;
+}
+function getActiveTabsForTable(tableId) {
+    return getTabs().filter((t)=>t.tableId === tableId && (t.tabStatus === 'open' || t.tabStatus === 'awaiting_payment'));
+}
+function syncTabTotal(tabId) {
+    const tabs = getTabs();
+    const idx = tabs.findIndex((t)=>t.id === tabId);
+    if (idx === -1) return;
+    const orders = getOrders();
+    const total = tabs[idx].orderIds.reduce((sum, oid)=>{
+        const order = orders.find((o)=>o.id === oid);
+        if (!order || [
+            'cancelled',
+            'void'
+        ].includes(order.status)) return sum;
+        return sum + (order.total || 0);
+    }, 0);
+    tabs[idx] = {
+        ...tabs[idx],
+        totalAmount: total
+    };
+    saveTabs(tabs);
+}
+function createTab(tableId, customerName, partySize) {
+    const tab = {
+        id: `TAB-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+        tableId,
+        customerName: customerName.trim(),
+        partySize,
+        orderIds: [],
+        tabStatus: 'open',
+        totalAmount: 0,
+        discount: 0,
+        discountReason: '',
+        paymentMethod: 'cod',
+        createdAt: new Date().toISOString()
+    };
+    const tabs = getTabs();
+    tabs.push(tab);
+    saveTabs(tabs);
+    // Mark table occupied
+    const tables = getTables();
+    const tIdx = tables.findIndex((t)=>t.id === tableId);
+    if (tIdx !== -1) {
+        tables[tIdx] = {
+            ...tables[tIdx],
+            status: 'occupied'
+        };
+        saveTables(tables);
+    }
+    return tab;
+}
+function addOrderToTab(tabId, orderId) {
+    const tabs = getTabs();
+    const idx = tabs.findIndex((t)=>t.id === tabId);
+    if (idx === -1) return false;
+    if (tabs[idx].tabStatus !== 'open') return false;
+    if (!tabs[idx].orderIds.includes(orderId)) {
+        tabs[idx] = {
+            ...tabs[idx],
+            orderIds: [
+                ...tabs[idx].orderIds,
+                orderId
+            ]
+        };
+        saveTabs(tabs);
+        syncTabTotal(tabId);
+    }
+    return true;
+}
+function requestBill(tabId) {
+    const tabs = getTabs();
+    const idx = tabs.findIndex((t)=>t.id === tabId);
+    if (idx === -1) return false;
+    if (tabs[idx].tabStatus !== 'open') return false;
+    tabs[idx] = {
+        ...tabs[idx],
+        tabStatus: 'awaiting_payment'
+    };
+    saveTabs(tabs);
+    syncTabTotal(tabId);
+    return true;
+}
+function applyTabDiscount(tabId, amount, reason, by = 'Manager') {
+    const tabs = getTabs();
+    const idx = tabs.findIndex((t)=>t.id === tabId);
+    if (idx === -1) return false;
+    tabs[idx] = {
+        ...tabs[idx],
+        discount: amount,
+        discountReason: reason
+    };
+    saveTabs(tabs);
+    if (amount / (tabs[idx].totalAmount || 1) > 0.5) {
+        addFraudAlert({
+            type: 'high_discount',
+            tabId,
+            detail: `${Math.round(amount / (tabs[idx].totalAmount || 1) * 100)}% tab discount (₹${amount}) applied by ${by}`,
+            by,
+            amount
         });
-        const loc = order.type === 'dine-in' ? `Table ${order.tableId}` : 'Pickup';
-        const pay = PAY[order.payment] ?? order.payment ?? '';
-        const items = order.items ?? [];
-        if (!items.length) {
-            rows.push([
-                order.id,
-                date,
-                time,
-                DAY[d.getDay()],
-                Math.ceil(d.getDate() / 7),
-                MONTH[d.getMonth()],
-                d.getFullYear(),
-                order.customerName,
-                order.phone ?? '',
-                order.type,
-                loc,
-                order.staffName ?? '',
-                '',
-                '',
-                '',
-                '',
-                order.subtotal,
-                order.discount ?? 0,
-                order.discountReason ?? '',
-                order.total,
-                pay,
-                order.status,
-                order.cancelReason ?? ''
-            ]);
-        } else {
-            items.forEach((item, i)=>{
-                const line = item.subtotal ?? item.price * item.qty;
-                rows.push([
-                    i === 0 ? order.id : '',
-                    i === 0 ? date : '',
-                    i === 0 ? time : '',
-                    i === 0 ? DAY[d.getDay()] : '',
-                    i === 0 ? Math.ceil(d.getDate() / 7) : '',
-                    i === 0 ? MONTH[d.getMonth()] : '',
-                    i === 0 ? d.getFullYear() : '',
-                    i === 0 ? order.customerName : '',
-                    i === 0 ? order.phone ?? '' : '',
-                    i === 0 ? order.type : '',
-                    i === 0 ? loc : '',
-                    i === 0 ? order.staffName ?? '' : '',
-                    item.name,
-                    item.qty,
-                    item.price,
-                    line,
-                    i === 0 ? order.subtotal : '',
-                    i === 0 ? order.discount ?? 0 : '',
-                    i === 0 ? order.discountReason ?? '' : '',
-                    i === 0 ? order.total : '',
-                    i === 0 ? pay : '',
-                    i === 0 ? order.status : '',
-                    i === 0 ? order.cancelReason ?? '' : ''
-                ]);
-            });
+    }
+    return true;
+}
+function closeTab(tabId, paymentMethod, discount, discountReason, by = 'Manager') {
+    const tabs = getTabs();
+    const idx = tabs.findIndex((t)=>t.id === tabId);
+    if (idx === -1) return false;
+    syncTabTotal(tabId);
+    const refreshed = getTabs();
+    const tab = refreshed[idx];
+    const finalDiscount = discount ?? tab.discount;
+    const finalDiscReason = discountReason ?? tab.discountReason;
+    refreshed[idx] = {
+        ...tab,
+        tabStatus: 'closed',
+        discount: finalDiscount,
+        discountReason: finalDiscReason,
+        paymentMethod,
+        closedAt: new Date().toISOString()
+    };
+    saveTabs(refreshed);
+    // Mark all tab orders as completed
+    const orders = getOrders();
+    let changed = false;
+    tab.orderIds.forEach((oid)=>{
+        const oIdx = orders.findIndex((o)=>o.id === oid);
+        if (oIdx !== -1 && ![
+            'cancelled',
+            'void',
+            'completed'
+        ].includes(orders[oIdx].status)) {
+            orders[oIdx] = {
+                ...orders[oIdx],
+                status: 'completed',
+                payment: paymentMethod,
+                timeline: [
+                    ...orders[oIdx].timeline || [],
+                    {
+                        status: 'completed',
+                        by,
+                        at: new Date().toISOString(),
+                        note: `Tab closed — ${paymentMethod}`
+                    }
+                ]
+            };
+            changed = true;
         }
     });
-    const esc = (v)=>{
-        const s = String(v ?? '');
-        return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
-    };
-    const csv = [
-        headers,
-        ...rows
-    ].map((r)=>r.map(esc).join(',')).join('\n');
-    const blob = new Blob([
-        '\uFEFF' + csv
-    ], {
-        type: 'text/csv;charset=utf-8;'
+    if (changed) saveOrders(orders);
+    // Release table if no more active tabs
+    syncTableStatus(tab.tableId);
+    return true;
+}
+function getTabOrders(tabId) {
+    const tab = getTab(tabId);
+    if (!tab) return [];
+    const orders = getOrders();
+    return tab.orderIds.map((oid)=>orders.find((o)=>o.id === oid)).filter((o)=>o !== undefined);
+}
+// ─── Fraud Alerts ─────────────────────────────────────────────────────────────
+function addFraudAlert(data) {
+    const alerts = ls_get(KEYS.fraudAlerts, []);
+    alerts.push({
+        ...data,
+        id: `FA-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+        at: new Date().toISOString()
     });
-    const url = URL.createObjectURL(blob);
-    const now = new Date();
-    const fname = `FoodieLover_${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}.csv`;
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fname;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    if (alerts.length > 200) alerts.splice(0, alerts.length - 200);
+    ls_set(KEYS.fraudAlerts, alerts);
+}
+function getFraudAlerts() {
+    return ls_get(KEYS.fraudAlerts, []).slice().reverse();
+}
+function clearFraudAlerts() {
+    ls_set(KEYS.fraudAlerts, []);
+}
+function getEndOfDayReport(date) {
+    const d = date || new Date();
+    const dayOrders = getOrders().filter((o)=>new Date(o.timestamp).toDateString() === d.toDateString());
+    const completedOrders = dayOrders.filter((o)=>o.status === 'completed');
+    const voidedOrders = dayOrders.filter((o)=>o.status === 'void').length;
+    const totalRevenue = completedOrders.reduce((s, o)=>s + (o.total || 0), 0);
+    const discountsTotal = completedOrders.reduce((s, o)=>s + (o.discount || 0), 0);
+    const itemMap = {};
+    completedOrders.forEach((o)=>(o.items || []).forEach((i)=>{
+            itemMap[i.name] = (itemMap[i.name] || 0) + i.qty;
+        }));
+    const topItems = Object.entries(itemMap).sort((a, b)=>b[1] - a[1]).slice(0, 5).map(([name, qty])=>({
+            name,
+            qty
+        }));
+    const completedTabs = getTabs().filter((t)=>t.tabStatus === 'closed' && t.closedAt && new Date(t.closedAt).toDateString() === d.toDateString()).length;
+    return {
+        date: d.toDateString(),
+        totalOrders: completedOrders.length,
+        totalRevenue,
+        avgOrderValue: completedOrders.length ? Math.round(totalRevenue / completedOrders.length) : 0,
+        topItems,
+        completedTabs,
+        voidedOrders,
+        discountsTotal
+    };
 }
 if (typeof globalThis.$RefreshHelpers$ === 'object' && globalThis.$RefreshHelpers !== null) {
     __turbopack_context__.k.registerExports(__turbopack_context__.m, globalThis.$RefreshHelpers$);
@@ -781,14 +856,12 @@ function CustomerPage() {
             // Add random suffix to prevent timestamp collisions on rapid clicks
             const id = `ORD-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
             const items = cart.map((c)=>({
-                    id: c.item.id,
                     name: c.item.name,
-                    category: c.item.category,
                     price: c.item.price,
                     qty: c.qty,
                     subtotal: c.item.price * c.qty
                 }));
-            const tableId = form.type === 'dine-in' ? parseInt(form.tableNo.trim()) || undefined : undefined;
+            const tableId = form.type === 'dine-in' ? form.tableNo.trim().toUpperCase() || undefined : undefined;
             const order = {
                 id,
                 type: form.type,
@@ -798,13 +871,14 @@ function CustomerPage() {
                 items,
                 subtotal: cartTotal,
                 discount: 0,
+                discountReason: '',
                 total: cartTotal,
                 payment: form.payment,
                 status: 'pending',
                 timeline: [
                     {
                         status: 'pending',
-                        timestamp: ts
+                        at: ts
                     }
                 ],
                 timestamp: ts
@@ -850,7 +924,7 @@ function CustomerPage() {
                                 children: "🍽️ Foodie Lover"
                             }, void 0, false, {
                                 fileName: "[project]/app/page.tsx",
-                                lineNumber: 119,
+                                lineNumber: 120,
                                 columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -861,13 +935,13 @@ function CustomerPage() {
                                 children: "Pickup & Dine-In Ordering"
                             }, void 0, false, {
                                 fileName: "[project]/app/page.tsx",
-                                lineNumber: 120,
+                                lineNumber: 121,
                                 columnNumber: 11
                             }, this)
                         ]
                     }, void 0, true, {
                         fileName: "[project]/app/page.tsx",
-                        lineNumber: 118,
+                        lineNumber: 119,
                         columnNumber: 9
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -903,19 +977,19 @@ function CustomerPage() {
                                 children: cartCount
                             }, void 0, false, {
                                 fileName: "[project]/app/page.tsx",
-                                lineNumber: 128,
+                                lineNumber: 129,
                                 columnNumber: 13
                             }, this)
                         ]
                     }, void 0, true, {
                         fileName: "[project]/app/page.tsx",
-                        lineNumber: 122,
+                        lineNumber: 123,
                         columnNumber: 9
                     }, this)
                 ]
             }, void 0, true, {
                 fileName: "[project]/app/page.tsx",
-                lineNumber: 117,
+                lineNumber: 118,
                 columnNumber: 7
             }, this),
             orderPlaced && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -933,14 +1007,14 @@ function CustomerPage() {
                         children: lastOrderId
                     }, void 0, false, {
                         fileName: "[project]/app/page.tsx",
-                        lineNumber: 138,
+                        lineNumber: 139,
                         columnNumber: 50
                     }, this),
                     " — We'll prepare it shortly."
                 ]
             }, void 0, true, {
                 fileName: "[project]/app/page.tsx",
-                lineNumber: 137,
+                lineNumber: 138,
                 columnNumber: 9
             }, this),
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -968,12 +1042,12 @@ function CustomerPage() {
                         children: cat
                     }, cat, false, {
                         fileName: "[project]/app/page.tsx",
-                        lineNumber: 145,
+                        lineNumber: 146,
                         columnNumber: 11
                     }, this))
             }, void 0, false, {
                 fileName: "[project]/app/page.tsx",
-                lineNumber: 143,
+                lineNumber: 144,
                 columnNumber: 7
             }, this),
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1004,7 +1078,7 @@ function CustomerPage() {
                                 }
                             }, void 0, false, {
                                 fileName: "[project]/app/page.tsx",
-                                lineNumber: 159,
+                                lineNumber: 160,
                                 columnNumber: 28
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1029,7 +1103,7 @@ function CustomerPage() {
                                                 children: item.name
                                             }, void 0, false, {
                                                 fileName: "[project]/app/page.tsx",
-                                                lineNumber: 162,
+                                                lineNumber: 163,
                                                 columnNumber: 19
                                             }, this),
                                             item.badge && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -1046,13 +1120,13 @@ function CustomerPage() {
                                                 children: BADGE_LABELS[item.badge] || item.badge
                                             }, void 0, false, {
                                                 fileName: "[project]/app/page.tsx",
-                                                lineNumber: 164,
+                                                lineNumber: 165,
                                                 columnNumber: 21
                                             }, this)
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/app/page.tsx",
-                                        lineNumber: 161,
+                                        lineNumber: 162,
                                         columnNumber: 17
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1065,7 +1139,7 @@ function CustomerPage() {
                                         children: item.desc
                                     }, void 0, false, {
                                         fileName: "[project]/app/page.tsx",
-                                        lineNumber: 169,
+                                        lineNumber: 170,
                                         columnNumber: 17
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1087,7 +1161,7 @@ function CustomerPage() {
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/page.tsx",
-                                                lineNumber: 171,
+                                                lineNumber: 172,
                                                 columnNumber: 19
                                             }, this),
                                             inCart ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1116,7 +1190,7 @@ function CustomerPage() {
                                                         children: "−"
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/page.tsx",
-                                                        lineNumber: 174,
+                                                        lineNumber: 175,
                                                         columnNumber: 23
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -1128,7 +1202,7 @@ function CustomerPage() {
                                                         children: inCart.qty
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/page.tsx",
-                                                        lineNumber: 175,
+                                                        lineNumber: 176,
                                                         columnNumber: 23
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1151,13 +1225,13 @@ function CustomerPage() {
                                                         children: "+"
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/page.tsx",
-                                                        lineNumber: 176,
+                                                        lineNumber: 177,
                                                         columnNumber: 23
                                                     }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/page.tsx",
-                                                lineNumber: 173,
+                                                lineNumber: 174,
                                                 columnNumber: 21
                                             }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
                                                 onClick: ()=>addToCart(item),
@@ -1175,31 +1249,31 @@ function CustomerPage() {
                                                 children: "+ Add"
                                             }, void 0, false, {
                                                 fileName: "[project]/app/page.tsx",
-                                                lineNumber: 183,
+                                                lineNumber: 184,
                                                 columnNumber: 21
                                             }, this)
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/app/page.tsx",
-                                        lineNumber: 170,
+                                        lineNumber: 171,
                                         columnNumber: 17
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/page.tsx",
-                                lineNumber: 160,
+                                lineNumber: 161,
                                 columnNumber: 15
                             }, this)
                         ]
                     }, item.id, true, {
                         fileName: "[project]/app/page.tsx",
-                        lineNumber: 158,
+                        lineNumber: 159,
                         columnNumber: 13
                     }, this);
                 })
             }, void 0, false, {
                 fileName: "[project]/app/page.tsx",
-                lineNumber: 153,
+                lineNumber: 154,
                 columnNumber: 7
             }, this),
             cartOpen && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1239,7 +1313,7 @@ function CustomerPage() {
                                     children: "🛒 Your Cart"
                                 }, void 0, false, {
                                     fileName: "[project]/app/page.tsx",
-                                    lineNumber: 197,
+                                    lineNumber: 198,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1254,13 +1328,13 @@ function CustomerPage() {
                                     children: "×"
                                 }, void 0, false, {
                                     fileName: "[project]/app/page.tsx",
-                                    lineNumber: 198,
+                                    lineNumber: 199,
                                     columnNumber: 15
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/page.tsx",
-                            lineNumber: 196,
+                            lineNumber: 197,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1278,7 +1352,7 @@ function CustomerPage() {
                                 children: "Your cart is empty"
                             }, void 0, false, {
                                 fileName: "[project]/app/page.tsx",
-                                lineNumber: 202,
+                                lineNumber: 203,
                                 columnNumber: 19
                             }, this) : cart.map((c)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                     style: {
@@ -1299,7 +1373,7 @@ function CustomerPage() {
                                                     children: c.item.name
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/page.tsx",
-                                                    lineNumber: 206,
+                                                    lineNumber: 207,
                                                     columnNumber: 23
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1320,19 +1394,19 @@ function CustomerPage() {
                                                             ]
                                                         }, void 0, true, {
                                                             fileName: "[project]/app/page.tsx",
-                                                            lineNumber: 207,
+                                                            lineNumber: 208,
                                                             columnNumber: 103
                                                         }, this)
                                                     ]
                                                 }, void 0, true, {
                                                     fileName: "[project]/app/page.tsx",
-                                                    lineNumber: 207,
+                                                    lineNumber: 208,
                                                     columnNumber: 23
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/page.tsx",
-                                            lineNumber: 205,
+                                            lineNumber: 206,
                                             columnNumber: 21
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1357,7 +1431,7 @@ function CustomerPage() {
                                                     children: "−"
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/page.tsx",
-                                                    lineNumber: 210,
+                                                    lineNumber: 211,
                                                     columnNumber: 23
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -1369,7 +1443,7 @@ function CustomerPage() {
                                                     children: c.qty
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/page.tsx",
-                                                    lineNumber: 211,
+                                                    lineNumber: 212,
                                                     columnNumber: 23
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1388,24 +1462,24 @@ function CustomerPage() {
                                                     children: "+"
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/page.tsx",
-                                                    lineNumber: 212,
+                                                    lineNumber: 213,
                                                     columnNumber: 23
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/page.tsx",
-                                            lineNumber: 209,
+                                            lineNumber: 210,
                                             columnNumber: 21
                                         }, this)
                                     ]
                                 }, c.item.id, true, {
                                     fileName: "[project]/app/page.tsx",
-                                    lineNumber: 204,
+                                    lineNumber: 205,
                                     columnNumber: 19
                                 }, this))
                         }, void 0, false, {
                             fileName: "[project]/app/page.tsx",
-                            lineNumber: 200,
+                            lineNumber: 201,
                             columnNumber: 13
                         }, this),
                         cart.length > 0 && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1428,7 +1502,7 @@ function CustomerPage() {
                                             children: "Total"
                                         }, void 0, false, {
                                             fileName: "[project]/app/page.tsx",
-                                            lineNumber: 221,
+                                            lineNumber: 222,
                                             columnNumber: 19
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -1441,13 +1515,13 @@ function CustomerPage() {
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/page.tsx",
-                                            lineNumber: 221,
+                                            lineNumber: 222,
                                             columnNumber: 37
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/page.tsx",
-                                    lineNumber: 220,
+                                    lineNumber: 221,
                                     columnNumber: 17
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1470,24 +1544,24 @@ function CustomerPage() {
                                     children: "Proceed to Checkout →"
                                 }, void 0, false, {
                                     fileName: "[project]/app/page.tsx",
-                                    lineNumber: 223,
+                                    lineNumber: 224,
                                     columnNumber: 17
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/page.tsx",
-                            lineNumber: 219,
+                            lineNumber: 220,
                             columnNumber: 15
                         }, this)
                     ]
                 }, void 0, true, {
                     fileName: "[project]/app/page.tsx",
-                    lineNumber: 195,
+                    lineNumber: 196,
                     columnNumber: 11
                 }, this)
             }, void 0, false, {
                 fileName: "[project]/app/page.tsx",
-                lineNumber: 194,
+                lineNumber: 195,
                 columnNumber: 9
             }, this),
             showCheckout && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1525,7 +1599,7 @@ function CustomerPage() {
                                     children: "Checkout"
                                 }, void 0, false, {
                                     fileName: "[project]/app/page.tsx",
-                                    lineNumber: 237,
+                                    lineNumber: 238,
                                     columnNumber: 15
                                 }, this),
                                 !isSubmitting && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1540,13 +1614,13 @@ function CustomerPage() {
                                     children: "×"
                                 }, void 0, false, {
                                     fileName: "[project]/app/page.tsx",
-                                    lineNumber: 239,
+                                    lineNumber: 240,
                                     columnNumber: 17
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/page.tsx",
-                            lineNumber: 236,
+                            lineNumber: 237,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1570,7 +1644,7 @@ function CustomerPage() {
                                             children: "Your Name *"
                                         }, void 0, false, {
                                             fileName: "[project]/app/page.tsx",
-                                            lineNumber: 244,
+                                            lineNumber: 245,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -1591,13 +1665,13 @@ function CustomerPage() {
                                             }
                                         }, void 0, false, {
                                             fileName: "[project]/app/page.tsx",
-                                            lineNumber: 245,
+                                            lineNumber: 246,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/page.tsx",
-                                    lineNumber: 243,
+                                    lineNumber: 244,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1616,7 +1690,7 @@ function CustomerPage() {
                                             children: "Phone (optional)"
                                         }, void 0, false, {
                                             fileName: "[project]/app/page.tsx",
-                                            lineNumber: 254,
+                                            lineNumber: 255,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -1637,13 +1711,13 @@ function CustomerPage() {
                                             }
                                         }, void 0, false, {
                                             fileName: "[project]/app/page.tsx",
-                                            lineNumber: 255,
+                                            lineNumber: 256,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/page.tsx",
-                                    lineNumber: 253,
+                                    lineNumber: 254,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1662,7 +1736,7 @@ function CustomerPage() {
                                             children: "Order Type"
                                         }, void 0, false, {
                                             fileName: "[project]/app/page.tsx",
-                                            lineNumber: 264,
+                                            lineNumber: 265,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1693,18 +1767,18 @@ function CustomerPage() {
                                                     children: t === 'pickup' ? '🛍️ Pickup' : '🪑 Dine-In'
                                                 }, t, false, {
                                                     fileName: "[project]/app/page.tsx",
-                                                    lineNumber: 267,
+                                                    lineNumber: 268,
                                                     columnNumber: 21
                                                 }, this))
                                         }, void 0, false, {
                                             fileName: "[project]/app/page.tsx",
-                                            lineNumber: 265,
+                                            lineNumber: 266,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/page.tsx",
-                                    lineNumber: 263,
+                                    lineNumber: 264,
                                     columnNumber: 15
                                 }, this),
                                 form.type === 'dine-in' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1723,7 +1797,7 @@ function CustomerPage() {
                                             children: "Table Number *"
                                         }, void 0, false, {
                                             fileName: "[project]/app/page.tsx",
-                                            lineNumber: 276,
+                                            lineNumber: 277,
                                             columnNumber: 19
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -1746,13 +1820,13 @@ function CustomerPage() {
                                             }
                                         }, void 0, false, {
                                             fileName: "[project]/app/page.tsx",
-                                            lineNumber: 277,
+                                            lineNumber: 278,
                                             columnNumber: 19
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/page.tsx",
-                                    lineNumber: 275,
+                                    lineNumber: 276,
                                     columnNumber: 17
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1771,7 +1845,7 @@ function CustomerPage() {
                                             children: "Payment Method"
                                         }, void 0, false, {
                                             fileName: "[project]/app/page.tsx",
-                                            lineNumber: 289,
+                                            lineNumber: 290,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("select", {
@@ -1795,7 +1869,7 @@ function CustomerPage() {
                                                     children: "Cash on Delivery"
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/page.tsx",
-                                                    lineNumber: 296,
+                                                    lineNumber: 297,
                                                     columnNumber: 19
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("option", {
@@ -1803,7 +1877,7 @@ function CustomerPage() {
                                                     children: "Google Pay"
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/page.tsx",
-                                                    lineNumber: 297,
+                                                    lineNumber: 298,
                                                     columnNumber: 19
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("option", {
@@ -1811,7 +1885,7 @@ function CustomerPage() {
                                                     children: "PhonePe"
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/page.tsx",
-                                                    lineNumber: 298,
+                                                    lineNumber: 299,
                                                     columnNumber: 19
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("option", {
@@ -1819,19 +1893,19 @@ function CustomerPage() {
                                                     children: "Paytm"
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/page.tsx",
-                                                    lineNumber: 299,
+                                                    lineNumber: 300,
                                                     columnNumber: 19
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/page.tsx",
-                                            lineNumber: 290,
+                                            lineNumber: 291,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/page.tsx",
-                                    lineNumber: 288,
+                                    lineNumber: 289,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1858,7 +1932,7 @@ function CustomerPage() {
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/app/page.tsx",
-                                                        lineNumber: 305,
+                                                        lineNumber: 306,
                                                         columnNumber: 21
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -1868,13 +1942,13 @@ function CustomerPage() {
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/app/page.tsx",
-                                                        lineNumber: 305,
+                                                        lineNumber: 306,
                                                         columnNumber: 57
                                                     }, this)
                                                 ]
                                             }, c.item.id, true, {
                                                 fileName: "[project]/app/page.tsx",
-                                                lineNumber: 304,
+                                                lineNumber: 305,
                                                 columnNumber: 19
                                             }, this)),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1892,7 +1966,7 @@ function CustomerPage() {
                                                     children: "Total"
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/page.tsx",
-                                                    lineNumber: 309,
+                                                    lineNumber: 310,
                                                     columnNumber: 19
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -1902,19 +1976,19 @@ function CustomerPage() {
                                                     ]
                                                 }, void 0, true, {
                                                     fileName: "[project]/app/page.tsx",
-                                                    lineNumber: 309,
+                                                    lineNumber: 310,
                                                     columnNumber: 37
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/page.tsx",
-                                            lineNumber: 308,
+                                            lineNumber: 309,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/page.tsx",
-                                    lineNumber: 302,
+                                    lineNumber: 303,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1936,30 +2010,30 @@ function CustomerPage() {
                                     children: isSubmitting ? '⏳ Placing Order...' : '✅ Place Order'
                                 }, void 0, false, {
                                     fileName: "[project]/app/page.tsx",
-                                    lineNumber: 312,
+                                    lineNumber: 313,
                                     columnNumber: 15
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/page.tsx",
-                            lineNumber: 242,
+                            lineNumber: 243,
                             columnNumber: 13
                         }, this)
                     ]
                 }, void 0, true, {
                     fileName: "[project]/app/page.tsx",
-                    lineNumber: 235,
+                    lineNumber: 236,
                     columnNumber: 11
                 }, this)
             }, void 0, false, {
                 fileName: "[project]/app/page.tsx",
-                lineNumber: 234,
+                lineNumber: 235,
                 columnNumber: 9
             }, this)
         ]
     }, void 0, true, {
         fileName: "[project]/app/page.tsx",
-        lineNumber: 115,
+        lineNumber: 116,
         columnNumber: 5
     }, this);
 }

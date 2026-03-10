@@ -247,26 +247,25 @@ function resetAdminPinWithSecurity(newPin, answer) {
 "[project]/lib/storage.ts [app-ssr] (ecmascript)", ((__turbopack_context__) => {
 "use strict";
 
+// ─── Foodie Lover — Storage Layer ─────────────────────────────────────────────
+// All persistence via localStorage (no backend).
+// Exports every type and function used across pages.
 // ─── Types ────────────────────────────────────────────────────────────────────
 __turbopack_context__.s([
     "DEFAULT_MENU",
     ()=>DEFAULT_MENU,
-    "VALID_TRANSITIONS",
-    ()=>VALID_TRANSITIONS,
-    "addItemsToOrder",
-    ()=>addItemsToOrder,
     "addOrder",
     ()=>addOrder,
     "addOrderToTab",
     ()=>addOrderToTab,
-    "addWaiterCall",
-    ()=>addWaiterCall,
     "applyDiscount",
     ()=>applyDiscount,
     "applyTabDiscount",
     ()=>applyTabDiscount,
     "cancelOrder",
     ()=>cancelOrder,
+    "clearFraudAlerts",
+    ()=>clearFraudAlerts,
     "closeTab",
     ()=>closeTab,
     "createTab",
@@ -291,10 +290,6 @@ __turbopack_context__.s([
     ()=>getOrdersInPeriod,
     "getPin",
     ()=>getPin,
-    "getPriorityOrders",
-    ()=>getPriorityOrders,
-    "getStaffSessions",
-    ()=>getStaffSessions,
     "getTab",
     ()=>getTab,
     "getTabOrders",
@@ -305,30 +300,18 @@ __turbopack_context__.s([
     ()=>getTables,
     "getTabs",
     ()=>getTabs,
-    "getWaiterCalls",
-    ()=>getWaiterCalls,
-    "isValidTransition",
-    ()=>isValidTransition,
     "requestBill",
     ()=>requestBill,
-    "resolveWaiterCall",
-    ()=>resolveWaiterCall,
     "saveMenu",
     ()=>saveMenu,
     "saveOrders",
     ()=>saveOrders,
     "savePin",
     ()=>savePin,
-    "savePriorityOrders",
-    ()=>savePriorityOrders,
-    "saveStaffSessions",
-    ()=>saveStaffSessions,
     "saveTables",
     ()=>saveTables,
     "saveTabs",
     ()=>saveTabs,
-    "saveWaiterCalls",
-    ()=>saveWaiterCalls,
     "syncTabTotal",
     ()=>syncTabTotal,
     "syncTableStatus",
@@ -338,1040 +321,652 @@ __turbopack_context__.s([
     "voidOrder",
     ()=>voidOrder
 ]);
-// ─── Keys ─────────────────────────────────────────────────────────────────────
+// ─── localStorage keys ────────────────────────────────────────────────────────
 const KEYS = {
     orders: 'fl_orders',
     tables: 'fl_tables',
     menu: 'fl_menu',
-    pin: 'fl_owner_pin',
-    staff: 'fl_staff_sessions',
-    calls: 'fl_waiter_calls',
-    priority: 'fl_priority_orders',
-    orderCounter: 'fl_order_counter',
-    tabs: 'fl_tabs'
+    pin: 'fl_admin_pin',
+    tabs: 'fl_customer_tabs',
+    orderNum: 'fl_order_num_counter',
+    fraudAlerts: 'fl_fraud_alerts'
 };
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function get(key, fallback) {
+// ─── Storage helpers ──────────────────────────────────────────────────────────
+function ls_get(key, fallback) {
     if ("TURBOPACK compile-time truthy", 1) return fallback;
     //TURBOPACK unreachable
     ;
 }
-function set(key, value) {
+function ls_set(key, val) {
     if ("TURBOPACK compile-time truthy", 1) return;
     //TURBOPACK unreachable
     ;
 }
-const VALID_TRANSITIONS = {
-    awaiting_waiter: [
-        'pending',
-        'cancelled'
-    ],
-    pending: [
-        'preparing',
-        'cancelled'
-    ],
-    preparing: [
-        'prepared',
-        'cancelled'
-    ],
-    prepared: [
-        'served',
-        'void'
-    ],
-    served: [
-        'completed',
-        'void'
-    ],
-    completed: [],
-    void: [],
-    cancelled: []
-};
-function isValidTransition(from, to) {
-    const allowed = VALID_TRANSITIONS[from];
-    return allowed ? allowed.includes(to) : false;
-}
-const getOrders = ()=>get(KEYS.orders, []);
-const saveOrders = (o)=>set(KEYS.orders, o);
+const DEFAULT_MENU = [
+    {
+        id: 'M01',
+        category: 'Biryani',
+        name: 'Chicken Dum Biryani',
+        desc: 'Slow-cooked aromatic rice with tender chicken',
+        price: 280,
+        img: '🍗',
+        badge: 'bestseller',
+        available: true
+    },
+    {
+        id: 'M02',
+        category: 'Biryani',
+        name: 'Mutton Biryani',
+        desc: 'Rich biryani with tender mutton pieces',
+        price: 320,
+        img: '🥩',
+        badge: 'famous',
+        available: true
+    },
+    {
+        id: 'M03',
+        category: 'Biryani',
+        name: 'Veg Biryani',
+        desc: 'Fragrant basmati with fresh vegetables',
+        price: 200,
+        img: '🥦',
+        badge: 'popular',
+        available: true
+    },
+    {
+        id: 'M04',
+        category: 'Biryani',
+        name: 'Egg Biryani',
+        desc: 'Classic biryani with boiled eggs',
+        price: 220,
+        img: '🥚',
+        badge: '',
+        available: true
+    },
+    {
+        id: 'M05',
+        category: 'Starters',
+        name: 'Chicken 65',
+        desc: 'Crispy spiced fried chicken',
+        price: 180,
+        img: '🍗',
+        badge: 'bestseller',
+        available: true
+    },
+    {
+        id: 'M06',
+        category: 'Starters',
+        name: 'Gobi Manchurian',
+        desc: 'Crispy cauliflower in tangy sauce',
+        price: 150,
+        img: '🥦',
+        badge: 'popular',
+        available: true
+    },
+    {
+        id: 'M07',
+        category: 'Starters',
+        name: 'Fish Fry',
+        desc: 'Coastal spiced fried fish',
+        price: 220,
+        img: '🐟',
+        badge: 'famous',
+        available: true
+    },
+    {
+        id: 'M08',
+        category: 'Starters',
+        name: 'Paneer Tikka',
+        desc: 'Grilled cottage cheese with bell peppers',
+        price: 200,
+        img: '🧀',
+        badge: 'chef',
+        available: true
+    },
+    {
+        id: 'M09',
+        category: 'Mains',
+        name: 'Butter Chicken',
+        desc: 'Creamy tomato-based chicken curry',
+        price: 250,
+        img: '🍛',
+        badge: 'bestseller',
+        available: true
+    },
+    {
+        id: 'M10',
+        category: 'Mains',
+        name: 'Dal Tadka',
+        desc: 'Yellow lentils with spiced tempering',
+        price: 120,
+        img: '🍲',
+        badge: '',
+        available: true
+    },
+    {
+        id: 'M11',
+        category: 'Mains',
+        name: 'Palak Paneer',
+        desc: 'Cottage cheese in creamy spinach gravy',
+        price: 180,
+        img: '🍃',
+        badge: 'popular',
+        available: true
+    },
+    {
+        id: 'M12',
+        category: 'Mains',
+        name: 'Prawn Masala',
+        desc: 'Fresh prawns in spicy coconut gravy',
+        price: 300,
+        img: '🍤',
+        badge: 'chef',
+        available: true
+    },
+    {
+        id: 'M13',
+        category: 'Breads',
+        name: 'Butter Naan',
+        desc: 'Soft leavened bread with butter',
+        price: 45,
+        img: '🫓',
+        badge: '',
+        available: true
+    },
+    {
+        id: 'M14',
+        category: 'Breads',
+        name: 'Garlic Naan',
+        desc: 'Naan topped with garlic and herbs',
+        price: 55,
+        img: '🫓',
+        badge: 'popular',
+        available: true
+    },
+    {
+        id: 'M15',
+        category: 'Breads',
+        name: 'Rumali Roti',
+        desc: 'Thin handkerchief bread',
+        price: 35,
+        img: '🫓',
+        badge: '',
+        available: true
+    },
+    {
+        id: 'M16',
+        category: 'Desserts',
+        name: 'Gulab Jamun',
+        desc: 'Soft milk-solid dumplings in rose syrup',
+        price: 80,
+        img: '🍮',
+        badge: 'bestseller',
+        available: true
+    },
+    {
+        id: 'M17',
+        category: 'Desserts',
+        name: 'Phirni',
+        desc: 'Creamy rice pudding with saffron',
+        price: 90,
+        img: '🍮',
+        badge: 'chef',
+        available: true
+    },
+    {
+        id: 'M18',
+        category: 'Drinks',
+        name: 'Masala Chai',
+        desc: 'Spiced milk tea',
+        price: 40,
+        img: '☕',
+        badge: '',
+        available: true
+    },
+    {
+        id: 'M19',
+        category: 'Drinks',
+        name: 'Sweet Lassi',
+        desc: 'Chilled yogurt drink',
+        price: 70,
+        img: '🥛',
+        badge: 'popular',
+        available: true
+    },
+    {
+        id: 'M20',
+        category: 'Drinks',
+        name: 'Fresh Lime Soda',
+        desc: 'Refreshing lemon soda',
+        price: 60,
+        img: '🍋',
+        badge: '',
+        available: true
+    }
+];
+const DEFAULT_TABLES = Array.from({
+    length: 20
+}, (_, i)=>({
+        id: `T${String(i + 1).padStart(2, '0')}`,
+        status: 'available',
+        capacity: i < 4 ? 2 : i < 14 ? 4 : 6
+    }));
+const getPin = ()=>ls_get(KEYS.pin, '1234');
+const savePin = (p)=>ls_set(KEYS.pin, p);
 function getNextOrderNumber() {
-    const current = get(KEYS.orderCounter, 1000);
-    const next = current + 1;
-    set(KEYS.orderCounter, next);
-    return next;
+    const n = ls_get(KEYS.orderNum, 0) + 1;
+    ls_set(KEYS.orderNum, n);
+    return n;
 }
+const getOrders = ()=>ls_get(KEYS.orders, []);
+const saveOrders = (o)=>ls_set(KEYS.orders, o);
 function addOrder(order) {
     const orders = getOrders();
-    // Guard: block duplicate IDs (rapid double-submit protection)
-    if (orders.some((o)=>o.id === order.id)) return;
-    // Auto-assign a sequential human-readable order number if not already set
-    if (!order.orderNum) {
-        order.orderNum = getNextOrderNumber();
-    }
-    // Ensure timeline is always initialised (use the order's actual starting status)
-    if (!order.timeline || !order.timeline.length) {
-        order.timeline = [
-            {
-                status: order.status,
-                timestamp: order.timestamp
-            }
-        ];
-    }
     orders.push(order);
     saveOrders(orders);
-    // Auto-mark table as occupied when a dine-in order is placed
-    if (order.type === 'dine-in' && order.tableId) {
-        syncTableStatus(order.tableId);
-    }
 }
-function updateOrderStatus(orderId, status, by, force = false) {
+function updateOrderStatus(id, status, by = 'System', force = false) {
     const orders = getOrders();
-    const idx = orders.findIndex((o)=>o.id === orderId);
+    const idx = orders.findIndex((o)=>o.id === id);
     if (idx === -1) return false;
-    const current = orders[idx].status;
-    // Prevent any changes on already-cancelled or completed orders unless forced
-    if (!force && !isValidTransition(current, status)) return false;
-    orders[idx].status = status;
-    if (!orders[idx].timeline) orders[idx].timeline = [];
-    orders[idx].timeline.push({
-        status,
-        timestamp: new Date().toISOString(),
-        by
-    });
-    saveOrders(orders);
-    // Sync table status when a dine-in order completes or is served
-    if (orders[idx].type === 'dine-in' && orders[idx].tableId) {
-        syncTableStatus(orders[idx].tableId);
-    }
-    return true;
-}
-function cancelOrder(orderId, reason, by) {
-    const orders = getOrders();
-    const idx = orders.findIndex((o)=>o.id === orderId);
-    if (idx === -1) return false;
-    // Allow cancellation from: unconfirmed, pending, or being prepared
-    const cancellable = [
-        'awaiting_waiter',
-        'pending',
-        'preparing'
-    ];
-    if (!cancellable.includes(orders[idx].status)) return false;
-    orders[idx].status = 'cancelled';
-    orders[idx].cancelReason = reason;
-    orders[idx].cancelledAt = new Date().toISOString();
-    if (!orders[idx].timeline) orders[idx].timeline = [];
-    orders[idx].timeline.push({
-        status: 'cancelled',
-        timestamp: new Date().toISOString(),
-        by,
-        note: reason
-    });
-    saveOrders(orders);
-    // Free up the table if no other active orders remain for it
-    if (orders[idx].type === 'dine-in' && orders[idx].tableId) {
-        syncTableStatus(orders[idx].tableId);
-    }
-    return true;
-}
-function voidOrder(orderId, reason, by) {
-    const orders = getOrders();
-    const idx = orders.findIndex((o)=>o.id === orderId);
-    if (idx === -1) return false;
-    const voidable = [
-        'prepared',
-        'served'
-    ];
-    if (!voidable.includes(orders[idx].status)) return false;
-    orders[idx].status = 'void';
-    orders[idx].voidReason = reason;
-    orders[idx].voidedAt = new Date().toISOString();
-    if (!orders[idx].timeline) orders[idx].timeline = [];
-    orders[idx].timeline.push({
-        status: 'void',
-        timestamp: new Date().toISOString(),
-        by,
-        note: `VOID — ${reason}`
-    });
-    saveOrders(orders);
-    // Free table if no other active orders remain
-    if (orders[idx].type === 'dine-in' && orders[idx].tableId) {
-        syncTableStatus(orders[idx].tableId);
-    }
-    return true;
-}
-function addItemsToOrder(orderId, newItems, by) {
-    const orders = getOrders();
-    const idx = orders.findIndex((o)=>o.id === orderId);
-    if (idx === -1) return false;
-    const terminal = [
-        'completed',
-        'void',
-        'cancelled'
-    ];
-    if (terminal.includes(orders[idx].status)) return false;
-    // Merge items — bump qty for existing, push for new
-    newItems.forEach((newItem)=>{
-        const ei = orders[idx].items.findIndex((i)=>i.id === newItem.id);
-        if (ei >= 0) {
-            orders[idx].items[ei].qty += newItem.qty;
-            orders[idx].items[ei].subtotal = orders[idx].items[ei].price * orders[idx].items[ei].qty;
-        } else {
-            orders[idx].items.push({
-                ...newItem
-            });
-        }
-    });
-    // Recalculate order totals
-    const subtotal = orders[idx].items.reduce((s, i)=>s + i.subtotal, 0);
-    orders[idx].subtotal = subtotal;
-    orders[idx].total = subtotal - (orders[idx].discount || 0);
-    // Record edit history
-    if (!orders[idx].editHistory) orders[idx].editHistory = [];
-    const addedSummary = newItems.map((i)=>`${i.name} ×${i.qty}`).join(', ');
-    orders[idx].editHistory.push({
-        timestamp: new Date().toISOString(),
-        change: `Added items: ${addedSummary}`,
-        by
-    });
-    // If already prepared/served, return to kitchen for the new items
-    const needsKitchen = [
-        'prepared',
-        'served'
-    ];
-    if (needsKitchen.includes(orders[idx].status)) {
-        orders[idx].status = 'preparing';
-        orders[idx].timeline.push({
-            status: 'preparing',
-            timestamp: new Date().toISOString(),
-            by,
-            note: `🆕 Extra items ordered — back to kitchen: ${addedSummary}`
-        });
-    } else {
-        orders[idx].timeline.push({
-            status: orders[idx].status,
-            timestamp: new Date().toISOString(),
-            by,
-            note: `🆕 Items added: ${addedSummary}`
-        });
-    }
-    saveOrders(orders);
-    // Keep table occupied
-    if (orders[idx].type === 'dine-in' && orders[idx].tableId) {
-        syncTableStatus(orders[idx].tableId);
-    }
-    return true;
-}
-function applyDiscount(orderId, discount, reason, by) {
-    const orders = getOrders();
-    const idx = orders.findIndex((o)=>o.id === orderId);
-    if (idx === -1) return false;
-    const sub = orders[idx].subtotal || orders[idx].total;
-    // Clamp discount to [0, subtotal] — prevents negative totals
-    const safeDiscount = Math.min(Math.max(0, Math.round(discount)), sub);
-    orders[idx].discount = safeDiscount;
-    orders[idx].discountReason = reason;
-    orders[idx].total = sub - safeDiscount;
-    if (!orders[idx].editHistory) orders[idx].editHistory = [];
-    orders[idx].editHistory.push({
-        timestamp: new Date().toISOString(),
-        change: `Discount ₹${safeDiscount} applied: ${reason}`,
-        by
-    });
-    saveOrders(orders);
-    return true;
-}
-const getPriorityOrders = ()=>get(KEYS.priority, {});
-function savePriorityOrders(map) {
-    // Prune completed/cancelled orders from the priority map
-    const orders = getOrders();
-    const activeIds = new Set(orders.filter((o)=>[
-            'awaiting_waiter',
-            'pending',
-            'preparing',
-            'prepared'
-        ].includes(o.status)).map((o)=>o.id));
-    // Note: void/cancelled/completed are intentionally excluded from priority tracking
-    const pruned = {};
-    for (const [id, val] of Object.entries(map)){
-        if (activeIds.has(id) && val) pruned[id] = true;
-    }
-    set(KEYS.priority, pruned);
-}
-function getTables() {
-    const saved = get(KEYS.tables, null);
-    if (saved) return saved;
-    const defaults = Array.from({
-        length: 15
-    }, (_, i)=>({
-            id: i + 1,
-            chairs: 4,
-            status: 'available',
-            occupants: []
-        }));
-    set(KEYS.tables, defaults);
-    return defaults;
-}
-const saveTables = (t)=>set(KEYS.tables, t);
-function syncTableStatus(tableId) {
-    const tables = getTables();
-    const idx = tables.findIndex((t)=>t.id === tableId);
-    if (idx === -1) return;
-    // A table is occupied if it has any open or awaiting_payment tabs
-    const activeTabs = getTabs().filter((t)=>t.tableId === tableId && [
-            'open',
-            'awaiting_payment'
-        ].includes(t.tabStatus));
-    // Also check legacy orders not linked to tabs (backward compat)
-    const orders = getOrders();
-    const activeOrders = orders.filter((o)=>o.tableId === tableId && [
+    const order = orders[idx];
+    // Role-based status flow enforcement (unless force=true)
+    if (!force) {
+        const flow = [
             'awaiting_waiter',
             'pending',
             'preparing',
             'prepared',
-            'served'
-        ].includes(o.status));
-    const occupied = activeTabs.length > 0 || activeOrders.length > 0;
-    if (tables[idx].status !== 'reserved') {
-        tables[idx].status = occupied ? 'occupied' : 'available';
-        if (occupied) {
-            tables[idx].occupants = activeTabs.map((t)=>({
-                    name: t.customerName
-                }));
-            if (!tables[idx].sessionStart) tables[idx].sessionStart = new Date().toISOString();
-        } else {
-            tables[idx].occupants = [];
-            tables[idx].sessionStart = undefined;
+            'served',
+            'completed'
+        ];
+        const currIdx = flow.indexOf(order.status);
+        const nextIdx = flow.indexOf(status);
+        if (currIdx === -1 || nextIdx === -1 || nextIdx !== currIdx + 1) {
+            return false;
         }
     }
-    saveTables(tables);
+    orders[idx] = {
+        ...order,
+        status,
+        timeline: [
+            ...order.timeline || [],
+            {
+                status,
+                by,
+                at: new Date().toISOString()
+            }
+        ]
+    };
+    saveOrders(orders);
+    return true;
 }
-function getTableOccupancy() {
-    const tables = getTables();
-    const tabs = getTabs();
+function cancelOrder(id, reason, by = 'System') {
     const orders = getOrders();
-    const ACTIVE_TAB = [
-        'open',
-        'awaiting_payment'
-    ];
-    return tables.map((t)=>{
-        const activeTabs = tabs.filter((tb)=>tb.tableId === t.id && ACTIVE_TAB.includes(tb.tabStatus));
-        const chairsOccupied = activeTabs.reduce((s, tb)=>s + (tb.partySize ?? 1), 0);
-        const guests = activeTabs.map((tb)=>{
-            const tabOrders = orders.filter((o)=>tb.orderIds.includes(o.id) && ![
-                    'void',
-                    'cancelled'
-                ].includes(o.status));
-            return {
-                name: tb.customerName,
-                partySize: tb.partySize ?? 1,
-                status: tb.tabStatus,
-                orderTotal: tb.totalAmount
-            };
+    const idx = orders.findIndex((o)=>o.id === id);
+    if (idx === -1) return false;
+    orders[idx] = {
+        ...orders[idx],
+        status: 'cancelled',
+        cancelReason: reason,
+        timeline: [
+            ...orders[idx].timeline || [],
+            {
+                status: 'cancelled',
+                by,
+                at: new Date().toISOString(),
+                note: reason
+            }
+        ]
+    };
+    saveOrders(orders);
+    return true;
+}
+function voidOrder(id, reason, by = 'Manager') {
+    const orders = getOrders();
+    const idx = orders.findIndex((o)=>o.id === id);
+    if (idx === -1) return false;
+    orders[idx] = {
+        ...orders[idx],
+        status: 'void',
+        cancelReason: reason,
+        timeline: [
+            ...orders[idx].timeline || [],
+            {
+                status: 'void',
+                by,
+                at: new Date().toISOString(),
+                note: reason
+            }
+        ]
+    };
+    saveOrders(orders);
+    if ((orders[idx].total || 0) > 100) {
+        addFraudAlert({
+            type: 'void_order',
+            orderId: id,
+            detail: `Order #${orders[idx].orderNum || id.slice(-4)} voided by ${by} — ₹${orders[idx].total}`,
+            by,
+            amount: orders[idx].total
         });
-        return {
-            tableId: t.id,
-            tableName: `Table ${t.id}`,
-            capacity: t.chairs,
-            chairsOccupied,
-            partiesCount: activeTabs.length,
-            guests,
-            tableStatus: t.status,
-            sessionStart: t.sessionStart
-        };
+    }
+    return true;
+}
+function applyDiscount(id, amount, reason, by = 'Manager') {
+    const orders = getOrders();
+    const idx = orders.findIndex((o)=>o.id === id);
+    if (idx === -1) return false;
+    const order = orders[idx];
+    const subtotal = order.subtotal || order.total;
+    const pct = amount / subtotal;
+    if (pct > 0.5) {
+        addFraudAlert({
+            type: 'high_discount',
+            orderId: id,
+            detail: `${Math.round(pct * 100)}% discount (₹${amount}) applied by ${by}`,
+            by,
+            amount
+        });
+    }
+    orders[idx] = {
+        ...order,
+        discount: amount,
+        discountReason: reason,
+        total: Math.max(0, subtotal - amount),
+        timeline: [
+            ...order.timeline || [],
+            {
+                status: 'discount',
+                by,
+                at: new Date().toISOString(),
+                note: `₹${amount} — ${reason}`
+            }
+        ]
+    };
+    saveOrders(orders);
+    return true;
+}
+function getOrdersInPeriod(period) {
+    const orders = getOrders().filter((o)=>o.status === 'completed');
+    const now = new Date();
+    if (period === 'all') return orders;
+    return orders.filter((o)=>{
+        const d = new Date(o.timestamp);
+        if (period === 'today') return d.toDateString() === now.toDateString();
+        if (period === 'week') {
+            const weekAgo = new Date(now);
+            weekAgo.setDate(now.getDate() - 7);
+            return d >= weekAgo;
+        }
+        if (period === 'month') {
+            return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+        }
+        return true;
     });
 }
-function getTabs() {
-    return get(KEYS.tabs, []);
+function exportOrdersCSV() {
+    const orders = getOrders().filter((o)=>o.status === 'completed');
+    const header = 'Order ID,Order#,Customer,Table,Type,Items,Subtotal,Discount,Total,Payment,Timestamp';
+    const rows = orders.map((o)=>{
+        const items = (o.items || []).map((i)=>`${i.name}x${i.qty}`).join('|');
+        return [
+            o.id,
+            o.orderNum || '',
+            o.customerName,
+            o.tableId || '',
+            o.type,
+            `"${items}"`,
+            o.subtotal,
+            o.discount || 0,
+            o.total,
+            o.payment,
+            o.timestamp
+        ].join(',');
+    });
+    return [
+        header,
+        ...rows
+    ].join('\n');
 }
-const saveTabs = (tabs)=>set(KEYS.tabs, tabs);
-function getTab(tabId) {
-    return getTabs().find((t)=>t.id === tabId);
+const getTables = ()=>ls_get(KEYS.tables, DEFAULT_TABLES);
+const saveTables = (t)=>ls_set(KEYS.tables, t);
+function syncTableStatus(tableId) {
+    const activeTabs = getActiveTabsForTable(tableId);
+    const tables = getTables();
+    const idx = tables.findIndex((t)=>t.id === tableId);
+    if (idx === -1) return;
+    tables[idx] = {
+        ...tables[idx],
+        status: activeTabs.length > 0 ? 'occupied' : 'available'
+    };
+    saveTables(tables);
+}
+function getTableOccupancy(tableId) {
+    const activeTabs = getActiveTabsForTable(tableId);
+    if (activeTabs.length === 0) return null;
+    const tab = activeTabs[0];
+    return {
+        tableId: tab.tableId,
+        tabId: tab.id,
+        name: tab.customerName,
+        partySize: tab.partySize,
+        since: tab.createdAt,
+        status: tab.tabStatus
+    };
+}
+const getMenu = ()=>ls_get(KEYS.menu, DEFAULT_MENU);
+const saveMenu = (m)=>ls_set(KEYS.menu, m);
+const getTabs = ()=>ls_get(KEYS.tabs, []);
+const saveTabs = (t)=>ls_set(KEYS.tabs, t);
+function getTab(id) {
+    return getTabs().find((t)=>t.id === id) ?? null;
 }
 function getOpenTabForCustomer(tableId, customerName) {
-    return getTabs().find((t)=>t.tableId === tableId && t.customerName.toLowerCase() === customerName.toLowerCase() && [
-            'open',
-            'awaiting_payment'
-        ].includes(t.tabStatus));
+    const name = customerName.trim().toLowerCase();
+    return getTabs().find((t)=>t.tableId === tableId && t.customerName.trim().toLowerCase() === name && (t.tabStatus === 'open' || t.tabStatus === 'awaiting_payment')) ?? null;
 }
 function getActiveTabsForTable(tableId) {
-    return getTabs().filter((t)=>t.tableId === tableId && [
-            'open',
-            'awaiting_payment'
-        ].includes(t.tabStatus));
+    return getTabs().filter((t)=>t.tableId === tableId && (t.tabStatus === 'open' || t.tabStatus === 'awaiting_payment'));
 }
 function syncTabTotal(tabId) {
     const tabs = getTabs();
     const idx = tabs.findIndex((t)=>t.id === tabId);
     if (idx === -1) return;
     const orders = getOrders();
-    const gross = orders.filter((o)=>tabs[idx].orderIds.includes(o.id) && ![
-            'void',
-            'cancelled'
-        ].includes(o.status)).reduce((s, o)=>s + o.total, 0);
-    tabs[idx].totalAmount = Math.max(0, gross - (tabs[idx].discount || 0));
+    const total = tabs[idx].orderIds.reduce((sum, oid)=>{
+        const order = orders.find((o)=>o.id === oid);
+        if (!order || [
+            'cancelled',
+            'void'
+        ].includes(order.status)) return sum;
+        return sum + (order.total || 0);
+    }, 0);
+    tabs[idx] = {
+        ...tabs[idx],
+        totalAmount: total
+    };
     saveTabs(tabs);
 }
 function createTab(tableId, customerName, partySize) {
     const tab = {
         id: `TAB-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
         tableId,
-        customerName,
+        customerName: customerName.trim(),
         partySize,
-        tabStatus: 'open',
         orderIds: [],
+        tabStatus: 'open',
         totalAmount: 0,
+        discount: 0,
+        discountReason: '',
+        paymentMethod: 'cod',
         createdAt: new Date().toISOString()
     };
     const tabs = getTabs();
     tabs.push(tab);
     saveTabs(tabs);
-    syncTableStatus(tableId);
+    // Mark table occupied
+    const tables = getTables();
+    const tIdx = tables.findIndex((t)=>t.id === tableId);
+    if (tIdx !== -1) {
+        tables[tIdx] = {
+            ...tables[tIdx],
+            status: 'occupied'
+        };
+        saveTables(tables);
+    }
     return tab;
 }
 function addOrderToTab(tabId, orderId) {
     const tabs = getTabs();
     const idx = tabs.findIndex((t)=>t.id === tabId);
     if (idx === -1) return false;
-    if (!tabs[idx].orderIds.includes(orderId)) tabs[idx].orderIds.push(orderId);
-    saveTabs(tabs);
-    syncTabTotal(tabId);
+    if (tabs[idx].tabStatus !== 'open') return false;
+    if (!tabs[idx].orderIds.includes(orderId)) {
+        tabs[idx] = {
+            ...tabs[idx],
+            orderIds: [
+                ...tabs[idx].orderIds,
+                orderId
+            ]
+        };
+        saveTabs(tabs);
+        syncTabTotal(tabId);
+    }
     return true;
 }
 function requestBill(tabId) {
     const tabs = getTabs();
     const idx = tabs.findIndex((t)=>t.id === tabId);
-    if (idx === -1 || tabs[idx].tabStatus !== 'open') return false;
-    // Snapshot final total before locking
-    const orders = getOrders();
-    const gross = orders.filter((o)=>tabs[idx].orderIds.includes(o.id) && ![
-            'void',
-            'cancelled'
-        ].includes(o.status)).reduce((s, o)=>s + o.total, 0);
-    tabs[idx].totalAmount = Math.max(0, gross - (tabs[idx].discount || 0));
-    tabs[idx].tabStatus = 'awaiting_payment';
-    tabs[idx].requestedAt = new Date().toISOString();
-    saveTabs(tabs);
-    return true;
-}
-function applyTabDiscount(tabId, amount, reason) {
-    const tabs = getTabs();
-    const idx = tabs.findIndex((t)=>t.id === tabId);
-    if (idx === -1 || tabs[idx].tabStatus === 'closed') return false;
-    tabs[idx].discount = Math.max(0, amount);
-    tabs[idx].discountReason = reason;
+    if (idx === -1) return false;
+    if (tabs[idx].tabStatus !== 'open') return false;
+    tabs[idx] = {
+        ...tabs[idx],
+        tabStatus: 'awaiting_payment'
+    };
     saveTabs(tabs);
     syncTabTotal(tabId);
     return true;
 }
-function closeTab(tabId, payment, discount, discountReason) {
+function applyTabDiscount(tabId, amount, reason, by = 'Manager') {
     const tabs = getTabs();
     const idx = tabs.findIndex((t)=>t.id === tabId);
-    if (idx === -1 || tabs[idx].tabStatus !== 'awaiting_payment') return false;
-    if (discount && discount > 0) {
-        tabs[idx].discount = discount;
-        tabs[idx].discountReason = discountReason;
-    }
-    // Final total calculation
-    const orders = getOrders();
-    const gross = orders.filter((o)=>tabs[idx].orderIds.includes(o.id) && ![
-            'void',
-            'cancelled'
-        ].includes(o.status)).reduce((s, o)=>s + o.total, 0);
-    tabs[idx].totalAmount = Math.max(0, gross - (tabs[idx].discount || 0));
-    tabs[idx].tabStatus = 'closed';
-    tabs[idx].payment = payment;
-    tabs[idx].closedAt = new Date().toISOString();
+    if (idx === -1) return false;
+    tabs[idx] = {
+        ...tabs[idx],
+        discount: amount,
+        discountReason: reason
+    };
     saveTabs(tabs);
-    // Mark all non-terminal orders in the tab as 'completed'
-    const allOrders = getOrders();
+    if (amount / (tabs[idx].totalAmount || 1) > 0.5) {
+        addFraudAlert({
+            type: 'high_discount',
+            tabId,
+            detail: `${Math.round(amount / (tabs[idx].totalAmount || 1) * 100)}% tab discount (₹${amount}) applied by ${by}`,
+            by,
+            amount
+        });
+    }
+    return true;
+}
+function closeTab(tabId, paymentMethod, discount, discountReason, by = 'Manager') {
+    const tabs = getTabs();
+    const idx = tabs.findIndex((t)=>t.id === tabId);
+    if (idx === -1) return false;
+    syncTabTotal(tabId);
+    const refreshed = getTabs();
+    const tab = refreshed[idx];
+    const finalDiscount = discount ?? tab.discount;
+    const finalDiscReason = discountReason ?? tab.discountReason;
+    refreshed[idx] = {
+        ...tab,
+        tabStatus: 'closed',
+        discount: finalDiscount,
+        discountReason: finalDiscReason,
+        paymentMethod,
+        closedAt: new Date().toISOString()
+    };
+    saveTabs(refreshed);
+    // Mark all tab orders as completed
+    const orders = getOrders();
     let changed = false;
-    tabs[idx].orderIds.forEach((oid)=>{
-        const oi = allOrders.findIndex((o)=>o.id === oid);
-        if (oi === -1) return;
-        const closeable = [
-            'awaiting_waiter',
-            'pending',
-            'preparing',
-            'prepared',
-            'served'
-        ];
-        if (closeable.includes(allOrders[oi].status)) {
-            allOrders[oi].status = 'completed';
-            allOrders[oi].payment = payment;
-            allOrders[oi].timeline.push({
+    tab.orderIds.forEach((oid)=>{
+        const oIdx = orders.findIndex((o)=>o.id === oid);
+        if (oIdx !== -1 && ![
+            'cancelled',
+            'void',
+            'completed'
+        ].includes(orders[oIdx].status)) {
+            orders[oIdx] = {
+                ...orders[oIdx],
                 status: 'completed',
-                timestamp: new Date().toISOString(),
-                by: 'Manager',
-                note: `Tab closed · ${payment}`
-            });
+                payment: paymentMethod,
+                timeline: [
+                    ...orders[oIdx].timeline || [],
+                    {
+                        status: 'completed',
+                        by,
+                        at: new Date().toISOString(),
+                        note: `Tab closed — ${paymentMethod}`
+                    }
+                ]
+            };
             changed = true;
         }
     });
-    if (changed) saveOrders(allOrders);
-    syncTableStatus(tabs[idx].tableId);
+    if (changed) saveOrders(orders);
+    // Release table if no more active tabs
+    syncTableStatus(tab.tableId);
     return true;
 }
 function getTabOrders(tabId) {
     const tab = getTab(tabId);
     if (!tab) return [];
     const orders = getOrders();
-    return orders.filter((o)=>tab.orderIds.includes(o.id));
+    return tab.orderIds.map((oid)=>orders.find((o)=>o.id === oid)).filter((o)=>o !== undefined);
 }
-const DEFAULT_MENU = [
-    {
-        id: 1,
-        category: 'Biryani',
-        name: 'Hyderabadi Chicken Dum Biryani',
-        desc: 'Slow-cooked tender chicken layered with fragrant basmati rice & saffron',
-        price: 280,
-        img: 'https://images.unsplash.com/photo-1563379091339-03b21ab4a4f8?w=400&auto=format&fit=crop&q=80',
-        badge: 'bestseller',
-        available: true
-    },
-    {
-        id: 2,
-        category: 'Biryani',
-        name: 'Hyderabadi Mutton Dum Biryani',
-        desc: 'Tender mutton pieces slow-cooked with aromatic whole spices',
-        price: 350,
-        img: 'https://images.unsplash.com/photo-1589302168068-964664d93dc0?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 3,
-        category: 'Biryani',
-        name: 'Veg Hyderabadi Biryani',
-        desc: 'Fresh garden vegetables cooked in authentic Hyderabadi dum style',
-        price: 200,
-        img: 'https://images.unsplash.com/photo-1596797038530-2c107229654b?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 4,
-        category: 'Biryani',
-        name: 'Paneer Dum Biryani',
-        desc: 'Soft cottage cheese cubes layered with spiced aromatic basmati',
-        price: 240,
-        img: 'https://images.unsplash.com/photo-1631452180519-c014fe946bc7?w=400&auto=format&fit=crop&q=80',
-        badge: 'popular',
-        available: true
-    },
-    {
-        id: 5,
-        category: 'Biryani',
-        name: 'Egg Biryani',
-        desc: 'Perfectly boiled eggs cooked with Hyderabadi spices and basmati',
-        price: 220,
-        img: 'https://images.unsplash.com/photo-1546833998-877b37c2e5c6?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 6,
-        category: 'Biryani',
-        name: 'Special Double Dum Biryani',
-        desc: 'Our signature extra-large portion with double the flavors & dry fruits',
-        price: 420,
-        img: 'https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=400&auto=format&fit=crop&q=80',
-        badge: 'chef',
-        available: true
-    },
-    {
-        id: 7,
-        category: 'Starters',
-        name: 'Chicken 65',
-        desc: 'Crispy deep-fried chicken with fiery red marinade & curry leaves',
-        price: 220,
-        img: 'https://images.unsplash.com/photo-1599487488170-d11ec9c172f0?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 8,
-        category: 'Starters',
-        name: 'Mutton Seekh Kebab',
-        desc: 'Minced mutton blended with spices & grilled over coal',
-        price: 280,
-        img: 'https://images.unsplash.com/photo-1512058454905-6b84c2b38f50?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 9,
-        category: 'Starters',
-        name: 'Paneer Tikka',
-        desc: 'Marinated cottage cheese cubes grilled in tandoor',
-        price: 200,
-        img: 'https://images.unsplash.com/photo-1567188040759-fb8a883dc6d8?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 10,
-        category: 'Starters',
-        name: 'Veg Shammi Kebab',
-        desc: 'Soft & spicy mixed vegetable patties pan-fried golden',
-        price: 160,
-        img: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 11,
-        category: 'Mains',
-        name: 'Chicken Curry',
-        desc: 'Rich and spicy Hyderabadi style chicken curry in thick gravy',
-        price: 260,
-        img: 'https://images.unsplash.com/photo-1585937421612-70a008356fbe?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 12,
-        category: 'Mains',
-        name: 'Mutton Rogan Josh',
-        desc: 'Slow-cooked tender mutton in aromatic Kashmiri spice gravy',
-        price: 320,
-        img: 'https://images.unsplash.com/photo-1565557623262-b51c2513a641?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 13,
-        category: 'Mains',
-        name: 'Dal Makhani',
-        desc: 'Slow-cooked black lentils simmered with cream & butter overnight',
-        price: 180,
-        img: 'https://images.unsplash.com/photo-1546833998-877b37c2e5c6?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 14,
-        category: 'Mains',
-        name: 'Paneer Butter Masala',
-        desc: 'Soft paneer cubes in rich creamy tomato-cashew gravy',
-        price: 220,
-        img: 'https://images.unsplash.com/photo-1631452180519-c014fe946bc7?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 15,
-        category: 'Mains',
-        name: 'Raita',
-        desc: 'Chilled yogurt with cucumber, onion, tomato & roasted cumin',
-        price: 60,
-        img: 'https://images.unsplash.com/photo-1563805042-7684c019e1cb?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 16,
-        category: 'Breads',
-        name: 'Butter Naan',
-        desc: 'Soft leavened bread baked in tandoor brushed with fresh butter',
-        price: 40,
-        img: 'https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 17,
-        category: 'Breads',
-        name: 'Garlic Naan',
-        desc: 'Naan generously topped with garlic, butter & fresh coriander',
-        price: 50,
-        img: 'https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 18,
-        category: 'Breads',
-        name: 'Tandoori Roti',
-        desc: 'Whole wheat bread baked fresh in clay tandoor',
-        price: 30,
-        img: 'https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 19,
-        category: 'Desserts',
-        name: 'Double Ka Meetha',
-        desc: 'Iconic Hyderabadi bread pudding with cream, dry fruits & saffron',
-        price: 120,
-        img: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=400&auto=format&fit=crop&q=80',
-        badge: 'famous',
-        available: true
-    },
-    {
-        id: 20,
-        category: 'Desserts',
-        name: 'Qubani Ka Meetha',
-        desc: 'Traditional Hyderabadi apricot dessert topped with fresh cream',
-        price: 100,
-        img: 'https://images.unsplash.com/photo-1565557623262-b51c2513a641?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 21,
-        category: 'Desserts',
-        name: 'Kheer',
-        desc: 'Creamy rich rice pudding infused with saffron, cardamom & nuts',
-        price: 80,
-        img: 'https://images.unsplash.com/photo-1563805042-7684c019e1cb?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 22,
-        category: 'Drinks',
-        name: 'Sweet Lassi',
-        desc: "Chilled sweet yogurt drink - Punjab's most beloved classic",
-        price: 80,
-        img: 'https://images.unsplash.com/photo-1563805042-7684c019e1cb?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 23,
-        category: 'Drinks',
-        name: 'Salted Lassi',
-        desc: 'Refreshing salted yogurt drink with roasted cumin',
-        price: 80,
-        img: 'https://images.unsplash.com/photo-1563805042-7684c019e1cb?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 24,
-        category: 'Drinks',
-        name: 'Masala Chai',
-        desc: 'Aromatic spiced tea brewed with ginger, cardamom & cinnamon',
-        price: 40,
-        img: 'https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 25,
-        category: 'Drinks',
-        name: 'Cold Drink',
-        desc: 'Pepsi / Coke / Sprite / Thumbs Up (chilled)',
-        price: 50,
-        img: 'https://images.unsplash.com/photo-1561758033-d89a9ad46330?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 26,
-        category: 'Drinks',
-        name: 'Mineral Water',
-        desc: '500ml chilled mineral water bottle',
-        price: 20,
-        img: 'https://images.unsplash.com/photo-1560023907-5f339617ea30?w=400&auto=format&fit=crop&q=80',
-        available: true
-    }
-];
-function getMenu() {
-    const saved = get(KEYS.menu, null);
-    if (saved) return saved;
-    set(KEYS.menu, DEFAULT_MENU);
-    return DEFAULT_MENU;
-}
-const saveMenu = (items)=>set(KEYS.menu, items);
-const getPin = ()=>get(KEYS.pin, '1234');
-const savePin = (p)=>set(KEYS.pin, p);
-const getStaffSessions = ()=>get(KEYS.staff, []);
-const saveStaffSessions = (s)=>set(KEYS.staff, s);
-const getWaiterCalls = ()=>get(KEYS.calls, []);
-const saveWaiterCalls = (c)=>set(KEYS.calls, c);
-function addWaiterCall(tableId, message, customerName) {
-    const calls = getWaiterCalls();
-    calls.push({
-        id: `CALL-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        tableId,
-        customerName,
-        message,
-        timestamp: new Date().toISOString(),
-        resolved: false
+// ─── Fraud Alerts ─────────────────────────────────────────────────────────────
+function addFraudAlert(data) {
+    const alerts = ls_get(KEYS.fraudAlerts, []);
+    alerts.push({
+        ...data,
+        id: `FA-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+        at: new Date().toISOString()
     });
-    saveWaiterCalls(calls);
+    if (alerts.length > 200) alerts.splice(0, alerts.length - 200);
+    ls_set(KEYS.fraudAlerts, alerts);
 }
-function resolveWaiterCall(callId, by) {
-    const calls = getWaiterCalls();
-    const idx = calls.findIndex((c)=>c.id === callId);
-    if (idx === -1) return;
-    calls[idx].resolved = true;
-    calls[idx].resolvedAt = new Date().toISOString();
-    calls[idx].resolvedBy = by;
-    saveWaiterCalls(calls);
+function getFraudAlerts() {
+    return ls_get(KEYS.fraudAlerts, []).slice().reverse();
 }
-function getOrdersInPeriod(period) {
-    const all = getOrders();
-    const now = new Date();
-    return all.filter((o)=>{
-        // Exclude cancelled, voided, and unconfirmed orders from revenue/analytics
-        if (o.status === 'cancelled' || o.status === 'void' || o.status === 'awaiting_waiter') return false;
-        const d = new Date(o.timestamp);
-        if (period === 'today') return d.toDateString() === now.toDateString();
-        if (period === 'week') {
-            const s = new Date(now);
-            s.setDate(now.getDate() - now.getDay());
-            s.setHours(0, 0, 0, 0);
-            return d >= s;
-        }
-        if (period === 'month') return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
-        return true;
-    });
-}
-function exportOrdersCSV() {
-    const orders = getOrders();
-    if (!orders.length) {
-        alert('No orders to export.');
-        return;
-    }
-    const DAY = [
-        'Sunday',
-        'Monday',
-        'Tuesday',
-        'Wednesday',
-        'Thursday',
-        'Friday',
-        'Saturday'
-    ];
-    const MONTH = [
-        'January',
-        'February',
-        'March',
-        'April',
-        'May',
-        'June',
-        'July',
-        'August',
-        'September',
-        'October',
-        'November',
-        'December'
-    ];
-    const PAY = {
-        paytm: 'Paytm',
-        phonepe: 'PhonePe',
-        gpay: 'Google Pay',
-        cod: 'Cash'
-    };
-    const headers = [
-        'Order ID',
-        'Date',
-        'Time',
-        'Day',
-        'Week No.',
-        'Month',
-        'Year',
-        'Customer',
-        'Phone',
-        'Type',
-        'Table/Pickup',
-        'Staff',
-        'Item Name',
-        'Item Qty',
-        'Unit Price (₹)',
-        'Line Total (₹)',
-        'Subtotal (₹)',
-        'Discount (₹)',
-        'Discount Reason',
-        'Total (₹)',
-        'Payment',
-        'Status',
-        'Cancel Reason'
-    ];
-    const rows = [];
-    orders.forEach((order)=>{
-        const d = new Date(order.timestamp);
-        const date = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
-        const time = d.toLocaleTimeString('en-IN', {
-            hour: '2-digit',
-            minute: '2-digit'
-        });
-        const loc = order.type === 'dine-in' ? `Table ${order.tableId}` : 'Pickup';
-        const pay = PAY[order.payment] ?? order.payment ?? '';
-        const items = order.items ?? [];
-        if (!items.length) {
-            rows.push([
-                order.id,
-                date,
-                time,
-                DAY[d.getDay()],
-                Math.ceil(d.getDate() / 7),
-                MONTH[d.getMonth()],
-                d.getFullYear(),
-                order.customerName,
-                order.phone ?? '',
-                order.type,
-                loc,
-                order.staffName ?? '',
-                '',
-                '',
-                '',
-                '',
-                order.subtotal,
-                order.discount ?? 0,
-                order.discountReason ?? '',
-                order.total,
-                pay,
-                order.status,
-                order.cancelReason ?? ''
-            ]);
-        } else {
-            items.forEach((item, i)=>{
-                const line = item.subtotal ?? item.price * item.qty;
-                rows.push([
-                    i === 0 ? order.id : '',
-                    i === 0 ? date : '',
-                    i === 0 ? time : '',
-                    i === 0 ? DAY[d.getDay()] : '',
-                    i === 0 ? Math.ceil(d.getDate() / 7) : '',
-                    i === 0 ? MONTH[d.getMonth()] : '',
-                    i === 0 ? d.getFullYear() : '',
-                    i === 0 ? order.customerName : '',
-                    i === 0 ? order.phone ?? '' : '',
-                    i === 0 ? order.type : '',
-                    i === 0 ? loc : '',
-                    i === 0 ? order.staffName ?? '' : '',
-                    item.name,
-                    item.qty,
-                    item.price,
-                    line,
-                    i === 0 ? order.subtotal : '',
-                    i === 0 ? order.discount ?? 0 : '',
-                    i === 0 ? order.discountReason ?? '' : '',
-                    i === 0 ? order.total : '',
-                    i === 0 ? pay : '',
-                    i === 0 ? order.status : '',
-                    i === 0 ? order.cancelReason ?? '' : ''
-                ]);
-            });
-        }
-    });
-    const esc = (v)=>{
-        const s = String(v ?? '');
-        return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
-    };
-    const csv = [
-        headers,
-        ...rows
-    ].map((r)=>r.map(esc).join(',')).join('\n');
-    const blob = new Blob([
-        '\uFEFF' + csv
-    ], {
-        type: 'text/csv;charset=utf-8;'
-    });
-    const url = URL.createObjectURL(blob);
-    const now = new Date();
-    const fname = `FoodieLover_${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}.csv`;
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fname;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+function clearFraudAlerts() {
+    ls_set(KEYS.fraudAlerts, []);
 }
 function getEndOfDayReport(date) {
     const d = date || new Date();
-    const dayStr = d.toDateString();
-    const all = getOrders().filter((o)=>new Date(o.timestamp).toDateString() === dayStr);
-    const completed = all.filter((o)=>o.status === 'completed');
-    const cancelled = all.filter((o)=>o.status === 'cancelled');
-    const voided = all.filter((o)=>o.status === 'void');
-    const awaiting = all.filter((o)=>o.status === 'awaiting_waiter');
-    const gross = completed.reduce((s, o)=>s + (o.subtotal || o.total), 0);
-    const disc = completed.reduce((s, o)=>s + (o.discount || 0), 0);
-    const net = completed.reduce((s, o)=>s + o.total, 0);
-    // Payment breakdown
-    const payBreak = {};
-    completed.forEach((o)=>{
-        const pay = o.payment || 'cod';
-        if (!payBreak[pay]) payBreak[pay] = {
-            count: 0,
-            amount: 0
-        };
-        payBreak[pay].count++;
-        payBreak[pay].amount += o.total;
-    });
-    // Peak hour (by order count)
-    const hourCounts = {};
-    all.forEach((o)=>{
-        const h = new Date(o.timestamp).getHours();
-        hourCounts[h] = (hourCounts[h] || 0) + 1;
-    });
-    const peakEntry = Object.entries(hourCounts).sort((a, b)=>Number(b[1]) - Number(a[1]))[0];
-    const peakHour = peakEntry ? `${String(Number(peakEntry[0])).padStart(2, '0')}:00 – ${String(Number(peakEntry[0])).padStart(2, '0')}:59` : 'N/A';
-    // Top items (from completed orders only)
+    const dayOrders = getOrders().filter((o)=>new Date(o.timestamp).toDateString() === d.toDateString());
+    const completedOrders = dayOrders.filter((o)=>o.status === 'completed');
+    const voidedOrders = dayOrders.filter((o)=>o.status === 'void').length;
+    const totalRevenue = completedOrders.reduce((s, o)=>s + (o.total || 0), 0);
+    const discountsTotal = completedOrders.reduce((s, o)=>s + (o.discount || 0), 0);
     const itemMap = {};
-    completed.forEach((o)=>{
-        o.items.forEach((item)=>{
-            itemMap[item.name] = (itemMap[item.name] || 0) + item.qty;
-        });
-    });
-    const topItems = Object.entries(itemMap).sort((a, b)=>b[1] - a[1]).slice(0, 6).map(([name, qty])=>({
+    completedOrders.forEach((o)=>(o.items || []).forEach((i)=>{
+            itemMap[i.name] = (itemMap[i.name] || 0) + i.qty;
+        }));
+    const topItems = Object.entries(itemMap).sort((a, b)=>b[1] - a[1]).slice(0, 5).map(([name, qty])=>({
             name,
             qty
         }));
+    const completedTabs = getTabs().filter((t)=>t.tabStatus === 'closed' && t.closedAt && new Date(t.closedAt).toDateString() === d.toDateString()).length;
     return {
-        date: d.toLocaleDateString('en-IN', {
-            day: '2-digit',
-            month: 'short',
-            year: 'numeric'
-        }),
-        totalOrders: all.length,
-        completedOrders: completed.length,
-        cancelledOrders: cancelled.length,
-        voidedOrders: voided.length,
-        awaitingOrders: awaiting.length,
-        grossRevenue: gross,
-        discounts: disc,
-        netRevenue: net,
-        paymentBreakdown: payBreak,
-        avgBillValue: completed.length ? Math.round(net / completed.length) : 0,
-        peakHour,
-        topItems
+        date: d.toDateString(),
+        totalOrders: completedOrders.length,
+        totalRevenue,
+        avgOrderValue: completedOrders.length ? Math.round(totalRevenue / completedOrders.length) : 0,
+        topItems,
+        completedTabs,
+        voidedOrders,
+        discountsTotal
     };
-}
-function getFraudAlerts() {
-    const today = new Date().toDateString();
-    const orders = getOrders().filter((o)=>new Date(o.timestamp).toDateString() === today);
-    const alerts = [];
-    // Waiter/staff with many cancellations today
-    const cancelByStaff = {};
-    orders.filter((o)=>o.status === 'cancelled').forEach((o)=>{
-        const who = o.staffName || 'Unknown';
-        cancelByStaff[who] = (cancelByStaff[who] || 0) + 1;
-    });
-    Object.entries(cancelByStaff).forEach(([staff, count])=>{
-        if (count >= 3) {
-            alerts.push({
-                type: 'high_cancellations',
-                severity: count >= 5 ? 'critical' : 'warning',
-                message: `${staff} has ${count} cancellation${count > 1 ? 's' : ''} today`,
-                staff,
-                count
-            });
-        }
-    });
-    // High number of discounts today
-    const discountOrders = orders.filter((o)=>(o.discount || 0) > 0);
-    if (discountOrders.length >= 5) {
-        const totalDisc = discountOrders.reduce((s, o)=>s + (o.discount || 0), 0);
-        alerts.push({
-            type: 'high_discounts',
-            severity: discountOrders.length >= 10 ? 'critical' : 'warning',
-            message: `${discountOrders.length} discounts today totalling ₹${totalDisc}`,
-            count: discountOrders.length
-        });
-    }
-    // Large individual discounts (>₹100)
-    orders.filter((o)=>(o.discount || 0) > 100).forEach((o)=>{
-        alerts.push({
-            type: 'large_single_discount',
-            severity: 'warning',
-            message: `Large discount ₹${o.discount} on order ${o.orderNum ? `#${o.orderNum}` : o.id}`,
-            details: o.discountReason || 'No reason given'
-        });
-    });
-    // Any voided orders today
-    const voidOrders = orders.filter((o)=>o.status === 'void');
-    if (voidOrders.length > 0) {
-        alerts.push({
-            type: 'voided_orders',
-            severity: voidOrders.length >= 2 ? 'critical' : 'warning',
-            message: `${voidOrders.length} order${voidOrders.length > 1 ? 's' : ''} voided today — verify with manager`,
-            count: voidOrders.length
-        });
-    }
-    return alerts;
 }
 }),
 "[project]/app/admin/login/page.tsx [app-ssr] (ecmascript)", ((__turbopack_context__) => {

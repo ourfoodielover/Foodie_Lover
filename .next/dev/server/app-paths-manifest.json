@@ -6,7 +6,6 @@
   "/login/page": "app/login/page.js",
   "/manager/login/page": "app/manager/login/page.js",
   "/manager/page": "app/manager/page.js",
-  "/online/page": "app/online/page.js",
   "/page": "app/page.js",
   "/table/page": "app/table/page.js",
   "/waiter/login/page": "app/waiter/login/page.js",
