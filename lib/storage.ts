@@ -1,5 +1,5 @@
 // ─── Foodie Lover — Storage Layer ─────────────────────────────────────────────
-// All persistence via localStorage (no backend).
+// All persistence via localStorage (no backend). v2.0 — CustomerTab system.
 // Exports every type and function used across pages.
 
 // ─── Types ────────────────────────────────────────────────────────────────────
