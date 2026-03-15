@@ -27,16 +27,22 @@ module.exports = mod;
 "use strict";
 
 // ─── Foodie Lover — Storage Layer ─────────────────────────────────────────────
-// All persistence via localStorage (no backend).
+// All persistence via localStorage (no backend). v2.0 — CustomerTab system.
 // Exports every type and function used across pages.
 // ─── Types ────────────────────────────────────────────────────────────────────
 __turbopack_context__.s([
     "DEFAULT_MENU",
     ()=>DEFAULT_MENU,
+    "acknowledgeWaiterCall",
+    ()=>acknowledgeWaiterCall,
+    "addFoodReceiptDispute",
+    ()=>addFoodReceiptDispute,
     "addOrder",
     ()=>addOrder,
     "addOrderToTab",
     ()=>addOrderToTab,
+    "addWaiterCall",
+    ()=>addWaiterCall,
     "applyDiscount",
     ()=>applyDiscount,
     "applyTabDiscount",
@@ -47,16 +53,22 @@ __turbopack_context__.s([
     ()=>clearFraudAlerts,
     "closeTab",
     ()=>closeTab,
+    "createSplitBill",
+    ()=>createSplitBill,
     "createTab",
     ()=>createTab,
     "exportOrdersCSV",
     ()=>exportOrdersCSV,
     "getActiveTabsForTable",
     ()=>getActiveTabsForTable,
+    "getDisputeAlerts",
+    ()=>getDisputeAlerts,
     "getEndOfDayReport",
     ()=>getEndOfDayReport,
     "getFraudAlerts",
     ()=>getFraudAlerts,
+    "getLastWaiterCallTime",
+    ()=>getLastWaiterCallTime,
     "getMenu",
     ()=>getMenu,
     "getNextOrderNumber",
@@ -67,34 +79,62 @@ __turbopack_context__.s([
     ()=>getOrders,
     "getOrdersInPeriod",
     ()=>getOrdersInPeriod,
+    "getPendingDisputes",
+    ()=>getPendingDisputes,
+    "getPendingWaiterCalls",
+    ()=>getPendingWaiterCalls,
     "getPin",
     ()=>getPin,
+    "getSplitBillForTab",
+    ()=>getSplitBillForTab,
+    "getSplitBills",
+    ()=>getSplitBills,
     "getTab",
     ()=>getTab,
     "getTabOrders",
     ()=>getTabOrders,
     "getTableOccupancy",
     ()=>getTableOccupancy,
+    "getTableOccupancyStats",
+    ()=>getTableOccupancyStats,
     "getTables",
     ()=>getTables,
     "getTabs",
     ()=>getTabs,
+    "getWaiterCalls",
+    ()=>getWaiterCalls,
+    "getWaiterStats",
+    ()=>getWaiterStats,
+    "isSplitFullyPaid",
+    ()=>isSplitFullyPaid,
+    "markSplitEntryPaid",
+    ()=>markSplitEntryPaid,
     "requestBill",
     ()=>requestBill,
+    "resolveDispute",
+    ()=>resolveDispute,
+    "saveDisputeAlerts",
+    ()=>saveDisputeAlerts,
     "saveMenu",
     ()=>saveMenu,
     "saveOrders",
     ()=>saveOrders,
     "savePin",
     ()=>savePin,
+    "saveSplitBills",
+    ()=>saveSplitBills,
     "saveTables",
     ()=>saveTables,
     "saveTabs",
     ()=>saveTabs,
+    "saveWaiterCalls",
+    ()=>saveWaiterCalls,
     "syncTabTotal",
     ()=>syncTabTotal,
     "syncTableStatus",
     ()=>syncTableStatus,
+    "updateItemStatus",
+    ()=>updateItemStatus,
     "updateOrderStatus",
     ()=>updateOrderStatus,
     "voidOrder",
@@ -108,7 +148,10 @@ const KEYS = {
     pin: 'fl_admin_pin',
     tabs: 'fl_customer_tabs',
     orderNum: 'fl_order_num_counter',
-    fraudAlerts: 'fl_fraud_alerts'
+    fraudAlerts: 'fl_fraud_alerts',
+    waiterCalls: 'fl_waiter_calls',
+    disputes: 'fl_food_disputes',
+    splitBills: 'fl_split_bills'
 };
 // ─── Storage helpers ──────────────────────────────────────────────────────────
 function ls_get(key, fallback) {
@@ -747,6 +790,196 @@ function getEndOfDayReport(date) {
         discountsTotal
     };
 }
+function updateItemStatus(orderId, itemIndex, status, by = 'Kitchen') {
+    const orders = getOrders();
+    const idx = orders.findIndex((o)=>o.id === orderId);
+    if (idx === -1) return false;
+    const items = [
+        ...orders[idx].items || []
+    ];
+    if (itemIndex < 0 || itemIndex >= items.length) return false;
+    items[itemIndex] = {
+        ...items[itemIndex],
+        itemStatus: status
+    };
+    orders[idx] = {
+        ...orders[idx],
+        items
+    };
+    saveOrders(orders);
+    return true;
+}
+const getWaiterCalls = ()=>ls_get(KEYS.waiterCalls, []);
+const saveWaiterCalls = (c)=>ls_set(KEYS.waiterCalls, c);
+const getPendingWaiterCalls = ()=>getWaiterCalls().filter((c)=>!c.acknowledged);
+function addWaiterCall(tableId, tabId, customerName) {
+    const call = {
+        id: `WC-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+        tableId,
+        tabId,
+        customerName,
+        at: new Date().toISOString(),
+        acknowledged: false
+    };
+    const calls = getWaiterCalls();
+    calls.push(call);
+    if (calls.length > 100) calls.splice(0, calls.length - 100);
+    saveWaiterCalls(calls);
+    return call;
+}
+function acknowledgeWaiterCall(id, by = 'Waiter') {
+    const calls = getWaiterCalls();
+    const idx = calls.findIndex((c)=>c.id === id);
+    if (idx === -1) return false;
+    calls[idx] = {
+        ...calls[idx],
+        acknowledged: true,
+        acknowledgedAt: new Date().toISOString(),
+        acknowledgedBy: by
+    };
+    saveWaiterCalls(calls);
+    return true;
+}
+function getLastWaiterCallTime(tableId) {
+    const calls = getWaiterCalls();
+    const recent = calls.filter((c)=>c.tableId === tableId).sort((a, b)=>new Date(b.at).getTime() - new Date(a.at).getTime());
+    if (!recent.length) return null;
+    if (Date.now() - new Date(recent[0].at).getTime() > 5 * 60 * 1000) return null;
+    return recent[0].at;
+}
+const getDisputeAlerts = ()=>ls_get(KEYS.disputes, []);
+const saveDisputeAlerts = (d)=>ls_set(KEYS.disputes, d);
+const getPendingDisputes = ()=>getDisputeAlerts().filter((d)=>!d.resolved);
+function addFoodReceiptDispute(orderId, tabId, tableId, customerName) {
+    const dispute = {
+        id: `FD-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+        orderId,
+        tabId,
+        tableId,
+        customerName,
+        at: new Date().toISOString(),
+        resolved: false
+    };
+    const disputes = getDisputeAlerts();
+    disputes.push(dispute);
+    if (disputes.length > 200) disputes.splice(0, disputes.length - 200);
+    saveDisputeAlerts(disputes);
+    return dispute;
+}
+function resolveDispute(id, by = 'Waiter') {
+    const disputes = getDisputeAlerts();
+    const idx = disputes.findIndex((d)=>d.id === id);
+    if (idx === -1) return false;
+    disputes[idx] = {
+        ...disputes[idx],
+        resolved: true,
+        resolvedBy: by,
+        resolvedAt: new Date().toISOString()
+    };
+    saveDisputeAlerts(disputes);
+    return true;
+}
+const getSplitBills = ()=>ls_get(KEYS.splitBills, []);
+const saveSplitBills = (s)=>ls_set(KEYS.splitBills, s);
+function getSplitBillForTab(tabId) {
+    return getSplitBills().find((s)=>s.tabId === tabId) ?? null;
+}
+function createSplitBill(tabId, splitType, count, totalAmount) {
+    const existing = getSplitBills().filter((s)=>s.tabId !== tabId);
+    const perPerson = Math.ceil(totalAmount / count);
+    const entries = Array.from({
+        length: count
+    }, (_, i)=>({
+            personLabel: `Person ${i + 1}`,
+            amount: i === count - 1 ? totalAmount - perPerson * (count - 1) : perPerson,
+            paid: false
+        }));
+    const split = {
+        id: `SB-${Date.now()}`,
+        tabId,
+        splitType,
+        totalAmount,
+        entries,
+        createdAt: new Date().toISOString()
+    };
+    existing.push(split);
+    saveSplitBills(existing);
+    return split;
+}
+function markSplitEntryPaid(tabId, personLabel, paymentMethod) {
+    const splits = getSplitBills();
+    const idx = splits.findIndex((s)=>s.tabId === tabId);
+    if (idx === -1) return false;
+    const eIdx = splits[idx].entries.findIndex((e)=>e.personLabel === personLabel);
+    if (eIdx === -1) return false;
+    splits[idx].entries[eIdx] = {
+        ...splits[idx].entries[eIdx],
+        paid: true,
+        paymentMethod,
+        paidAt: new Date().toISOString()
+    };
+    saveSplitBills(splits);
+    return true;
+}
+function isSplitFullyPaid(tabId) {
+    const split = getSplitBillForTab(tabId);
+    return split ? split.entries.every((e)=>e.paid) : false;
+}
+function getWaiterStats() {
+    const orders = getOrders();
+    const todayStr = new Date().toDateString();
+    const todayOrders = orders.filter((o)=>new Date(o.timestamp).toDateString() === todayStr);
+    const statMap = {};
+    todayOrders.forEach((o)=>{
+        (o.timeline || []).forEach((t)=>{
+            if (!t.by || [
+                'System',
+                'Admin',
+                'Manager',
+                'Kitchen'
+            ].includes(t.by)) return;
+            if (!statMap[t.by]) statMap[t.by] = {
+                accepted: 0,
+                cancelled: 0,
+                served: 0
+            };
+            if (t.status === 'pending') statMap[t.by].accepted++;
+            if (t.status === 'cancelled') statMap[t.by].cancelled++;
+            if (t.status === 'served') statMap[t.by].served++;
+        });
+    });
+    return Object.entries(statMap).map(([name, s])=>({
+            name,
+            ordersAccepted: s.accepted,
+            ordersCancelled: s.cancelled,
+            ordersServed: s.served,
+            cancellationRate: s.accepted > 0 ? Math.round(s.cancelled / s.accepted * 100) : 0
+        })).sort((a, b)=>b.ordersCancelled - a.ordersCancelled);
+}
+function getTableOccupancyStats() {
+    const allTabs = getTabs().filter((t)=>t.tabStatus === 'closed' && t.closedAt);
+    const map = {};
+    allTabs.forEach((tab)=>{
+        if (!map[tab.tableId]) map[tab.tableId] = {
+            sessions: 0,
+            totalMins: 0,
+            revenue: 0,
+            lastUsed: ''
+        };
+        const mins = Math.floor((new Date(tab.closedAt).getTime() - new Date(tab.createdAt).getTime()) / 60000);
+        map[tab.tableId].sessions++;
+        map[tab.tableId].totalMins += mins;
+        map[tab.tableId].revenue += Math.max(0, tab.totalAmount - tab.discount);
+        if (!map[tab.tableId].lastUsed || tab.closedAt > map[tab.tableId].lastUsed) map[tab.tableId].lastUsed = tab.closedAt;
+    });
+    return Object.entries(map).map(([tableId, s])=>({
+            tableId,
+            totalSessions: s.sessions,
+            avgMinutes: s.sessions > 0 ? Math.round(s.totalMins / s.sessions) : 0,
+            totalRevenue: s.revenue,
+            lastUsed: s.lastUsed
+        })).sort((a, b)=>b.totalSessions - a.totalSessions);
+}
 }),
 "[project]/lib/auth.ts [app-ssr] (ecmascript)", ((__turbopack_context__) => {
 "use strict";
@@ -1040,10 +1273,20 @@ function KitchenPage() {
         router.replace('/kitchen/login');
     }
     // ── Actions ───────────────────────────────────────────────────────────────
-    function advance(order) {
+    function advanceOrder(order) {
         const next = order.status === 'pending' ? 'preparing' : order.status === 'preparing' ? 'prepared' : null;
         if (!next) return;
         (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["updateOrderStatus"])(order.id, next, session?.name || 'Kitchen');
+        refresh();
+    }
+    function advanceItem(orderId, itemIndex) {
+        const order = orders.find((o)=>o.id === orderId);
+        if (!order) return;
+        const item = order.items?.[itemIndex];
+        if (!item) return;
+        const currentStatus = item.itemStatus || 'queued';
+        const nextStatus = currentStatus === 'queued' ? 'preparing' : currentStatus === 'preparing' ? 'prepared' : 'prepared';
+        (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["updateItemStatus"])(orderId, itemIndex, nextStatus, session?.name || 'Kitchen');
         refresh();
     }
     // ── Derived ───────────────────────────────────────────────────────────────
@@ -1051,11 +1294,11 @@ function KitchenPage() {
             'pending',
             'preparing',
             'prepared'
-        ].includes(o.status));
-    const shown = filter === 'all' ? kitchenOrders : kitchenOrders.filter((o)=>o.status === filter);
-    const pendingCount = kitchenOrders.filter((o)=>o.status === 'pending').length;
-    const preparingCount = kitchenOrders.filter((o)=>o.status === 'preparing').length;
-    const preparedCount = kitchenOrders.filter((o)=>o.status === 'prepared').length;
+        ].includes(o.status)).sort((a, b)=>new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    const shown = filter === 'all' ? kitchenOrders : filter === 'queued' ? kitchenOrders.filter((o)=>o.status === 'pending') : filter === 'cooking' ? kitchenOrders.filter((o)=>o.status === 'preparing') : kitchenOrders.filter((o)=>o.status === 'prepared');
+    const queuedCount = kitchenOrders.filter((o)=>o.status === 'pending').length;
+    const cookingCount = kitchenOrders.filter((o)=>o.status === 'preparing').length;
+    const readyCount = kitchenOrders.filter((o)=>o.status === 'prepared').length;
     // ── Styles ────────────────────────────────────────────────────────────────
     const btn = (bg = '#E65C00', c = 'white')=>({
             background: bg,
@@ -1091,25 +1334,25 @@ function KitchenPage() {
                         children: "👨‍🍳"
                     }, void 0, false, {
                         fileName: "[project]/app/kitchen/page.tsx",
-                        lineNumber: 86,
+                        lineNumber: 102,
                         columnNumber: 11
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                         children: "Loading Kitchen Display…"
                     }, void 0, false, {
                         fileName: "[project]/app/kitchen/page.tsx",
-                        lineNumber: 87,
+                        lineNumber: 103,
                         columnNumber: 11
                     }, this)
                 ]
             }, void 0, true, {
                 fileName: "[project]/app/kitchen/page.tsx",
-                lineNumber: 85,
+                lineNumber: 101,
                 columnNumber: 9
             }, this)
         }, void 0, false, {
             fileName: "[project]/app/kitchen/page.tsx",
-            lineNumber: 84,
+            lineNumber: 100,
             columnNumber: 7
         }, this);
     }
@@ -1148,7 +1391,7 @@ function KitchenPage() {
                                 children: "👨‍🍳"
                             }, void 0, false, {
                                 fileName: "[project]/app/kitchen/page.tsx",
-                                lineNumber: 99,
+                                lineNumber: 115,
                                 columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1163,7 +1406,7 @@ function KitchenPage() {
                                         children: "Kitchen Display"
                                     }, void 0, false, {
                                         fileName: "[project]/app/kitchen/page.tsx",
-                                        lineNumber: 101,
+                                        lineNumber: 117,
                                         columnNumber: 13
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1174,19 +1417,19 @@ function KitchenPage() {
                                         children: clock
                                     }, void 0, false, {
                                         fileName: "[project]/app/kitchen/page.tsx",
-                                        lineNumber: 102,
+                                        lineNumber: 118,
                                         columnNumber: 13
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/kitchen/page.tsx",
-                                lineNumber: 100,
+                                lineNumber: 116,
                                 columnNumber: 11
                             }, this)
                         ]
                     }, void 0, true, {
                         fileName: "[project]/app/kitchen/page.tsx",
-                        lineNumber: 98,
+                        lineNumber: 114,
                         columnNumber: 9
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1198,17 +1441,17 @@ function KitchenPage() {
                         children: [
                             [
                                 {
-                                    count: pendingCount,
+                                    count: queuedCount,
                                     color: '#f59e0b',
                                     label: 'Queued'
                                 },
                                 {
-                                    count: preparingCount,
+                                    count: cookingCount,
                                     color: '#3b82f6',
                                     label: 'Cooking'
                                 },
                                 {
-                                    count: preparedCount,
+                                    count: readyCount,
                                     color: '#8b5cf6',
                                     label: 'Ready'
                                 }
@@ -1226,7 +1469,7 @@ function KitchenPage() {
                                             children: s.count
                                         }, void 0, false, {
                                             fileName: "[project]/app/kitchen/page.tsx",
-                                            lineNumber: 113,
+                                            lineNumber: 129,
                                             columnNumber: 15
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1237,13 +1480,13 @@ function KitchenPage() {
                                             children: s.label
                                         }, void 0, false, {
                                             fileName: "[project]/app/kitchen/page.tsx",
-                                            lineNumber: 114,
+                                            lineNumber: 130,
                                             columnNumber: 15
                                         }, this)
                                     ]
                                 }, s.label, true, {
                                     fileName: "[project]/app/kitchen/page.tsx",
-                                    lineNumber: 112,
+                                    lineNumber: 128,
                                     columnNumber: 13
                                 }, this)),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1256,19 +1499,19 @@ function KitchenPage() {
                                 children: "🚪 Logout"
                             }, void 0, false, {
                                 fileName: "[project]/app/kitchen/page.tsx",
-                                lineNumber: 117,
+                                lineNumber: 133,
                                 columnNumber: 11
                             }, this)
                         ]
                     }, void 0, true, {
                         fileName: "[project]/app/kitchen/page.tsx",
-                        lineNumber: 105,
+                        lineNumber: 121,
                         columnNumber: 9
                     }, this)
                 ]
             }, void 0, true, {
                 fileName: "[project]/app/kitchen/page.tsx",
-                lineNumber: 97,
+                lineNumber: 113,
                 columnNumber: 7
             }, this),
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1286,16 +1529,16 @@ function KitchenPage() {
                         label: `🍳 All (${kitchenOrders.length})`
                     },
                     {
-                        key: 'pending',
-                        label: `⏱ Queued (${pendingCount})`
+                        key: 'queued',
+                        label: `⏱ Queued (${queuedCount})`
                     },
                     {
-                        key: 'preparing',
-                        label: `🔥 Cooking (${preparingCount})`
+                        key: 'cooking',
+                        label: `🔥 Cooking (${cookingCount})`
                     },
                     {
-                        key: 'prepared',
-                        label: `✅ Ready (${preparedCount})`
+                        key: 'ready',
+                        label: `✅ Ready (${readyCount})`
                     }
                 ].map((f)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
                         onClick: ()=>setFilter(f.key),
@@ -1314,12 +1557,12 @@ function KitchenPage() {
                         children: f.label
                     }, f.key, false, {
                         fileName: "[project]/app/kitchen/page.tsx",
-                        lineNumber: 131,
+                        lineNumber: 147,
                         columnNumber: 11
                     }, this))
             }, void 0, false, {
                 fileName: "[project]/app/kitchen/page.tsx",
-                lineNumber: 124,
+                lineNumber: 140,
                 columnNumber: 7
             }, this),
             !shown.length && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1337,7 +1580,7 @@ function KitchenPage() {
                         children: "🎉"
                     }, void 0, false, {
                         fileName: "[project]/app/kitchen/page.tsx",
-                        lineNumber: 150,
+                        lineNumber: 166,
                         columnNumber: 11
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1347,13 +1590,13 @@ function KitchenPage() {
                         children: "All clear! No orders in kitchen."
                     }, void 0, false, {
                         fileName: "[project]/app/kitchen/page.tsx",
-                        lineNumber: 151,
+                        lineNumber: 167,
                         columnNumber: 11
                     }, this)
                 ]
             }, void 0, true, {
                 fileName: "[project]/app/kitchen/page.tsx",
-                lineNumber: 149,
+                lineNumber: 165,
                 columnNumber: 9
             }, this),
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1365,9 +1608,13 @@ function KitchenPage() {
                 },
                 children: shown.map((order)=>{
                     const mins = Math.floor((Date.now() - new Date(order.timestamp).getTime()) / 60000);
-                    const isUrgent = mins >= 20 && order.status !== 'prepared';
+                    const isUrgent = mins > 25;
+                    const isHighPriority = mins > 15 && !isUrgent;
                     // Check if this order's tab has requested the bill
                     const billRequested = tabs.some((t)=>t.orderIds.includes(order.id) && t.tabStatus === 'awaiting_payment');
+                    // Check total item quantity
+                    const totalItems = (order.items || []).reduce((sum, item)=>sum + item.qty, 0);
+                    const isLargeOrder = totalItems > 4;
                     const nextAction = order.status === 'pending' ? {
                         label: '🔥 Start Cooking',
                         bg: '#3b82f6'
@@ -1394,10 +1641,10 @@ function KitchenPage() {
                                     textAlign: 'center',
                                     letterSpacing: '0.03em'
                                 },
-                                children: "💳 BILL REQUESTED — Rush this order!"
+                                children: "💳 BILL REQUESTED — Rush!"
                             }, void 0, false, {
                                 fileName: "[project]/app/kitchen/page.tsx",
-                                lineNumber: 184,
+                                lineNumber: 205,
                                 columnNumber: 17
                             }, this),
                             isUrgent && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1410,13 +1657,47 @@ function KitchenPage() {
                                     textAlign: 'center'
                                 },
                                 children: [
-                                    "⚠️ URGENT — ",
+                                    "🔥 URGENT — ",
                                     mins,
                                     "m waiting"
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/kitchen/page.tsx",
-                                lineNumber: 195,
+                                lineNumber: 216,
+                                columnNumber: 17
+                            }, this),
+                            isHighPriority && !isUrgent && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                style: {
+                                    background: '#f59e0b',
+                                    color: 'white',
+                                    padding: '0.2rem 0.75rem',
+                                    fontSize: '0.7rem',
+                                    fontWeight: 800,
+                                    textAlign: 'center'
+                                },
+                                children: [
+                                    "⚠️ 15+ MIN — ",
+                                    mins,
+                                    "m waiting"
+                                ]
+                            }, void 0, true, {
+                                fileName: "[project]/app/kitchen/page.tsx",
+                                lineNumber: 224,
+                                columnNumber: 17
+                            }, this),
+                            isLargeOrder && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                style: {
+                                    background: '#06b6d4',
+                                    color: 'white',
+                                    padding: '0.2rem 0.75rem',
+                                    fontSize: '0.7rem',
+                                    fontWeight: 800,
+                                    textAlign: 'center'
+                                },
+                                children: "📦 LARGE ORDER"
+                            }, void 0, false, {
+                                fileName: "[project]/app/kitchen/page.tsx",
+                                lineNumber: 234,
                                 columnNumber: 17
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1446,7 +1727,7 @@ function KitchenPage() {
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/app/kitchen/page.tsx",
-                                                        lineNumber: 206,
+                                                        lineNumber: 245,
                                                         columnNumber: 21
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1461,13 +1742,13 @@ function KitchenPage() {
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/app/kitchen/page.tsx",
-                                                        lineNumber: 209,
+                                                        lineNumber: 248,
                                                         columnNumber: 21
                                                     }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/kitchen/page.tsx",
-                                                lineNumber: 205,
+                                                lineNumber: 244,
                                                 columnNumber: 19
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1487,7 +1768,7 @@ function KitchenPage() {
                                                         children: STATUS_LABEL[order.status] || order.status
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/kitchen/page.tsx",
-                                                        lineNumber: 214,
+                                                        lineNumber: 253,
                                                         columnNumber: 21
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1503,19 +1784,19 @@ function KitchenPage() {
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/app/kitchen/page.tsx",
-                                                        lineNumber: 217,
+                                                        lineNumber: 256,
                                                         columnNumber: 21
                                                     }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/kitchen/page.tsx",
-                                                lineNumber: 213,
+                                                lineNumber: 252,
                                                 columnNumber: 19
                                             }, this)
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/app/kitchen/page.tsx",
-                                        lineNumber: 204,
+                                        lineNumber: 243,
                                         columnNumber: 17
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1524,52 +1805,175 @@ function KitchenPage() {
                                             paddingTop: '0.5rem',
                                             marginBottom: '0.6rem'
                                         },
-                                        children: (order.items || []).map((item, i)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                        children: (order.items || []).map((item, i)=>{
+                                            const itemStatus = item.itemStatus || 'queued';
+                                            const isItemPrepared = itemStatus === 'prepared';
+                                            return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                                 style: {
-                                                    display: 'flex',
-                                                    justifyContent: 'space-between',
-                                                    fontSize: '0.82rem',
-                                                    padding: '0.2rem 0',
-                                                    color: '#ccc'
+                                                    marginBottom: '0.5rem'
                                                 },
-                                                children: [
-                                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
-                                                        style: {
-                                                            fontWeight: 700
-                                                        },
-                                                        children: item.name
-                                                    }, void 0, false, {
-                                                        fileName: "[project]/app/kitchen/page.tsx",
-                                                        lineNumber: 225,
-                                                        columnNumber: 23
-                                                    }, this),
-                                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
-                                                        style: {
-                                                            color: '#F9A826',
-                                                            fontWeight: 800
-                                                        },
-                                                        children: [
-                                                            "×",
-                                                            item.qty
-                                                        ]
-                                                    }, void 0, true, {
-                                                        fileName: "[project]/app/kitchen/page.tsx",
-                                                        lineNumber: 226,
-                                                        columnNumber: 23
-                                                    }, this)
-                                                ]
-                                            }, i, true, {
+                                                children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                    style: {
+                                                        display: 'flex',
+                                                        justifyContent: 'space-between',
+                                                        alignItems: 'center',
+                                                        marginBottom: '0.25rem'
+                                                    },
+                                                    children: [
+                                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                            style: {
+                                                                display: 'flex',
+                                                                alignItems: 'center',
+                                                                gap: '0.4rem',
+                                                                flex: 1
+                                                            },
+                                                            children: [
+                                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                                                    style: {
+                                                                        fontWeight: 700,
+                                                                        fontSize: '0.82rem',
+                                                                        color: '#ccc'
+                                                                    },
+                                                                    children: item.name
+                                                                }, void 0, false, {
+                                                                    fileName: "[project]/app/kitchen/page.tsx",
+                                                                    lineNumber: 270,
+                                                                    columnNumber: 29
+                                                                }, this),
+                                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                                                    style: {
+                                                                        color: '#F9A826',
+                                                                        fontWeight: 800,
+                                                                        fontSize: '0.75rem'
+                                                                    },
+                                                                    children: [
+                                                                        "×",
+                                                                        item.qty
+                                                                    ]
+                                                                }, void 0, true, {
+                                                                    fileName: "[project]/app/kitchen/page.tsx",
+                                                                    lineNumber: 271,
+                                                                    columnNumber: 29
+                                                                }, this)
+                                                            ]
+                                                        }, void 0, true, {
+                                                            fileName: "[project]/app/kitchen/page.tsx",
+                                                            lineNumber: 269,
+                                                            columnNumber: 27
+                                                        }, this),
+                                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                            style: {
+                                                                display: 'flex',
+                                                                gap: '0.3rem',
+                                                                alignItems: 'center'
+                                                            },
+                                                            children: [
+                                                                itemStatus === 'queued' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["Fragment"], {
+                                                                    children: [
+                                                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                                            style: {
+                                                                                fontSize: '0.65rem',
+                                                                                fontWeight: 700,
+                                                                                padding: '0.1rem 0.4rem',
+                                                                                borderRadius: 6,
+                                                                                background: '#66666640',
+                                                                                color: '#999'
+                                                                            },
+                                                                            children: "Queued"
+                                                                        }, void 0, false, {
+                                                                            fileName: "[project]/app/kitchen/page.tsx",
+                                                                            lineNumber: 276,
+                                                                            columnNumber: 33
+                                                                        }, this),
+                                                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                                                            onClick: ()=>advanceItem(order.id, i),
+                                                                            style: {
+                                                                                ...btn('#3b82f6'),
+                                                                                fontSize: '0.65rem',
+                                                                                padding: '0.25rem 0.5rem',
+                                                                                borderRadius: 6
+                                                                            },
+                                                                            children: "▶ Start"
+                                                                        }, void 0, false, {
+                                                                            fileName: "[project]/app/kitchen/page.tsx",
+                                                                            lineNumber: 279,
+                                                                            columnNumber: 33
+                                                                        }, this)
+                                                                    ]
+                                                                }, void 0, true),
+                                                                itemStatus === 'preparing' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["Fragment"], {
+                                                                    children: [
+                                                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                                            style: {
+                                                                                fontSize: '0.65rem',
+                                                                                fontWeight: 700,
+                                                                                padding: '0.1rem 0.4rem',
+                                                                                borderRadius: 6,
+                                                                                background: '#3b82f640',
+                                                                                color: '#60a5fa'
+                                                                            },
+                                                                            children: "Cooking"
+                                                                        }, void 0, false, {
+                                                                            fileName: "[project]/app/kitchen/page.tsx",
+                                                                            lineNumber: 289,
+                                                                            columnNumber: 33
+                                                                        }, this),
+                                                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                                                            onClick: ()=>advanceItem(order.id, i),
+                                                                            style: {
+                                                                                ...btn('#10b981'),
+                                                                                fontSize: '0.65rem',
+                                                                                padding: '0.25rem 0.5rem',
+                                                                                borderRadius: 6
+                                                                            },
+                                                                            children: "✅ Done"
+                                                                        }, void 0, false, {
+                                                                            fileName: "[project]/app/kitchen/page.tsx",
+                                                                            lineNumber: 292,
+                                                                            columnNumber: 33
+                                                                        }, this)
+                                                                    ]
+                                                                }, void 0, true),
+                                                                itemStatus === 'prepared' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                                    style: {
+                                                                        fontSize: '0.65rem',
+                                                                        fontWeight: 700,
+                                                                        padding: '0.1rem 0.4rem',
+                                                                        borderRadius: 6,
+                                                                        background: '#8b5cf640',
+                                                                        color: '#a78bfa'
+                                                                    },
+                                                                    children: "Ready"
+                                                                }, void 0, false, {
+                                                                    fileName: "[project]/app/kitchen/page.tsx",
+                                                                    lineNumber: 301,
+                                                                    columnNumber: 31
+                                                                }, this)
+                                                            ]
+                                                        }, void 0, true, {
+                                                            fileName: "[project]/app/kitchen/page.tsx",
+                                                            lineNumber: 273,
+                                                            columnNumber: 27
+                                                        }, this)
+                                                    ]
+                                                }, void 0, true, {
+                                                    fileName: "[project]/app/kitchen/page.tsx",
+                                                    lineNumber: 268,
+                                                    columnNumber: 25
+                                                }, this)
+                                            }, i, false, {
                                                 fileName: "[project]/app/kitchen/page.tsx",
-                                                lineNumber: 224,
-                                                columnNumber: 21
-                                            }, this))
+                                                lineNumber: 267,
+                                                columnNumber: 23
+                                            }, this);
+                                        })
                                     }, void 0, false, {
                                         fileName: "[project]/app/kitchen/page.tsx",
-                                        lineNumber: 222,
+                                        lineNumber: 261,
                                         columnNumber: 17
                                     }, this),
                                     nextAction && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
-                                        onClick: ()=>advance(order),
+                                        onClick: ()=>advanceOrder(order),
                                         style: {
                                             ...btn(nextAction.bg),
                                             width: '100%',
@@ -1580,7 +1984,7 @@ function KitchenPage() {
                                         children: nextAction.label
                                     }, void 0, false, {
                                         fileName: "[project]/app/kitchen/page.tsx",
-                                        lineNumber: 233,
+                                        lineNumber: 314,
                                         columnNumber: 19
                                     }, this),
                                     order.status === 'prepared' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1597,31 +2001,31 @@ function KitchenPage() {
                                         children: "✅ Ready — Waiting for waiter"
                                     }, void 0, false, {
                                         fileName: "[project]/app/kitchen/page.tsx",
-                                        lineNumber: 241,
+                                        lineNumber: 322,
                                         columnNumber: 19
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/kitchen/page.tsx",
-                                lineNumber: 203,
+                                lineNumber: 242,
                                 columnNumber: 15
                             }, this)
                         ]
                     }, order.id, true, {
                         fileName: "[project]/app/kitchen/page.tsx",
-                        lineNumber: 172,
+                        lineNumber: 193,
                         columnNumber: 13
                     }, this);
                 })
             }, void 0, false, {
                 fileName: "[project]/app/kitchen/page.tsx",
-                lineNumber: 156,
+                lineNumber: 172,
                 columnNumber: 7
             }, this)
         ]
     }, void 0, true, {
         fileName: "[project]/app/kitchen/page.tsx",
-        lineNumber: 94,
+        lineNumber: 110,
         columnNumber: 5
     }, this);
 }

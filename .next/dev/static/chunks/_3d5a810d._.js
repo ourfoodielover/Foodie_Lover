@@ -3,16 +3,22 @@
 "use strict";
 
 // ─── Foodie Lover — Storage Layer ─────────────────────────────────────────────
-// All persistence via localStorage (no backend).
+// All persistence via localStorage (no backend). v2.0 — CustomerTab system.
 // Exports every type and function used across pages.
 // ─── Types ────────────────────────────────────────────────────────────────────
 __turbopack_context__.s([
     "DEFAULT_MENU",
     ()=>DEFAULT_MENU,
+    "acknowledgeWaiterCall",
+    ()=>acknowledgeWaiterCall,
+    "addFoodReceiptDispute",
+    ()=>addFoodReceiptDispute,
     "addOrder",
     ()=>addOrder,
     "addOrderToTab",
     ()=>addOrderToTab,
+    "addWaiterCall",
+    ()=>addWaiterCall,
     "applyDiscount",
     ()=>applyDiscount,
     "applyTabDiscount",
@@ -23,16 +29,22 @@ __turbopack_context__.s([
     ()=>clearFraudAlerts,
     "closeTab",
     ()=>closeTab,
+    "createSplitBill",
+    ()=>createSplitBill,
     "createTab",
     ()=>createTab,
     "exportOrdersCSV",
     ()=>exportOrdersCSV,
     "getActiveTabsForTable",
     ()=>getActiveTabsForTable,
+    "getDisputeAlerts",
+    ()=>getDisputeAlerts,
     "getEndOfDayReport",
     ()=>getEndOfDayReport,
     "getFraudAlerts",
     ()=>getFraudAlerts,
+    "getLastWaiterCallTime",
+    ()=>getLastWaiterCallTime,
     "getMenu",
     ()=>getMenu,
     "getNextOrderNumber",
@@ -43,34 +55,62 @@ __turbopack_context__.s([
     ()=>getOrders,
     "getOrdersInPeriod",
     ()=>getOrdersInPeriod,
+    "getPendingDisputes",
+    ()=>getPendingDisputes,
+    "getPendingWaiterCalls",
+    ()=>getPendingWaiterCalls,
     "getPin",
     ()=>getPin,
+    "getSplitBillForTab",
+    ()=>getSplitBillForTab,
+    "getSplitBills",
+    ()=>getSplitBills,
     "getTab",
     ()=>getTab,
     "getTabOrders",
     ()=>getTabOrders,
     "getTableOccupancy",
     ()=>getTableOccupancy,
+    "getTableOccupancyStats",
+    ()=>getTableOccupancyStats,
     "getTables",
     ()=>getTables,
     "getTabs",
     ()=>getTabs,
+    "getWaiterCalls",
+    ()=>getWaiterCalls,
+    "getWaiterStats",
+    ()=>getWaiterStats,
+    "isSplitFullyPaid",
+    ()=>isSplitFullyPaid,
+    "markSplitEntryPaid",
+    ()=>markSplitEntryPaid,
     "requestBill",
     ()=>requestBill,
+    "resolveDispute",
+    ()=>resolveDispute,
+    "saveDisputeAlerts",
+    ()=>saveDisputeAlerts,
     "saveMenu",
     ()=>saveMenu,
     "saveOrders",
     ()=>saveOrders,
     "savePin",
     ()=>savePin,
+    "saveSplitBills",
+    ()=>saveSplitBills,
     "saveTables",
     ()=>saveTables,
     "saveTabs",
     ()=>saveTabs,
+    "saveWaiterCalls",
+    ()=>saveWaiterCalls,
     "syncTabTotal",
     ()=>syncTabTotal,
     "syncTableStatus",
     ()=>syncTableStatus,
+    "updateItemStatus",
+    ()=>updateItemStatus,
     "updateOrderStatus",
     ()=>updateOrderStatus,
     "voidOrder",
@@ -84,7 +124,10 @@ const KEYS = {
     pin: 'fl_admin_pin',
     tabs: 'fl_customer_tabs',
     orderNum: 'fl_order_num_counter',
-    fraudAlerts: 'fl_fraud_alerts'
+    fraudAlerts: 'fl_fraud_alerts',
+    waiterCalls: 'fl_waiter_calls',
+    disputes: 'fl_food_disputes',
+    splitBills: 'fl_split_bills'
 };
 // ─── Storage helpers ──────────────────────────────────────────────────────────
 function ls_get(key, fallback) {
@@ -728,6 +771,196 @@ function getEndOfDayReport(date) {
         discountsTotal
     };
 }
+function updateItemStatus(orderId, itemIndex, status, by = 'Kitchen') {
+    const orders = getOrders();
+    const idx = orders.findIndex((o)=>o.id === orderId);
+    if (idx === -1) return false;
+    const items = [
+        ...orders[idx].items || []
+    ];
+    if (itemIndex < 0 || itemIndex >= items.length) return false;
+    items[itemIndex] = {
+        ...items[itemIndex],
+        itemStatus: status
+    };
+    orders[idx] = {
+        ...orders[idx],
+        items
+    };
+    saveOrders(orders);
+    return true;
+}
+const getWaiterCalls = ()=>ls_get(KEYS.waiterCalls, []);
+const saveWaiterCalls = (c)=>ls_set(KEYS.waiterCalls, c);
+const getPendingWaiterCalls = ()=>getWaiterCalls().filter((c)=>!c.acknowledged);
+function addWaiterCall(tableId, tabId, customerName) {
+    const call = {
+        id: `WC-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+        tableId,
+        tabId,
+        customerName,
+        at: new Date().toISOString(),
+        acknowledged: false
+    };
+    const calls = getWaiterCalls();
+    calls.push(call);
+    if (calls.length > 100) calls.splice(0, calls.length - 100);
+    saveWaiterCalls(calls);
+    return call;
+}
+function acknowledgeWaiterCall(id, by = 'Waiter') {
+    const calls = getWaiterCalls();
+    const idx = calls.findIndex((c)=>c.id === id);
+    if (idx === -1) return false;
+    calls[idx] = {
+        ...calls[idx],
+        acknowledged: true,
+        acknowledgedAt: new Date().toISOString(),
+        acknowledgedBy: by
+    };
+    saveWaiterCalls(calls);
+    return true;
+}
+function getLastWaiterCallTime(tableId) {
+    const calls = getWaiterCalls();
+    const recent = calls.filter((c)=>c.tableId === tableId).sort((a, b)=>new Date(b.at).getTime() - new Date(a.at).getTime());
+    if (!recent.length) return null;
+    if (Date.now() - new Date(recent[0].at).getTime() > 5 * 60 * 1000) return null;
+    return recent[0].at;
+}
+const getDisputeAlerts = ()=>ls_get(KEYS.disputes, []);
+const saveDisputeAlerts = (d)=>ls_set(KEYS.disputes, d);
+const getPendingDisputes = ()=>getDisputeAlerts().filter((d)=>!d.resolved);
+function addFoodReceiptDispute(orderId, tabId, tableId, customerName) {
+    const dispute = {
+        id: `FD-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+        orderId,
+        tabId,
+        tableId,
+        customerName,
+        at: new Date().toISOString(),
+        resolved: false
+    };
+    const disputes = getDisputeAlerts();
+    disputes.push(dispute);
+    if (disputes.length > 200) disputes.splice(0, disputes.length - 200);
+    saveDisputeAlerts(disputes);
+    return dispute;
+}
+function resolveDispute(id, by = 'Waiter') {
+    const disputes = getDisputeAlerts();
+    const idx = disputes.findIndex((d)=>d.id === id);
+    if (idx === -1) return false;
+    disputes[idx] = {
+        ...disputes[idx],
+        resolved: true,
+        resolvedBy: by,
+        resolvedAt: new Date().toISOString()
+    };
+    saveDisputeAlerts(disputes);
+    return true;
+}
+const getSplitBills = ()=>ls_get(KEYS.splitBills, []);
+const saveSplitBills = (s)=>ls_set(KEYS.splitBills, s);
+function getSplitBillForTab(tabId) {
+    return getSplitBills().find((s)=>s.tabId === tabId) ?? null;
+}
+function createSplitBill(tabId, splitType, count, totalAmount) {
+    const existing = getSplitBills().filter((s)=>s.tabId !== tabId);
+    const perPerson = Math.ceil(totalAmount / count);
+    const entries = Array.from({
+        length: count
+    }, (_, i)=>({
+            personLabel: `Person ${i + 1}`,
+            amount: i === count - 1 ? totalAmount - perPerson * (count - 1) : perPerson,
+            paid: false
+        }));
+    const split = {
+        id: `SB-${Date.now()}`,
+        tabId,
+        splitType,
+        totalAmount,
+        entries,
+        createdAt: new Date().toISOString()
+    };
+    existing.push(split);
+    saveSplitBills(existing);
+    return split;
+}
+function markSplitEntryPaid(tabId, personLabel, paymentMethod) {
+    const splits = getSplitBills();
+    const idx = splits.findIndex((s)=>s.tabId === tabId);
+    if (idx === -1) return false;
+    const eIdx = splits[idx].entries.findIndex((e)=>e.personLabel === personLabel);
+    if (eIdx === -1) return false;
+    splits[idx].entries[eIdx] = {
+        ...splits[idx].entries[eIdx],
+        paid: true,
+        paymentMethod,
+        paidAt: new Date().toISOString()
+    };
+    saveSplitBills(splits);
+    return true;
+}
+function isSplitFullyPaid(tabId) {
+    const split = getSplitBillForTab(tabId);
+    return split ? split.entries.every((e)=>e.paid) : false;
+}
+function getWaiterStats() {
+    const orders = getOrders();
+    const todayStr = new Date().toDateString();
+    const todayOrders = orders.filter((o)=>new Date(o.timestamp).toDateString() === todayStr);
+    const statMap = {};
+    todayOrders.forEach((o)=>{
+        (o.timeline || []).forEach((t)=>{
+            if (!t.by || [
+                'System',
+                'Admin',
+                'Manager',
+                'Kitchen'
+            ].includes(t.by)) return;
+            if (!statMap[t.by]) statMap[t.by] = {
+                accepted: 0,
+                cancelled: 0,
+                served: 0
+            };
+            if (t.status === 'pending') statMap[t.by].accepted++;
+            if (t.status === 'cancelled') statMap[t.by].cancelled++;
+            if (t.status === 'served') statMap[t.by].served++;
+        });
+    });
+    return Object.entries(statMap).map(([name, s])=>({
+            name,
+            ordersAccepted: s.accepted,
+            ordersCancelled: s.cancelled,
+            ordersServed: s.served,
+            cancellationRate: s.accepted > 0 ? Math.round(s.cancelled / s.accepted * 100) : 0
+        })).sort((a, b)=>b.ordersCancelled - a.ordersCancelled);
+}
+function getTableOccupancyStats() {
+    const allTabs = getTabs().filter((t)=>t.tabStatus === 'closed' && t.closedAt);
+    const map = {};
+    allTabs.forEach((tab)=>{
+        if (!map[tab.tableId]) map[tab.tableId] = {
+            sessions: 0,
+            totalMins: 0,
+            revenue: 0,
+            lastUsed: ''
+        };
+        const mins = Math.floor((new Date(tab.closedAt).getTime() - new Date(tab.createdAt).getTime()) / 60000);
+        map[tab.tableId].sessions++;
+        map[tab.tableId].totalMins += mins;
+        map[tab.tableId].revenue += Math.max(0, tab.totalAmount - tab.discount);
+        if (!map[tab.tableId].lastUsed || tab.closedAt > map[tab.tableId].lastUsed) map[tab.tableId].lastUsed = tab.closedAt;
+    });
+    return Object.entries(map).map(([tableId, s])=>({
+            tableId,
+            totalSessions: s.sessions,
+            avgMinutes: s.sessions > 0 ? Math.round(s.totalMins / s.sessions) : 0,
+            totalRevenue: s.revenue,
+            lastUsed: s.lastUsed
+        })).sort((a, b)=>b.totalSessions - a.totalSessions);
+}
 if (typeof globalThis.$RefreshHelpers$ === 'object' && globalThis.$RefreshHelpers !== null) {
     __turbopack_context__.k.registerExports(__turbopack_context__.m, globalThis.$RefreshHelpers$);
 }
@@ -802,7 +1035,23 @@ function ssClear(tableId) {
         sessionStorage.removeItem(`fl_tab_${tableId}_id`);
         sessionStorage.removeItem(`fl_tab_${tableId}_name`);
         sessionStorage.removeItem(`fl_tab_${tableId}_party`);
+        sessionStorage.removeItem(`fl_confirmed_${tableId}`);
     } catch  {}
+}
+function getConfirmedOrderIds(tableId) {
+    try {
+        const raw = ssGet(`fl_confirmed_${tableId}`);
+        return raw ? new Set(JSON.parse(raw)) : new Set();
+    } catch  {
+        return new Set();
+    }
+}
+function addConfirmedOrderId(tableId, orderId) {
+    const set = getConfirmedOrderIds(tableId);
+    set.add(orderId);
+    ssSet(`fl_confirmed_${tableId}`, JSON.stringify([
+        ...set
+    ]));
 }
 // ─── Inner component (uses useSearchParams) ────────────────────────────────────
 function TablePageInner() {
@@ -829,6 +1078,12 @@ function TablePageInner() {
     const [orderMsg, setOrderMsg] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('');
     const [billMsg, setBillMsg] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('');
     const [trackingView, setTrackingView] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('aggregated');
+    // ── Waiter call cooldown ──
+    const [callCooldown, setCallCooldown] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(0); // seconds remaining
+    // ── Food receipt confirmation ──
+    const [disputeOrder, setDisputeOrder] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(null);
+    // Use a ref so refresh() callback always sees latest confirmed IDs without re-creating
+    const confirmedRef = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useRef"])(new Set());
     // ─── Init ──────────────────────────────────────────────────────────────────
     (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useEffect"])({
         "TablePageInner.useEffect": ()=>{
@@ -840,16 +1095,28 @@ function TablePageInner() {
             const savedName = ssGet(`fl_tab_${tableId}_name`);
             const savedParty = ssGet(`fl_tab_${tableId}_party`);
             if (savedTabId && savedName) {
-                // Verify the tab is still active in localStorage
                 const allTabs = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getTabs"])();
                 const existingTab = allTabs.find({
-                    "TablePageInner.useEffect.existingTab": (t)=>t.id === savedTabId && (t.tabStatus === 'open' || t.tabStatus === 'awaiting_payment')
+                    "TablePageInner.useEffect.existingTab": (t)=>t.id === savedTabId && [
+                            'open',
+                            'awaiting_payment',
+                            'closed'
+                        ].includes(t.tabStatus)
                 }["TablePageInner.useEffect.existingTab"]);
                 if (existingTab) {
                     setTabId(savedTabId);
                     setCustomerName(savedName);
                     setPartyInput(savedParty || '1');
                     setTab(existingTab);
+                    // Restore confirmed order IDs
+                    confirmedRef.current = getConfirmedOrderIds(tableId);
+                    // Restore cooldown
+                    const lastCallAt = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getLastWaiterCallTime"])(tableId);
+                    if (lastCallAt) {
+                        const elapsed = Math.floor((Date.now() - new Date(lastCallAt).getTime()) / 1000);
+                        const remaining = Math.max(0, 60 - elapsed);
+                        setCallCooldown(remaining);
+                    }
                     setView('tracking');
                     return;
                 } else {
@@ -859,6 +1126,22 @@ function TablePageInner() {
         }
     }["TablePageInner.useEffect"], [
         tableId
+    ]);
+    // ─── Cooldown countdown ────────────────────────────────────────────────────
+    (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useEffect"])({
+        "TablePageInner.useEffect": ()=>{
+            if (callCooldown <= 0) return;
+            const t = setInterval({
+                "TablePageInner.useEffect.t": ()=>setCallCooldown({
+                        "TablePageInner.useEffect.t": (prev)=>Math.max(0, prev - 1)
+                    }["TablePageInner.useEffect.t"])
+            }["TablePageInner.useEffect.t"], 1000);
+            return ({
+                "TablePageInner.useEffect": ()=>clearInterval(t)
+            })["TablePageInner.useEffect"];
+        }
+    }["TablePageInner.useEffect"], [
+        callCooldown
     ]);
     // ─── Periodic refresh ─────────────────────────────────────────────────────
     const refresh = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useCallback"])({
@@ -870,9 +1153,26 @@ function TablePageInner() {
             }["TablePageInner.useCallback[refresh].currentTab"]);
             if (currentTab) {
                 setTab(currentTab);
-                (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["syncTabTotal"])(tabId);
+                if (currentTab.tabStatus === 'open') (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["syncTabTotal"])(tabId);
             }
-            setOrders((0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getOrders"])());
+            const latestOrders = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getOrders"])();
+            setOrders(latestOrders);
+            // Check for newly served orders that need food receipt confirmation
+            if (currentTab && currentTab.tabStatus !== 'closed') {
+                const tabOrdrs = currentTab.orderIds.map({
+                    "TablePageInner.useCallback[refresh].tabOrdrs": (oid)=>latestOrders.find({
+                            "TablePageInner.useCallback[refresh].tabOrdrs": (o)=>o.id === oid
+                        }["TablePageInner.useCallback[refresh].tabOrdrs"])
+                }["TablePageInner.useCallback[refresh].tabOrdrs"]).filter({
+                    "TablePageInner.useCallback[refresh].tabOrdrs": (o)=>!!o
+                }["TablePageInner.useCallback[refresh].tabOrdrs"]);
+                const servedUnconfirmed = tabOrdrs.find({
+                    "TablePageInner.useCallback[refresh].servedUnconfirmed": (o)=>o.status === 'served' && !confirmedRef.current.has(o.id)
+                }["TablePageInner.useCallback[refresh].servedUnconfirmed"]);
+                if (servedUnconfirmed) {
+                    setDisputeOrder(servedUnconfirmed);
+                }
+            }
         }
     }["TablePageInner.useCallback[refresh]"], [
         tabId
@@ -902,7 +1202,6 @@ function TablePageInner() {
             return;
         }
         const party = Math.max(1, parseInt(partyInput) || 1);
-        // Check if there's already an active tab for this name at this table
         const existingTab = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getOpenTabForCustomer"])(tableId, name);
         if (existingTab) {
             setTabId(existingTab.id);
@@ -911,17 +1210,16 @@ function TablePageInner() {
             ssSet(`fl_tab_${tableId}_id`, existingTab.id);
             ssSet(`fl_tab_${tableId}_name`, name);
             ssSet(`fl_tab_${tableId}_party`, String(party));
+            confirmedRef.current = getConfirmedOrderIds(tableId);
             setView('tracking');
             return;
         }
-        // Check if the table is occupied by someone else
         const activeTabs = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getActiveTabsForTable"])(tableId);
         if (activeTabs.length > 0) {
             const occupantName = activeTabs[0].customerName;
             setNameError(`Table ${tableId} is currently occupied by ${occupantName}. If you're part of their group, ask them to add you to the same order.`);
             return;
         }
-        // Create new tab
         const newTab = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["createTab"])(tableId, name, party);
         setTabId(newTab.id);
         setCustomerName(name);
@@ -929,6 +1227,7 @@ function TablePageInner() {
         ssSet(`fl_tab_${tableId}_id`, newTab.id);
         ssSet(`fl_tab_${tableId}_name`, name);
         ssSet(`fl_tab_${tableId}_party`, String(party));
+        confirmedRef.current = new Set();
         setNameError('');
         setView('menu');
     }
@@ -994,6 +1293,22 @@ function TablePageInner() {
             setTimeout(()=>setBillMsg(''), 5000);
         }
     }
+    // ─── Call Waiter ──────────────────────────────────────────────────────────
+    function handleCallWaiter() {
+        if (!tabId || !tab || callCooldown > 0) return;
+        (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["addWaiterCall"])(tableId, tabId, customerName);
+        setCallCooldown(60);
+    }
+    // ─── Food receipt confirmation ────────────────────────────────────────────
+    function handleFoodConfirm(received) {
+        if (!disputeOrder || !tabId) return;
+        if (!received) {
+            (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["addFoodReceiptDispute"])(disputeOrder.id, tabId, tableId, customerName);
+        }
+        confirmedRef.current.add(disputeOrder.id);
+        addConfirmedOrderId(tableId, disputeOrder.id);
+        setDisputeOrder(null);
+    }
     // ─── Cart helpers ─────────────────────────────────────────────────────────
     const cartTotal = Object.entries(cart).reduce((s, [id, qty])=>{
         const m = menu.find((x)=>x.id === id);
@@ -1022,7 +1337,6 @@ function TablePageInner() {
             'preparing',
             'prepared'
         ].includes(o.status));
-    // Aggregated view: group by item name across all orders
     const aggregatedItems = (()=>{
         const map = {};
         activeTabOrders.forEach((order)=>{
@@ -1040,7 +1354,6 @@ function TablePageInner() {
                 name,
                 qty: v.qty,
                 price: v.price,
-                // Worst status wins for display
                 status: v.statuses.includes('awaiting_waiter') ? 'awaiting_waiter' : v.statuses.includes('pending') ? 'pending' : v.statuses.includes('preparing') ? 'preparing' : v.statuses.includes('prepared') ? 'prepared' : v.statuses.includes('served') ? 'served' : 'completed'
             }));
     })();
@@ -1113,7 +1426,7 @@ function TablePageInner() {
                                 children: "🍽️"
                             }, void 0, false, {
                                 fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 297,
+                                lineNumber: 361,
                                 columnNumber: 13
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1126,7 +1439,7 @@ function TablePageInner() {
                                 children: "Foodie Lover"
                             }, void 0, false, {
                                 fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 298,
+                                lineNumber: 362,
                                 columnNumber: 13
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1141,13 +1454,13 @@ function TablePageInner() {
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 299,
+                                lineNumber: 363,
                                 columnNumber: 13
                             }, this)
                         ]
                     }, void 0, true, {
                         fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 296,
+                        lineNumber: 360,
                         columnNumber: 11
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1166,7 +1479,7 @@ function TablePageInner() {
                                 children: "Your Name *"
                             }, void 0, false, {
                                 fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 303,
+                                lineNumber: 367,
                                 columnNumber: 13
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -1190,13 +1503,13 @@ function TablePageInner() {
                                 }
                             }, void 0, false, {
                                 fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 304,
+                                lineNumber: 368,
                                 columnNumber: 13
                             }, this)
                         ]
                     }, void 0, true, {
                         fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 302,
+                        lineNumber: 366,
                         columnNumber: 11
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1215,7 +1528,7 @@ function TablePageInner() {
                                 children: "Party Size"
                             }, void 0, false, {
                                 fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 315,
+                                lineNumber: 379,
                                 columnNumber: 13
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1247,18 +1560,18 @@ function TablePageInner() {
                                         children: n
                                     }, n, false, {
                                         fileName: "[project]/app/table/page.tsx",
-                                        lineNumber: 318,
+                                        lineNumber: 382,
                                         columnNumber: 17
                                     }, this))
                             }, void 0, false, {
                                 fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 316,
+                                lineNumber: 380,
                                 columnNumber: 13
                             }, this)
                         ]
                     }, void 0, true, {
                         fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 314,
+                        lineNumber: 378,
                         columnNumber: 11
                     }, this),
                     nameError && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1274,7 +1587,7 @@ function TablePageInner() {
                         children: nameError
                     }, void 0, false, {
                         fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 334,
+                        lineNumber: 398,
                         columnNumber: 13
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1289,7 +1602,7 @@ function TablePageInner() {
                         children: "🚀 Start Ordering"
                     }, void 0, false, {
                         fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 339,
+                        lineNumber: 403,
                         columnNumber: 11
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
@@ -1302,18 +1615,18 @@ function TablePageInner() {
                         children: "Scan QR at your table to begin. Returning customers — enter the same name."
                     }, void 0, false, {
                         fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 346,
+                        lineNumber: 410,
                         columnNumber: 11
                     }, this)
                 ]
             }, void 0, true, {
                 fileName: "[project]/app/table/page.tsx",
-                lineNumber: 295,
+                lineNumber: 359,
                 columnNumber: 9
             }, this)
         }, void 0, false, {
             fileName: "[project]/app/table/page.tsx",
-            lineNumber: 294,
+            lineNumber: 358,
             columnNumber: 7
         }, this);
     }
@@ -1356,7 +1669,7 @@ function TablePageInner() {
                                             children: "🍽️ Foodie Lover"
                                         }, void 0, false, {
                                             fileName: "[project]/app/table/page.tsx",
-                                            lineNumber: 364,
+                                            lineNumber: 428,
                                             columnNumber: 15
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1372,13 +1685,13 @@ function TablePageInner() {
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/table/page.tsx",
-                                            lineNumber: 365,
+                                            lineNumber: 429,
                                             columnNumber: 15
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 363,
+                                    lineNumber: 427,
                                     columnNumber: 13
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1396,18 +1709,18 @@ function TablePageInner() {
                                         children: "📋 My Tab"
                                     }, void 0, false, {
                                         fileName: "[project]/app/table/page.tsx",
-                                        lineNumber: 369,
+                                        lineNumber: 433,
                                         columnNumber: 17
                                     }, this)
                                 }, void 0, false, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 367,
+                                    lineNumber: 431,
                                     columnNumber: 13
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/table/page.tsx",
-                            lineNumber: 362,
+                            lineNumber: 426,
                             columnNumber: 11
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1435,18 +1748,18 @@ function TablePageInner() {
                                     children: c
                                 }, c, false, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 378,
+                                    lineNumber: 442,
                                     columnNumber: 15
                                 }, this))
                         }, void 0, false, {
                             fileName: "[project]/app/table/page.tsx",
-                            lineNumber: 376,
+                            lineNumber: 440,
                             columnNumber: 11
                         }, this)
                     ]
                 }, void 0, true, {
                     fileName: "[project]/app/table/page.tsx",
-                    lineNumber: 361,
+                    lineNumber: 425,
                     columnNumber: 9
                 }, this),
                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1477,7 +1790,7 @@ function TablePageInner() {
                                     children: item.img
                                 }, void 0, false, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 400,
+                                    lineNumber: 464,
                                     columnNumber: 17
                                 }, this),
                                 item.badge && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1491,7 +1804,7 @@ function TablePageInner() {
                                     children: BADGE_LABEL[item.badge] || item.badge
                                 }, void 0, false, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 402,
+                                    lineNumber: 466,
                                     columnNumber: 19
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1509,7 +1822,7 @@ function TablePageInner() {
                                             children: item.name
                                         }, void 0, false, {
                                             fileName: "[project]/app/table/page.tsx",
-                                            lineNumber: 407,
+                                            lineNumber: 471,
                                             columnNumber: 19
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1522,7 +1835,7 @@ function TablePageInner() {
                                             children: item.desc
                                         }, void 0, false, {
                                             fileName: "[project]/app/table/page.tsx",
-                                            lineNumber: 408,
+                                            lineNumber: 472,
                                             columnNumber: 19
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1544,7 +1857,7 @@ function TablePageInner() {
                                                     ]
                                                 }, void 0, true, {
                                                     fileName: "[project]/app/table/page.tsx",
-                                                    lineNumber: 410,
+                                                    lineNumber: 474,
                                                     columnNumber: 21
                                                 }, this),
                                                 qty === 0 ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1558,7 +1871,7 @@ function TablePageInner() {
                                                     children: "+ Add"
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/table/page.tsx",
-                                                    lineNumber: 412,
+                                                    lineNumber: 476,
                                                     columnNumber: 23
                                                 }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                                     style: {
@@ -1586,7 +1899,7 @@ function TablePageInner() {
                                                             children: "−"
                                                         }, void 0, false, {
                                                             fileName: "[project]/app/table/page.tsx",
-                                                            lineNumber: 415,
+                                                            lineNumber: 479,
                                                             columnNumber: 25
                                                         }, this),
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -1600,7 +1913,7 @@ function TablePageInner() {
                                                             children: qty
                                                         }, void 0, false, {
                                                             fileName: "[project]/app/table/page.tsx",
-                                                            lineNumber: 416,
+                                                            lineNumber: 480,
                                                             columnNumber: 25
                                                         }, this),
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1622,37 +1935,37 @@ function TablePageInner() {
                                                             children: "+"
                                                         }, void 0, false, {
                                                             fileName: "[project]/app/table/page.tsx",
-                                                            lineNumber: 417,
+                                                            lineNumber: 481,
                                                             columnNumber: 25
                                                         }, this)
                                                     ]
                                                 }, void 0, true, {
                                                     fileName: "[project]/app/table/page.tsx",
-                                                    lineNumber: 414,
+                                                    lineNumber: 478,
                                                     columnNumber: 23
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/table/page.tsx",
-                                            lineNumber: 409,
+                                            lineNumber: 473,
                                             columnNumber: 19
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 406,
+                                    lineNumber: 470,
                                     columnNumber: 17
                                 }, this)
                             ]
                         }, item.id, true, {
                             fileName: "[project]/app/table/page.tsx",
-                            lineNumber: 399,
+                            lineNumber: 463,
                             columnNumber: 15
                         }, this);
                     })
                 }, void 0, false, {
                     fileName: "[project]/app/table/page.tsx",
-                    lineNumber: 395,
+                    lineNumber: 459,
                     columnNumber: 9
                 }, this),
                 cartCount > 0 && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1688,7 +2001,7 @@ function TablePageInner() {
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 431,
+                                lineNumber: 495,
                                 columnNumber: 15
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -1699,24 +2012,24 @@ function TablePageInner() {
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 432,
+                                lineNumber: 496,
                                 columnNumber: 15
                             }, this)
                         ]
                     }, void 0, true, {
                         fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 430,
+                        lineNumber: 494,
                         columnNumber: 13
                     }, this)
                 }, void 0, false, {
                     fileName: "[project]/app/table/page.tsx",
-                    lineNumber: 429,
+                    lineNumber: 493,
                     columnNumber: 11
                 }, this)
             ]
         }, void 0, true, {
             fileName: "[project]/app/table/page.tsx",
-            lineNumber: 359,
+            lineNumber: 423,
             columnNumber: 7
         }, this);
     }
@@ -1760,7 +2073,7 @@ function TablePageInner() {
                             children: "←"
                         }, void 0, false, {
                             fileName: "[project]/app/table/page.tsx",
-                            lineNumber: 452,
+                            lineNumber: 516,
                             columnNumber: 11
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1773,7 +2086,7 @@ function TablePageInner() {
                                     children: "🛒 Your Cart"
                                 }, void 0, false, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 454,
+                                    lineNumber: 518,
                                     columnNumber: 13
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1789,19 +2102,19 @@ function TablePageInner() {
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 455,
+                                    lineNumber: 519,
                                     columnNumber: 13
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/table/page.tsx",
-                            lineNumber: 453,
+                            lineNumber: 517,
                             columnNumber: 11
                         }, this)
                     ]
                 }, void 0, true, {
                     fileName: "[project]/app/table/page.tsx",
-                    lineNumber: 451,
+                    lineNumber: 515,
                     columnNumber: 9
                 }, this),
                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1835,7 +2148,7 @@ function TablePageInner() {
                                                 children: item.img
                                             }, void 0, false, {
                                                 fileName: "[project]/app/table/page.tsx",
-                                                lineNumber: 463,
+                                                lineNumber: 527,
                                                 columnNumber: 17
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1849,7 +2162,7 @@ function TablePageInner() {
                                                         children: item.name
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/table/page.tsx",
-                                                        lineNumber: 465,
+                                                        lineNumber: 529,
                                                         columnNumber: 19
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1864,19 +2177,19 @@ function TablePageInner() {
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/app/table/page.tsx",
-                                                        lineNumber: 466,
+                                                        lineNumber: 530,
                                                         columnNumber: 19
                                                     }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/table/page.tsx",
-                                                lineNumber: 464,
+                                                lineNumber: 528,
                                                 columnNumber: 17
                                             }, this)
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/app/table/page.tsx",
-                                        lineNumber: 462,
+                                        lineNumber: 526,
                                         columnNumber: 15
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1905,7 +2218,7 @@ function TablePageInner() {
                                                 children: "−"
                                             }, void 0, false, {
                                                 fileName: "[project]/app/table/page.tsx",
-                                                lineNumber: 470,
+                                                lineNumber: 534,
                                                 columnNumber: 17
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -1918,7 +2231,7 @@ function TablePageInner() {
                                                 children: item.qty
                                             }, void 0, false, {
                                                 fileName: "[project]/app/table/page.tsx",
-                                                lineNumber: 471,
+                                                lineNumber: 535,
                                                 columnNumber: 17
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1940,7 +2253,7 @@ function TablePageInner() {
                                                 children: "+"
                                             }, void 0, false, {
                                                 fileName: "[project]/app/table/page.tsx",
-                                                lineNumber: 472,
+                                                lineNumber: 536,
                                                 columnNumber: 17
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -1957,19 +2270,19 @@ function TablePageInner() {
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/table/page.tsx",
-                                                lineNumber: 473,
+                                                lineNumber: 537,
                                                 columnNumber: 17
                                             }, this)
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/app/table/page.tsx",
-                                        lineNumber: 469,
+                                        lineNumber: 533,
                                         columnNumber: 15
                                     }, this)
                                 ]
                             }, item.id, true, {
                                 fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 461,
+                                lineNumber: 525,
                                 columnNumber: 13
                             }, this)),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1988,7 +2301,7 @@ function TablePageInner() {
                                     children: "Special Instructions (optional)"
                                 }, void 0, false, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 479,
+                                    lineNumber: 543,
                                     columnNumber: 13
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("textarea", {
@@ -2008,13 +2321,13 @@ function TablePageInner() {
                                     }
                                 }, void 0, false, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 480,
+                                    lineNumber: 544,
                                     columnNumber: 13
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/table/page.tsx",
-                            lineNumber: 478,
+                            lineNumber: 542,
                             columnNumber: 11
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2043,7 +2356,7 @@ function TablePageInner() {
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/table/page.tsx",
-                                            lineNumber: 491,
+                                            lineNumber: 555,
                                             columnNumber: 15
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -2053,13 +2366,13 @@ function TablePageInner() {
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/table/page.tsx",
-                                            lineNumber: 492,
+                                            lineNumber: 556,
                                             columnNumber: 15
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 490,
+                                    lineNumber: 554,
                                     columnNumber: 13
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2078,7 +2391,7 @@ function TablePageInner() {
                                             children: "Order Total"
                                         }, void 0, false, {
                                             fileName: "[project]/app/table/page.tsx",
-                                            lineNumber: 495,
+                                            lineNumber: 559,
                                             columnNumber: 15
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -2088,25 +2401,25 @@ function TablePageInner() {
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/table/page.tsx",
-                                            lineNumber: 496,
+                                            lineNumber: 560,
                                             columnNumber: 15
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 494,
+                                    lineNumber: 558,
                                     columnNumber: 13
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/table/page.tsx",
-                            lineNumber: 489,
+                            lineNumber: 553,
                             columnNumber: 11
                         }, this)
                     ]
                 }, void 0, true, {
                     fileName: "[project]/app/table/page.tsx",
-                    lineNumber: 459,
+                    lineNumber: 523,
                     columnNumber: 9
                 }, this),
                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2135,22 +2448,165 @@ function TablePageInner() {
                         ]
                     }, void 0, true, {
                         fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 502,
+                        lineNumber: 566,
                         columnNumber: 11
                     }, this)
                 }, void 0, false, {
                     fileName: "[project]/app/table/page.tsx",
-                    lineNumber: 501,
+                    lineNumber: 565,
                     columnNumber: 9
                 }, this)
             ]
         }, void 0, true, {
             fileName: "[project]/app/table/page.tsx",
-            lineNumber: 450,
+            lineNumber: 514,
             columnNumber: 7
         }, this);
     }
     // ─── Tracking view ────────────────────────────────────────────────────────
+    // ── Closed tab → Thank You screen ────────────────────────────────────────
+    if (tab?.tabStatus === 'closed') {
+        return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+            style: {
+                minHeight: '100vh',
+                background: 'linear-gradient(135deg,#064e3b,#065f46)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontFamily: 'Poppins,sans-serif',
+                padding: '2rem'
+            },
+            children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                style: {
+                    textAlign: 'center',
+                    color: 'white',
+                    maxWidth: 360
+                },
+                children: [
+                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                        style: {
+                            fontSize: '4rem',
+                            marginBottom: '0.75rem'
+                        },
+                        children: "🙏"
+                    }, void 0, false, {
+                        fileName: "[project]/app/table/page.tsx",
+                        lineNumber: 584,
+                        columnNumber: 11
+                    }, this),
+                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                        style: {
+                            fontFamily: "'Playfair Display',serif",
+                            fontSize: '2rem',
+                            fontWeight: 900,
+                            color: '#6ee7b7',
+                            marginBottom: '0.4rem'
+                        },
+                        children: "Thank You!"
+                    }, void 0, false, {
+                        fileName: "[project]/app/table/page.tsx",
+                        lineNumber: 585,
+                        columnNumber: 11
+                    }, this),
+                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                        style: {
+                            fontSize: '1.05rem',
+                            fontWeight: 700,
+                            marginBottom: '0.3rem'
+                        },
+                        children: "Payment Received ✅"
+                    }, void 0, false, {
+                        fileName: "[project]/app/table/page.tsx",
+                        lineNumber: 588,
+                        columnNumber: 11
+                    }, this),
+                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                        style: {
+                            fontSize: '0.85rem',
+                            color: '#a7f3d0',
+                            marginBottom: '1rem',
+                            lineHeight: 1.5
+                        },
+                        children: "Hope you enjoyed your meal at Foodie Lover! We look forward to seeing you again."
+                    }, void 0, false, {
+                        fileName: "[project]/app/table/page.tsx",
+                        lineNumber: 591,
+                        columnNumber: 11
+                    }, this),
+                    tabDiscount > 0 && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                        style: {
+                            background: 'rgba(255,255,255,0.1)',
+                            borderRadius: 10,
+                            padding: '0.6rem 1rem',
+                            marginBottom: '0.75rem',
+                            fontSize: '0.82rem',
+                            color: '#d1fae5'
+                        },
+                        children: [
+                            "🏷️ Discount applied: −₹",
+                            tabDiscount
+                        ]
+                    }, void 0, true, {
+                        fileName: "[project]/app/table/page.tsx",
+                        lineNumber: 595,
+                        columnNumber: 13
+                    }, this),
+                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                        style: {
+                            fontSize: '0.8rem',
+                            fontWeight: 700,
+                            color: '#6ee7b7',
+                            background: 'rgba(255,255,255,0.08)',
+                            borderRadius: 10,
+                            padding: '0.5rem 1rem',
+                            display: 'inline-block'
+                        },
+                        children: [
+                            "Bill Paid: ₹",
+                            billTotal,
+                            " · Table ",
+                            tableId
+                        ]
+                    }, void 0, true, {
+                        fileName: "[project]/app/table/page.tsx",
+                        lineNumber: 599,
+                        columnNumber: 11
+                    }, this),
+                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                        style: {
+                            marginTop: '1.5rem',
+                            fontSize: '1.5rem'
+                        },
+                        children: "⭐⭐⭐⭐⭐"
+                    }, void 0, false, {
+                        fileName: "[project]/app/table/page.tsx",
+                        lineNumber: 602,
+                        columnNumber: 11
+                    }, this),
+                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                        style: {
+                            fontSize: '0.72rem',
+                            color: '#6ee7b7',
+                            marginTop: '0.4rem'
+                        },
+                        children: "Scan QR again to start a new order"
+                    }, void 0, false, {
+                        fileName: "[project]/app/table/page.tsx",
+                        lineNumber: 603,
+                        columnNumber: 11
+                    }, this)
+                ]
+            }, void 0, true, {
+                fileName: "[project]/app/table/page.tsx",
+                lineNumber: 583,
+                columnNumber: 9
+            }, this)
+        }, void 0, false, {
+            fileName: "[project]/app/table/page.tsx",
+            lineNumber: 582,
+            columnNumber: 7
+        }, this);
+    }
     return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
         style: {
             minHeight: '100vh',
@@ -2159,6 +2615,143 @@ function TablePageInner() {
             paddingBottom: '80px'
         },
         children: [
+            disputeOrder && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                style: {
+                    position: 'fixed',
+                    inset: 0,
+                    background: 'rgba(0,0,0,0.7)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 300,
+                    padding: '1rem'
+                },
+                children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                    style: {
+                        background: 'white',
+                        borderRadius: 20,
+                        padding: '1.75rem 1.5rem',
+                        width: '100%',
+                        maxWidth: 360,
+                        textAlign: 'center',
+                        boxShadow: '0 24px 60px rgba(0,0,0,0.4)'
+                    },
+                    children: [
+                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                            style: {
+                                fontSize: '3rem',
+                                marginBottom: '0.6rem'
+                            },
+                            children: "🍽️"
+                        }, void 0, false, {
+                            fileName: "[project]/app/table/page.tsx",
+                            lineNumber: 616,
+                            columnNumber: 13
+                        }, this),
+                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                            style: {
+                                fontWeight: 800,
+                                fontSize: '1.05rem',
+                                color: '#1A0800',
+                                marginBottom: '0.4rem'
+                            },
+                            children: "Did you receive your food?"
+                        }, void 0, false, {
+                            fileName: "[project]/app/table/page.tsx",
+                            lineNumber: 617,
+                            columnNumber: 13
+                        }, this),
+                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                            style: {
+                                fontSize: '0.82rem',
+                                color: '#888',
+                                marginBottom: '0.25rem'
+                            },
+                            children: [
+                                "Order #",
+                                disputeOrder.orderNum || disputeOrder.id.slice(-4),
+                                " has been marked as delivered to your table."
+                            ]
+                        }, void 0, true, {
+                            fileName: "[project]/app/table/page.tsx",
+                            lineNumber: 620,
+                            columnNumber: 13
+                        }, this),
+                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                            style: {
+                                fontSize: '0.75rem',
+                                color: '#bbb',
+                                marginBottom: '1.5rem'
+                            },
+                            children: "If you didn't get it, we'll alert your waiter immediately."
+                        }, void 0, false, {
+                            fileName: "[project]/app/table/page.tsx",
+                            lineNumber: 623,
+                            columnNumber: 13
+                        }, this),
+                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                            style: {
+                                display: 'flex',
+                                gap: '0.6rem'
+                            },
+                            children: [
+                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                    onClick: ()=>handleFoodConfirm(false),
+                                    style: {
+                                        flex: 1,
+                                        padding: '0.85rem',
+                                        borderRadius: 12,
+                                        background: '#fef2f2',
+                                        border: '2px solid #ef4444',
+                                        color: '#ef4444',
+                                        fontWeight: 800,
+                                        cursor: 'pointer',
+                                        fontSize: '0.88rem',
+                                        fontFamily: 'Poppins,sans-serif'
+                                    },
+                                    children: "❌ Not received"
+                                }, void 0, false, {
+                                    fileName: "[project]/app/table/page.tsx",
+                                    lineNumber: 627,
+                                    columnNumber: 15
+                                }, this),
+                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                    onClick: ()=>handleFoodConfirm(true),
+                                    style: {
+                                        flex: 1,
+                                        padding: '0.85rem',
+                                        borderRadius: 12,
+                                        background: '#16a34a',
+                                        border: 'none',
+                                        color: 'white',
+                                        fontWeight: 800,
+                                        cursor: 'pointer',
+                                        fontSize: '0.88rem',
+                                        fontFamily: 'Poppins,sans-serif'
+                                    },
+                                    children: "✅ Yes, got it!"
+                                }, void 0, false, {
+                                    fileName: "[project]/app/table/page.tsx",
+                                    lineNumber: 633,
+                                    columnNumber: 15
+                                }, this)
+                            ]
+                        }, void 0, true, {
+                            fileName: "[project]/app/table/page.tsx",
+                            lineNumber: 626,
+                            columnNumber: 13
+                        }, this)
+                    ]
+                }, void 0, true, {
+                    fileName: "[project]/app/table/page.tsx",
+                    lineNumber: 615,
+                    columnNumber: 11
+                }, this)
+            }, void 0, false, {
+                fileName: "[project]/app/table/page.tsx",
+                lineNumber: 614,
+                columnNumber: 9
+            }, this),
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                 style: {
                     background: 'linear-gradient(135deg,#1A0800,#3D1C00)',
@@ -2183,7 +2776,7 @@ function TablePageInner() {
                                     children: "🍽️ My Tab"
                                 }, void 0, false, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 520,
+                                    lineNumber: 648,
                                     columnNumber: 13
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2199,13 +2792,13 @@ function TablePageInner() {
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 521,
+                                    lineNumber: 649,
                                     columnNumber: 13
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/table/page.tsx",
-                            lineNumber: 519,
+                            lineNumber: 647,
                             columnNumber: 11
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2223,23 +2816,23 @@ function TablePageInner() {
                                 children: "+ Add More"
                             }, void 0, false, {
                                 fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 525,
+                                lineNumber: 653,
                                 columnNumber: 15
                             }, this)
                         }, void 0, false, {
                             fileName: "[project]/app/table/page.tsx",
-                            lineNumber: 523,
+                            lineNumber: 651,
                             columnNumber: 11
                         }, this)
                     ]
                 }, void 0, true, {
                     fileName: "[project]/app/table/page.tsx",
-                    lineNumber: 518,
+                    lineNumber: 646,
                     columnNumber: 9
                 }, this)
             }, void 0, false, {
                 fileName: "[project]/app/table/page.tsx",
-                lineNumber: 517,
+                lineNumber: 645,
                 columnNumber: 7
             }, this),
             orderMsg && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2255,7 +2848,7 @@ function TablePageInner() {
                 children: orderMsg
             }, void 0, false, {
                 fileName: "[project]/app/table/page.tsx",
-                lineNumber: 535,
+                lineNumber: 663,
                 columnNumber: 9
             }, this),
             billMsg && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2271,7 +2864,7 @@ function TablePageInner() {
                 children: billMsg
             }, void 0, false, {
                 fileName: "[project]/app/table/page.tsx",
-                lineNumber: 542,
+                lineNumber: 670,
                 columnNumber: 9
             }, this),
             tab?.tabStatus === 'awaiting_payment' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2287,7 +2880,7 @@ function TablePageInner() {
                 children: "💳 Bill Requested — Please proceed to the counter to pay"
             }, void 0, false, {
                 fileName: "[project]/app/table/page.tsx",
-                lineNumber: 549,
+                lineNumber: 677,
                 columnNumber: 9
             }, this),
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2309,7 +2902,7 @@ function TablePageInner() {
                             children: "🍽️"
                         }, void 0, false, {
                             fileName: "[project]/app/table/page.tsx",
-                            lineNumber: 558,
+                            lineNumber: 686,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2320,7 +2913,7 @@ function TablePageInner() {
                             children: "No orders yet"
                         }, void 0, false, {
                             fileName: "[project]/app/table/page.tsx",
-                            lineNumber: 559,
+                            lineNumber: 687,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2331,7 +2924,7 @@ function TablePageInner() {
                             children: "Browse our menu and place your first order!"
                         }, void 0, false, {
                             fileName: "[project]/app/table/page.tsx",
-                            lineNumber: 560,
+                            lineNumber: 688,
                             columnNumber: 13
                         }, this),
                         tab?.tabStatus === 'open' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -2344,13 +2937,13 @@ function TablePageInner() {
                             children: "🍛 Browse Menu"
                         }, void 0, false, {
                             fileName: "[project]/app/table/page.tsx",
-                            lineNumber: 562,
+                            lineNumber: 690,
                             columnNumber: 15
                         }, this)
                     ]
                 }, void 0, true, {
                     fileName: "[project]/app/table/page.tsx",
-                    lineNumber: 557,
+                    lineNumber: 685,
                     columnNumber: 11
                 }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["Fragment"], {
                     children: [
@@ -2379,12 +2972,12 @@ function TablePageInner() {
                                     children: v === 'aggregated' ? '📋 Summary' : '🗃️ By Order'
                                 }, v, false, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 572,
+                                    lineNumber: 700,
                                     columnNumber: 17
                                 }, this))
                         }, void 0, false, {
                             fileName: "[project]/app/table/page.tsx",
-                            lineNumber: 570,
+                            lineNumber: 698,
                             columnNumber: 13
                         }, this),
                         trackingView === 'aggregated' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2426,13 +3019,13 @@ function TablePageInner() {
                                                             ]
                                                         }, void 0, true, {
                                                             fileName: "[project]/app/table/page.tsx",
-                                                            lineNumber: 594,
+                                                            lineNumber: 722,
                                                             columnNumber: 107
                                                         }, this)
                                                     ]
                                                 }, void 0, true, {
                                                     fileName: "[project]/app/table/page.tsx",
-                                                    lineNumber: 594,
+                                                    lineNumber: 722,
                                                     columnNumber: 23
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2451,18 +3044,18 @@ function TablePageInner() {
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/app/table/page.tsx",
-                                                        lineNumber: 596,
+                                                        lineNumber: 724,
                                                         columnNumber: 25
                                                     }, this)
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/table/page.tsx",
-                                                    lineNumber: 595,
+                                                    lineNumber: 723,
                                                     columnNumber: 23
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/table/page.tsx",
-                                            lineNumber: 593,
+                                            lineNumber: 721,
                                             columnNumber: 21
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -2477,18 +3070,18 @@ function TablePageInner() {
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/table/page.tsx",
-                                            lineNumber: 599,
+                                            lineNumber: 727,
                                             columnNumber: 21
                                         }, this)
                                     ]
                                 }, i, true, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 592,
+                                    lineNumber: 720,
                                     columnNumber: 19
                                 }, this))
                         }, void 0, false, {
                             fileName: "[project]/app/table/page.tsx",
-                            lineNumber: 590,
+                            lineNumber: 718,
                             columnNumber: 15
                         }, this),
                         trackingView === 'individual' && activeTabOrders.map((order)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2524,7 +3117,7 @@ function TablePageInner() {
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/app/table/page.tsx",
-                                                        lineNumber: 610,
+                                                        lineNumber: 738,
                                                         columnNumber: 21
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2540,13 +3133,13 @@ function TablePageInner() {
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/app/table/page.tsx",
-                                                        lineNumber: 611,
+                                                        lineNumber: 739,
                                                         columnNumber: 21
                                                     }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/table/page.tsx",
-                                                lineNumber: 609,
+                                                lineNumber: 737,
                                                 columnNumber: 19
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -2560,13 +3153,13 @@ function TablePageInner() {
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/table/page.tsx",
-                                                lineNumber: 613,
+                                                lineNumber: 741,
                                                 columnNumber: 19
                                             }, this)
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/app/table/page.tsx",
-                                        lineNumber: 608,
+                                        lineNumber: 736,
                                         columnNumber: 17
                                     }, this),
                                     (order.items || []).map((item, i)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2592,13 +3185,13 @@ function TablePageInner() {
                                                             ]
                                                         }, void 0, true, {
                                                             fileName: "[project]/app/table/page.tsx",
-                                                            lineNumber: 617,
+                                                            lineNumber: 745,
                                                             columnNumber: 39
                                                         }, this)
                                                     ]
                                                 }, void 0, true, {
                                                     fileName: "[project]/app/table/page.tsx",
-                                                    lineNumber: 617,
+                                                    lineNumber: 745,
                                                     columnNumber: 21
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -2608,19 +3201,19 @@ function TablePageInner() {
                                                     ]
                                                 }, void 0, true, {
                                                     fileName: "[project]/app/table/page.tsx",
-                                                    lineNumber: 618,
+                                                    lineNumber: 746,
                                                     columnNumber: 21
                                                 }, this)
                                             ]
                                         }, i, true, {
                                             fileName: "[project]/app/table/page.tsx",
-                                            lineNumber: 616,
+                                            lineNumber: 744,
                                             columnNumber: 19
                                         }, this))
                                 ]
                             }, order.id, true, {
                                 fileName: "[project]/app/table/page.tsx",
-                                lineNumber: 607,
+                                lineNumber: 735,
                                 columnNumber: 15
                             }, this)),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2645,7 +3238,7 @@ function TablePageInner() {
                                             children: "Subtotal"
                                         }, void 0, false, {
                                             fileName: "[project]/app/table/page.tsx",
-                                            lineNumber: 627,
+                                            lineNumber: 755,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -2655,13 +3248,13 @@ function TablePageInner() {
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/table/page.tsx",
-                                            lineNumber: 628,
+                                            lineNumber: 756,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 626,
+                                    lineNumber: 754,
                                     columnNumber: 15
                                 }, this),
                                 tabDiscount > 0 && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2677,7 +3270,7 @@ function TablePageInner() {
                                             children: "Discount"
                                         }, void 0, false, {
                                             fileName: "[project]/app/table/page.tsx",
-                                            lineNumber: 632,
+                                            lineNumber: 760,
                                             columnNumber: 19
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -2687,13 +3280,13 @@ function TablePageInner() {
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/table/page.tsx",
-                                            lineNumber: 633,
+                                            lineNumber: 761,
                                             columnNumber: 19
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 631,
+                                    lineNumber: 759,
                                     columnNumber: 17
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2712,7 +3305,7 @@ function TablePageInner() {
                                             children: "Total"
                                         }, void 0, false, {
                                             fileName: "[project]/app/table/page.tsx",
-                                            lineNumber: 637,
+                                            lineNumber: 765,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -2722,19 +3315,19 @@ function TablePageInner() {
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/table/page.tsx",
-                                            lineNumber: 638,
+                                            lineNumber: 766,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 636,
+                                    lineNumber: 764,
                                     columnNumber: 15
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/table/page.tsx",
-                            lineNumber: 625,
+                            lineNumber: 753,
                             columnNumber: 13
                         }, this),
                         tab?.tabStatus === 'open' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2757,7 +3350,7 @@ function TablePageInner() {
                                     children: "⏳ Your food is still being prepared. You can request the bill once everything is served."
                                 }, void 0, false, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 646,
+                                    lineNumber: 774,
                                     columnNumber: 19
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -2775,13 +3368,13 @@ function TablePageInner() {
                                     children: "🧾 Request Bill"
                                 }, void 0, false, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 654,
+                                    lineNumber: 782,
                                     columnNumber: 17
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/table/page.tsx",
-                            lineNumber: 644,
+                            lineNumber: 772,
                             columnNumber: 15
                         }, this),
                         tab?.tabStatus === 'awaiting_payment' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2802,7 +3395,7 @@ function TablePageInner() {
                                     children: "💳"
                                 }, void 0, false, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 671,
+                                    lineNumber: 799,
                                     columnNumber: 17
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2814,7 +3407,7 @@ function TablePageInner() {
                                     children: "Bill Requested!"
                                 }, void 0, false, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 672,
+                                    lineNumber: 800,
                                     columnNumber: 17
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2828,23 +3421,23 @@ function TablePageInner() {
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/table/page.tsx",
-                                    lineNumber: 673,
+                                    lineNumber: 801,
                                     columnNumber: 17
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/table/page.tsx",
-                            lineNumber: 670,
+                            lineNumber: 798,
                             columnNumber: 15
                         }, this)
                     ]
                 }, void 0, true)
             }, void 0, false, {
                 fileName: "[project]/app/table/page.tsx",
-                lineNumber: 554,
+                lineNumber: 682,
                 columnNumber: 7
             }, this),
-            tab?.tabStatus === 'open' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+            tab && tab.tabStatus !== 'closed' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                 style: {
                     position: 'fixed',
                     bottom: 0,
@@ -2857,34 +3450,54 @@ function TablePageInner() {
                     gap: '0.5rem',
                     zIndex: 100
                 },
-                children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
-                    onClick: ()=>setView('menu'),
-                    style: {
-                        ...btn('#E65C00'),
-                        flex: 1,
-                        padding: '0.7rem',
-                        borderRadius: 10,
-                        fontSize: '0.85rem'
-                    },
-                    children: "🍛 Order More"
-                }, void 0, false, {
-                    fileName: "[project]/app/table/page.tsx",
-                    lineNumber: 683,
-                    columnNumber: 11
-                }, this)
-            }, void 0, false, {
+                children: [
+                    tab.tabStatus === 'open' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                        onClick: ()=>setView('menu'),
+                        style: {
+                            ...btn('#E65C00'),
+                            flex: 1,
+                            padding: '0.7rem',
+                            borderRadius: 10,
+                            fontSize: '0.85rem'
+                        },
+                        children: "🍛 Order More"
+                    }, void 0, false, {
+                        fileName: "[project]/app/table/page.tsx",
+                        lineNumber: 812,
+                        columnNumber: 13
+                    }, this),
+                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                        onClick: handleCallWaiter,
+                        disabled: callCooldown > 0,
+                        style: {
+                            ...btn(callCooldown > 0 ? '#9ca3af' : '#1A0800'),
+                            flex: 1,
+                            padding: '0.7rem',
+                            borderRadius: 10,
+                            fontSize: '0.82rem',
+                            cursor: callCooldown > 0 ? 'not-allowed' : 'pointer',
+                            opacity: callCooldown > 0 ? 0.8 : 1
+                        },
+                        children: callCooldown > 0 ? `🔔 Wait ${callCooldown}s` : '🔔 Call Waiter'
+                    }, void 0, false, {
+                        fileName: "[project]/app/table/page.tsx",
+                        lineNumber: 816,
+                        columnNumber: 11
+                    }, this)
+                ]
+            }, void 0, true, {
                 fileName: "[project]/app/table/page.tsx",
-                lineNumber: 682,
+                lineNumber: 810,
                 columnNumber: 9
             }, this)
         ]
     }, void 0, true, {
         fileName: "[project]/app/table/page.tsx",
-        lineNumber: 515,
+        lineNumber: 610,
         columnNumber: 5
     }, this);
 }
-_s(TablePageInner, "29lUH63EzPHOIlT7qdfUotSUKOU=", false, function() {
+_s(TablePageInner, "ankqXz1+PcI5F/Rw0HHcjKFtRro=", false, function() {
     return [
         __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$navigation$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useSearchParams"]
     ];
@@ -2914,7 +3527,7 @@ function TablePage() {
                         children: "🍽️"
                     }, void 0, false, {
                         fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 698,
+                        lineNumber: 840,
                         columnNumber: 11
                     }, void 0),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2924,28 +3537,28 @@ function TablePage() {
                         children: "Loading…"
                     }, void 0, false, {
                         fileName: "[project]/app/table/page.tsx",
-                        lineNumber: 699,
+                        lineNumber: 841,
                         columnNumber: 11
                     }, void 0)
                 ]
             }, void 0, true, {
                 fileName: "[project]/app/table/page.tsx",
-                lineNumber: 697,
+                lineNumber: 839,
                 columnNumber: 9
             }, void 0)
         }, void 0, false, {
             fileName: "[project]/app/table/page.tsx",
-            lineNumber: 696,
+            lineNumber: 838,
             columnNumber: 7
         }, void 0),
         children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(TablePageInner, {}, void 0, false, {
             fileName: "[project]/app/table/page.tsx",
-            lineNumber: 703,
+            lineNumber: 845,
             columnNumber: 7
         }, this)
     }, void 0, false, {
         fileName: "[project]/app/table/page.tsx",
-        lineNumber: 695,
+        lineNumber: 837,
         columnNumber: 5
     }, this);
 }

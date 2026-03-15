@@ -232,16 +232,22 @@ if (typeof globalThis.$RefreshHelpers$ === 'object' && globalThis.$RefreshHelper
 "use strict";
 
 // ─── Foodie Lover — Storage Layer ─────────────────────────────────────────────
-// All persistence via localStorage (no backend).
+// All persistence via localStorage (no backend). v2.0 — CustomerTab system.
 // Exports every type and function used across pages.
 // ─── Types ────────────────────────────────────────────────────────────────────
 __turbopack_context__.s([
     "DEFAULT_MENU",
     ()=>DEFAULT_MENU,
+    "acknowledgeWaiterCall",
+    ()=>acknowledgeWaiterCall,
+    "addFoodReceiptDispute",
+    ()=>addFoodReceiptDispute,
     "addOrder",
     ()=>addOrder,
     "addOrderToTab",
     ()=>addOrderToTab,
+    "addWaiterCall",
+    ()=>addWaiterCall,
     "applyDiscount",
     ()=>applyDiscount,
     "applyTabDiscount",
@@ -252,16 +258,22 @@ __turbopack_context__.s([
     ()=>clearFraudAlerts,
     "closeTab",
     ()=>closeTab,
+    "createSplitBill",
+    ()=>createSplitBill,
     "createTab",
     ()=>createTab,
     "exportOrdersCSV",
     ()=>exportOrdersCSV,
     "getActiveTabsForTable",
     ()=>getActiveTabsForTable,
+    "getDisputeAlerts",
+    ()=>getDisputeAlerts,
     "getEndOfDayReport",
     ()=>getEndOfDayReport,
     "getFraudAlerts",
     ()=>getFraudAlerts,
+    "getLastWaiterCallTime",
+    ()=>getLastWaiterCallTime,
     "getMenu",
     ()=>getMenu,
     "getNextOrderNumber",
@@ -272,34 +284,62 @@ __turbopack_context__.s([
     ()=>getOrders,
     "getOrdersInPeriod",
     ()=>getOrdersInPeriod,
+    "getPendingDisputes",
+    ()=>getPendingDisputes,
+    "getPendingWaiterCalls",
+    ()=>getPendingWaiterCalls,
     "getPin",
     ()=>getPin,
+    "getSplitBillForTab",
+    ()=>getSplitBillForTab,
+    "getSplitBills",
+    ()=>getSplitBills,
     "getTab",
     ()=>getTab,
     "getTabOrders",
     ()=>getTabOrders,
     "getTableOccupancy",
     ()=>getTableOccupancy,
+    "getTableOccupancyStats",
+    ()=>getTableOccupancyStats,
     "getTables",
     ()=>getTables,
     "getTabs",
     ()=>getTabs,
+    "getWaiterCalls",
+    ()=>getWaiterCalls,
+    "getWaiterStats",
+    ()=>getWaiterStats,
+    "isSplitFullyPaid",
+    ()=>isSplitFullyPaid,
+    "markSplitEntryPaid",
+    ()=>markSplitEntryPaid,
     "requestBill",
     ()=>requestBill,
+    "resolveDispute",
+    ()=>resolveDispute,
+    "saveDisputeAlerts",
+    ()=>saveDisputeAlerts,
     "saveMenu",
     ()=>saveMenu,
     "saveOrders",
     ()=>saveOrders,
     "savePin",
     ()=>savePin,
+    "saveSplitBills",
+    ()=>saveSplitBills,
     "saveTables",
     ()=>saveTables,
     "saveTabs",
     ()=>saveTabs,
+    "saveWaiterCalls",
+    ()=>saveWaiterCalls,
     "syncTabTotal",
     ()=>syncTabTotal,
     "syncTableStatus",
     ()=>syncTableStatus,
+    "updateItemStatus",
+    ()=>updateItemStatus,
     "updateOrderStatus",
     ()=>updateOrderStatus,
     "voidOrder",
@@ -313,7 +353,10 @@ const KEYS = {
     pin: 'fl_admin_pin',
     tabs: 'fl_customer_tabs',
     orderNum: 'fl_order_num_counter',
-    fraudAlerts: 'fl_fraud_alerts'
+    fraudAlerts: 'fl_fraud_alerts',
+    waiterCalls: 'fl_waiter_calls',
+    disputes: 'fl_food_disputes',
+    splitBills: 'fl_split_bills'
 };
 // ─── Storage helpers ──────────────────────────────────────────────────────────
 function ls_get(key, fallback) {
@@ -957,6 +1000,196 @@ function getEndOfDayReport(date) {
         discountsTotal
     };
 }
+function updateItemStatus(orderId, itemIndex, status, by = 'Kitchen') {
+    const orders = getOrders();
+    const idx = orders.findIndex((o)=>o.id === orderId);
+    if (idx === -1) return false;
+    const items = [
+        ...orders[idx].items || []
+    ];
+    if (itemIndex < 0 || itemIndex >= items.length) return false;
+    items[itemIndex] = {
+        ...items[itemIndex],
+        itemStatus: status
+    };
+    orders[idx] = {
+        ...orders[idx],
+        items
+    };
+    saveOrders(orders);
+    return true;
+}
+const getWaiterCalls = ()=>ls_get(KEYS.waiterCalls, []);
+const saveWaiterCalls = (c)=>ls_set(KEYS.waiterCalls, c);
+const getPendingWaiterCalls = ()=>getWaiterCalls().filter((c)=>!c.acknowledged);
+function addWaiterCall(tableId, tabId, customerName) {
+    const call = {
+        id: `WC-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+        tableId,
+        tabId,
+        customerName,
+        at: new Date().toISOString(),
+        acknowledged: false
+    };
+    const calls = getWaiterCalls();
+    calls.push(call);
+    if (calls.length > 100) calls.splice(0, calls.length - 100);
+    saveWaiterCalls(calls);
+    return call;
+}
+function acknowledgeWaiterCall(id, by = 'Waiter') {
+    const calls = getWaiterCalls();
+    const idx = calls.findIndex((c)=>c.id === id);
+    if (idx === -1) return false;
+    calls[idx] = {
+        ...calls[idx],
+        acknowledged: true,
+        acknowledgedAt: new Date().toISOString(),
+        acknowledgedBy: by
+    };
+    saveWaiterCalls(calls);
+    return true;
+}
+function getLastWaiterCallTime(tableId) {
+    const calls = getWaiterCalls();
+    const recent = calls.filter((c)=>c.tableId === tableId).sort((a, b)=>new Date(b.at).getTime() - new Date(a.at).getTime());
+    if (!recent.length) return null;
+    if (Date.now() - new Date(recent[0].at).getTime() > 5 * 60 * 1000) return null;
+    return recent[0].at;
+}
+const getDisputeAlerts = ()=>ls_get(KEYS.disputes, []);
+const saveDisputeAlerts = (d)=>ls_set(KEYS.disputes, d);
+const getPendingDisputes = ()=>getDisputeAlerts().filter((d)=>!d.resolved);
+function addFoodReceiptDispute(orderId, tabId, tableId, customerName) {
+    const dispute = {
+        id: `FD-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+        orderId,
+        tabId,
+        tableId,
+        customerName,
+        at: new Date().toISOString(),
+        resolved: false
+    };
+    const disputes = getDisputeAlerts();
+    disputes.push(dispute);
+    if (disputes.length > 200) disputes.splice(0, disputes.length - 200);
+    saveDisputeAlerts(disputes);
+    return dispute;
+}
+function resolveDispute(id, by = 'Waiter') {
+    const disputes = getDisputeAlerts();
+    const idx = disputes.findIndex((d)=>d.id === id);
+    if (idx === -1) return false;
+    disputes[idx] = {
+        ...disputes[idx],
+        resolved: true,
+        resolvedBy: by,
+        resolvedAt: new Date().toISOString()
+    };
+    saveDisputeAlerts(disputes);
+    return true;
+}
+const getSplitBills = ()=>ls_get(KEYS.splitBills, []);
+const saveSplitBills = (s)=>ls_set(KEYS.splitBills, s);
+function getSplitBillForTab(tabId) {
+    return getSplitBills().find((s)=>s.tabId === tabId) ?? null;
+}
+function createSplitBill(tabId, splitType, count, totalAmount) {
+    const existing = getSplitBills().filter((s)=>s.tabId !== tabId);
+    const perPerson = Math.ceil(totalAmount / count);
+    const entries = Array.from({
+        length: count
+    }, (_, i)=>({
+            personLabel: `Person ${i + 1}`,
+            amount: i === count - 1 ? totalAmount - perPerson * (count - 1) : perPerson,
+            paid: false
+        }));
+    const split = {
+        id: `SB-${Date.now()}`,
+        tabId,
+        splitType,
+        totalAmount,
+        entries,
+        createdAt: new Date().toISOString()
+    };
+    existing.push(split);
+    saveSplitBills(existing);
+    return split;
+}
+function markSplitEntryPaid(tabId, personLabel, paymentMethod) {
+    const splits = getSplitBills();
+    const idx = splits.findIndex((s)=>s.tabId === tabId);
+    if (idx === -1) return false;
+    const eIdx = splits[idx].entries.findIndex((e)=>e.personLabel === personLabel);
+    if (eIdx === -1) return false;
+    splits[idx].entries[eIdx] = {
+        ...splits[idx].entries[eIdx],
+        paid: true,
+        paymentMethod,
+        paidAt: new Date().toISOString()
+    };
+    saveSplitBills(splits);
+    return true;
+}
+function isSplitFullyPaid(tabId) {
+    const split = getSplitBillForTab(tabId);
+    return split ? split.entries.every((e)=>e.paid) : false;
+}
+function getWaiterStats() {
+    const orders = getOrders();
+    const todayStr = new Date().toDateString();
+    const todayOrders = orders.filter((o)=>new Date(o.timestamp).toDateString() === todayStr);
+    const statMap = {};
+    todayOrders.forEach((o)=>{
+        (o.timeline || []).forEach((t)=>{
+            if (!t.by || [
+                'System',
+                'Admin',
+                'Manager',
+                'Kitchen'
+            ].includes(t.by)) return;
+            if (!statMap[t.by]) statMap[t.by] = {
+                accepted: 0,
+                cancelled: 0,
+                served: 0
+            };
+            if (t.status === 'pending') statMap[t.by].accepted++;
+            if (t.status === 'cancelled') statMap[t.by].cancelled++;
+            if (t.status === 'served') statMap[t.by].served++;
+        });
+    });
+    return Object.entries(statMap).map(([name, s])=>({
+            name,
+            ordersAccepted: s.accepted,
+            ordersCancelled: s.cancelled,
+            ordersServed: s.served,
+            cancellationRate: s.accepted > 0 ? Math.round(s.cancelled / s.accepted * 100) : 0
+        })).sort((a, b)=>b.ordersCancelled - a.ordersCancelled);
+}
+function getTableOccupancyStats() {
+    const allTabs = getTabs().filter((t)=>t.tabStatus === 'closed' && t.closedAt);
+    const map = {};
+    allTabs.forEach((tab)=>{
+        if (!map[tab.tableId]) map[tab.tableId] = {
+            sessions: 0,
+            totalMins: 0,
+            revenue: 0,
+            lastUsed: ''
+        };
+        const mins = Math.floor((new Date(tab.closedAt).getTime() - new Date(tab.createdAt).getTime()) / 60000);
+        map[tab.tableId].sessions++;
+        map[tab.tableId].totalMins += mins;
+        map[tab.tableId].revenue += Math.max(0, tab.totalAmount - tab.discount);
+        if (!map[tab.tableId].lastUsed || tab.closedAt > map[tab.tableId].lastUsed) map[tab.tableId].lastUsed = tab.closedAt;
+    });
+    return Object.entries(map).map(([tableId, s])=>({
+            tableId,
+            totalSessions: s.sessions,
+            avgMinutes: s.sessions > 0 ? Math.round(s.totalMins / s.sessions) : 0,
+            totalRevenue: s.revenue,
+            lastUsed: s.lastUsed
+        })).sort((a, b)=>b.totalSessions - a.totalSessions);
+}
 if (typeof globalThis.$RefreshHelpers$ === 'object' && globalThis.$RefreshHelpers !== null) {
     __turbopack_context__.k.registerExports(__turbopack_context__.m, globalThis.$RefreshHelpers$);
 }
@@ -1030,6 +1263,14 @@ function ManagerPage() {
     const [showDiscForm, setShowDiscForm] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(false);
     const [tabBillMsg, setTabBillMsg] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('');
     const [tabCloseConfirm, setTabCloseConfirm] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(false);
+    // Split billing
+    const [splitBill, setSplitBill] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(null);
+    const [showSplitModal, setShowSplitModal] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(false);
+    const [splitCount, setSplitCount] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('2');
+    const [splitPayEntry, setSplitPayEntry] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(null);
+    const [splitPayMethod, setSplitPayMethod] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('cod');
+    // End-of-day report
+    const [showEOD, setShowEOD] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(false);
     // ── Auth ──────────────────────────────────────────────────────────────────
     (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useEffect"])({
         "ManagerPage.useEffect": ()=>{
@@ -1121,7 +1362,6 @@ function ManagerPage() {
     // ── Close tab action ──────────────────────────────────────────────────────
     function handleCloseTab() {
         if (!selTab) return;
-        // If not yet confirmed, check for in-progress orders first
         if (!tabCloseConfirm) {
             const inProgress = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getTabOrders"])(selTab.id).filter((o)=>[
                     'awaiting_waiter',
@@ -1130,11 +1370,10 @@ function ManagerPage() {
                     'prepared'
                 ].includes(o.status));
             if (inProgress.length > 0) {
-                setTabCloseConfirm(true); // Show warning, require second click
+                setTabCloseConfirm(true);
                 return;
             }
         }
-        // Proceed with close
         setTabCloseConfirm(false);
         const discount = selTab.discount || 0;
         const ok = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["closeTab"])(selTab.id, tabPayMethod, discount, selTab.discountReason, session?.name || 'Manager');
@@ -1144,9 +1383,32 @@ function ManagerPage() {
                 setTabBillMsg('');
                 setSelTab(null);
                 setTabCloseConfirm(false);
+                setSplitBill(null);
+                setShowSplitModal(false);
             }, 1800);
             refresh();
         }
+    }
+    // ── Split bill actions ────────────────────────────────────────────────────
+    function handleCreateSplit() {
+        if (!selTab) return;
+        const count = Math.max(2, Math.min(10, parseInt(splitCount) || 2));
+        const total = Math.max(0, (selTab.totalAmount || 0) - (selTab.discount || 0));
+        const split = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["createSplitBill"])(selTab.id, 'equal', count, total);
+        setSplitBill(split);
+        setShowSplitModal(false);
+    }
+    function handleMarkSplitPaid(personLabel) {
+        if (!selTab) return;
+        (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["markSplitEntryPaid"])(selTab.id, personLabel, splitPayMethod);
+        // Reload split
+        const updated = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getSplitBillForTab"])(selTab.id);
+        setSplitBill(updated);
+        setSplitPayEntry(null);
+    }
+    function loadSplitForTab(tabId) {
+        const existing = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getSplitBillForTab"])(tabId);
+        setSplitBill(existing);
     }
     // ── Derived data ──────────────────────────────────────────────────────────
     const awaitingTabs = tabs.filter((t)=>t.tabStatus === 'awaiting_payment');
@@ -1154,16 +1416,16 @@ function ManagerPage() {
     const closedTabs = tabs.filter((t)=>t.tabStatus === 'closed' && t.closedAt && new Date(t.closedAt).toDateString() === new Date().toDateString());
     const todayRevenue = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getOrdersInPeriod"])('today').reduce((s, o)=>s + (o.total || 0), 0);
     const shown = tabFilter === 'awaiting' ? awaitingTabs : tabFilter === 'open' ? openTabs : closedTabs;
-    // Tab orders for selected tab
     const tabOrders = selTab ? (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getTabOrders"])(selTab.id) : [];
     const tabBillTotal = selTab ? Math.max(0, (selTab.totalAmount || 0) - (selTab.discount || 0)) : 0;
-    // In-progress orders for warning
     const inProgressOrders = selTab ? tabOrders.filter((o)=>[
             'awaiting_waiter',
             'pending',
             'preparing',
             'prepared'
         ].includes(o.status)) : [];
+    // EOD report
+    const eodReport = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getEndOfDayReport"])();
     // ── Styles ────────────────────────────────────────────────────────────────
     const btn = (bg = '#E65C00', c = 'white')=>({
             background: bg,
@@ -1207,25 +1469,25 @@ function ManagerPage() {
                         children: "💳"
                     }, void 0, false, {
                         fileName: "[project]/app/manager/page.tsx",
-                        lineNumber: 164,
+                        lineNumber: 198,
                         columnNumber: 11
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                         children: "Loading Manager Portal…"
                     }, void 0, false, {
                         fileName: "[project]/app/manager/page.tsx",
-                        lineNumber: 165,
+                        lineNumber: 199,
                         columnNumber: 11
                     }, this)
                 ]
             }, void 0, true, {
                 fileName: "[project]/app/manager/page.tsx",
-                lineNumber: 163,
+                lineNumber: 197,
                 columnNumber: 9
             }, this)
         }, void 0, false, {
             fileName: "[project]/app/manager/page.tsx",
-            lineNumber: 162,
+            lineNumber: 196,
             columnNumber: 7
         }, this);
     }
@@ -1264,7 +1526,7 @@ function ManagerPage() {
                                 children: "💳"
                             }, void 0, false, {
                                 fileName: "[project]/app/manager/page.tsx",
-                                lineNumber: 177,
+                                lineNumber: 211,
                                 columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1278,7 +1540,7 @@ function ManagerPage() {
                                         children: "Manager — Counter"
                                     }, void 0, false, {
                                         fileName: "[project]/app/manager/page.tsx",
-                                        lineNumber: 179,
+                                        lineNumber: 213,
                                         columnNumber: 13
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1289,26 +1551,26 @@ function ManagerPage() {
                                         children: "Billing & Payment Portal"
                                     }, void 0, false, {
                                         fileName: "[project]/app/manager/page.tsx",
-                                        lineNumber: 180,
+                                        lineNumber: 214,
                                         columnNumber: 13
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/manager/page.tsx",
-                                lineNumber: 178,
+                                lineNumber: 212,
                                 columnNumber: 11
                             }, this)
                         ]
                     }, void 0, true, {
                         fileName: "[project]/app/manager/page.tsx",
-                        lineNumber: 176,
+                        lineNumber: 210,
                         columnNumber: 9
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                         style: {
                             display: 'flex',
                             alignItems: 'center',
-                            gap: '1rem'
+                            gap: '0.75rem'
                         },
                         children: [
                             awaitingTabs.length > 0 && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1327,8 +1589,21 @@ function ManagerPage() {
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/manager/page.tsx",
-                                lineNumber: 185,
+                                lineNumber: 219,
                                 columnNumber: 13
+                            }, this),
+                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                onClick: ()=>setShowEOD(!showEOD),
+                                style: {
+                                    ...btn('#065f46', '#6ee7b7'),
+                                    border: '1px solid #6ee7b7',
+                                    fontSize: '0.72rem'
+                                },
+                                children: "📊 EOD Report"
+                            }, void 0, false, {
+                                fileName: "[project]/app/manager/page.tsx",
+                                lineNumber: 223,
+                                columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                 style: {
@@ -1343,7 +1618,7 @@ function ManagerPage() {
                                         children: clock.date
                                     }, void 0, false, {
                                         fileName: "[project]/app/manager/page.tsx",
-                                        lineNumber: 190,
+                                        lineNumber: 227,
                                         columnNumber: 13
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1354,13 +1629,13 @@ function ManagerPage() {
                                         children: clock.time
                                     }, void 0, false, {
                                         fileName: "[project]/app/manager/page.tsx",
-                                        lineNumber: 191,
+                                        lineNumber: 228,
                                         columnNumber: 13
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/manager/page.tsx",
-                                lineNumber: 189,
+                                lineNumber: 226,
                                 columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1373,20 +1648,239 @@ function ManagerPage() {
                                 children: "🚪 Logout"
                             }, void 0, false, {
                                 fileName: "[project]/app/manager/page.tsx",
-                                lineNumber: 193,
+                                lineNumber: 230,
                                 columnNumber: 11
                             }, this)
                         ]
                     }, void 0, true, {
                         fileName: "[project]/app/manager/page.tsx",
-                        lineNumber: 183,
+                        lineNumber: 217,
                         columnNumber: 9
                     }, this)
                 ]
             }, void 0, true, {
                 fileName: "[project]/app/manager/page.tsx",
-                lineNumber: 175,
+                lineNumber: 209,
                 columnNumber: 7
+            }, this),
+            showEOD && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                style: {
+                    background: '#064e3b',
+                    color: 'white',
+                    padding: '1.25rem 1.5rem',
+                    borderBottom: '3px solid #059669'
+                },
+                children: [
+                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                        style: {
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            marginBottom: '1rem'
+                        },
+                        children: [
+                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                style: {
+                                    fontFamily: "'Playfair Display',serif",
+                                    fontSize: '1rem',
+                                    fontWeight: 900,
+                                    color: '#6ee7b7'
+                                },
+                                children: [
+                                    "📊 End-of-Day Report — ",
+                                    eodReport.date
+                                ]
+                            }, void 0, true, {
+                                fileName: "[project]/app/manager/page.tsx",
+                                lineNumber: 240,
+                                columnNumber: 13
+                            }, this),
+                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                onClick: ()=>setShowEOD(false),
+                                style: {
+                                    background: 'none',
+                                    border: 'none',
+                                    color: '#6ee7b7',
+                                    fontSize: '1.25rem',
+                                    cursor: 'pointer'
+                                },
+                                children: "×"
+                            }, void 0, false, {
+                                fileName: "[project]/app/manager/page.tsx",
+                                lineNumber: 243,
+                                columnNumber: 13
+                            }, this)
+                        ]
+                    }, void 0, true, {
+                        fileName: "[project]/app/manager/page.tsx",
+                        lineNumber: 239,
+                        columnNumber: 11
+                    }, this),
+                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                        style: {
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fill,minmax(130px,1fr))',
+                            gap: '0.75rem',
+                            marginBottom: '1rem'
+                        },
+                        children: [
+                            {
+                                icon: '🧾',
+                                val: eodReport.totalOrders,
+                                label: 'Orders Completed',
+                                color: '#6ee7b7'
+                            },
+                            {
+                                icon: '💰',
+                                val: `₹${eodReport.totalRevenue}`,
+                                label: 'Total Revenue',
+                                color: '#fbbf24'
+                            },
+                            {
+                                icon: '📊',
+                                val: `₹${eodReport.avgOrderValue}`,
+                                label: 'Avg Order Value',
+                                color: '#a78bfa'
+                            },
+                            {
+                                icon: '✅',
+                                val: eodReport.completedTabs,
+                                label: 'Closed Tabs',
+                                color: '#34d399'
+                            },
+                            {
+                                icon: '🏷️',
+                                val: `₹${eodReport.discountsTotal}`,
+                                label: 'Discounts Given',
+                                color: '#f87171'
+                            },
+                            {
+                                icon: '🚫',
+                                val: eodReport.voidedOrders,
+                                label: 'Voided Orders',
+                                color: '#fb923c'
+                            }
+                        ].map((s)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                style: {
+                                    background: 'rgba(255,255,255,0.08)',
+                                    borderRadius: 10,
+                                    padding: '0.75rem',
+                                    textAlign: 'center'
+                                },
+                                children: [
+                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                        style: {
+                                            fontSize: '1.2rem',
+                                            marginBottom: '0.2rem'
+                                        },
+                                        children: s.icon
+                                    }, void 0, false, {
+                                        fileName: "[project]/app/manager/page.tsx",
+                                        lineNumber: 255,
+                                        columnNumber: 17
+                                    }, this),
+                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                        style: {
+                                            fontSize: '1.1rem',
+                                            fontWeight: 900,
+                                            color: s.color
+                                        },
+                                        children: s.val
+                                    }, void 0, false, {
+                                        fileName: "[project]/app/manager/page.tsx",
+                                        lineNumber: 256,
+                                        columnNumber: 17
+                                    }, this),
+                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                        style: {
+                                            fontSize: '0.62rem',
+                                            color: '#9ca3af'
+                                        },
+                                        children: s.label
+                                    }, void 0, false, {
+                                        fileName: "[project]/app/manager/page.tsx",
+                                        lineNumber: 257,
+                                        columnNumber: 17
+                                    }, this)
+                                ]
+                            }, s.label, true, {
+                                fileName: "[project]/app/manager/page.tsx",
+                                lineNumber: 254,
+                                columnNumber: 15
+                            }, this))
+                    }, void 0, false, {
+                        fileName: "[project]/app/manager/page.tsx",
+                        lineNumber: 245,
+                        columnNumber: 11
+                    }, this),
+                    eodReport.topItems.length > 0 && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                        children: [
+                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                style: {
+                                    fontSize: '0.78rem',
+                                    fontWeight: 700,
+                                    color: '#6ee7b7',
+                                    marginBottom: '0.4rem'
+                                },
+                                children: "🏆 Top Items Today"
+                            }, void 0, false, {
+                                fileName: "[project]/app/manager/page.tsx",
+                                lineNumber: 263,
+                                columnNumber: 15
+                            }, this),
+                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                style: {
+                                    display: 'flex',
+                                    gap: '0.5rem',
+                                    flexWrap: 'wrap'
+                                },
+                                children: eodReport.topItems.map((item, i)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                        style: {
+                                            background: 'rgba(255,255,255,0.1)',
+                                            borderRadius: 20,
+                                            padding: '0.2rem 0.7rem',
+                                            fontSize: '0.75rem',
+                                            color: 'white'
+                                        },
+                                        children: [
+                                            item.name,
+                                            " ",
+                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                                style: {
+                                                    color: '#fbbf24',
+                                                    fontWeight: 700
+                                                },
+                                                children: [
+                                                    "×",
+                                                    item.qty
+                                                ]
+                                            }, void 0, true, {
+                                                fileName: "[project]/app/manager/page.tsx",
+                                                lineNumber: 267,
+                                                columnNumber: 33
+                                            }, this)
+                                        ]
+                                    }, i, true, {
+                                        fileName: "[project]/app/manager/page.tsx",
+                                        lineNumber: 266,
+                                        columnNumber: 19
+                                    }, this))
+                            }, void 0, false, {
+                                fileName: "[project]/app/manager/page.tsx",
+                                lineNumber: 264,
+                                columnNumber: 15
+                            }, this)
+                        ]
+                    }, void 0, true, {
+                        fileName: "[project]/app/manager/page.tsx",
+                        lineNumber: 262,
+                        columnNumber: 13
+                    }, this)
+                ]
+            }, void 0, true, {
+                fileName: "[project]/app/manager/page.tsx",
+                lineNumber: 238,
+                columnNumber: 9
             }, this),
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                 style: {
@@ -1401,7 +1895,7 @@ function ManagerPage() {
                     {
                         icon: '💰',
                         val: `₹${todayRevenue}`,
-                        label: "Net Revenue"
+                        label: 'Net Revenue'
                     },
                     {
                         icon: '🧾',
@@ -1437,7 +1931,7 @@ function ManagerPage() {
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/manager/page.tsx",
-                                lineNumber: 208,
+                                lineNumber: 285,
                                 columnNumber: 13
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1448,18 +1942,18 @@ function ManagerPage() {
                                 children: s.label
                             }, void 0, false, {
                                 fileName: "[project]/app/manager/page.tsx",
-                                lineNumber: 209,
+                                lineNumber: 286,
                                 columnNumber: 13
                             }, this)
                         ]
                     }, s.label, true, {
                         fileName: "[project]/app/manager/page.tsx",
-                        lineNumber: 207,
+                        lineNumber: 284,
                         columnNumber: 11
                     }, this))
             }, void 0, false, {
                 fileName: "[project]/app/manager/page.tsx",
-                lineNumber: 200,
+                lineNumber: 277,
                 columnNumber: 7
             }, this),
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1499,12 +1993,12 @@ function ManagerPage() {
                         children: f.label
                     }, f.key, false, {
                         fileName: "[project]/app/manager/page.tsx",
-                        lineNumber: 221,
+                        lineNumber: 298,
                         columnNumber: 11
                     }, this))
             }, void 0, false, {
                 fileName: "[project]/app/manager/page.tsx",
-                lineNumber: 215,
+                lineNumber: 292,
                 columnNumber: 7
             }, this),
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1524,7 +2018,7 @@ function ManagerPage() {
                     children: tabFilter === 'awaiting' ? '🎉 No pending payments right now!' : 'No tabs found.'
                 }, void 0, false, {
                     fileName: "[project]/app/manager/page.tsx",
-                    lineNumber: 236,
+                    lineNumber: 313,
                     columnNumber: 11
                 }, this) : shown.map((tab)=>{
                     const tabOrdrs = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getTabOrders"])(tab.id);
@@ -1545,6 +2039,9 @@ function ManagerPage() {
                             setPinMsg('');
                             setTabBillMsg('');
                             setTabCloseConfirm(false);
+                            setShowSplitModal(false);
+                            setSplitPayEntry(null);
+                            loadSplitForTab(tab.id);
                         },
                         style: {
                             background: 'white',
@@ -1577,7 +2074,7 @@ function ManagerPage() {
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/manager/page.tsx",
-                                                lineNumber: 267,
+                                                lineNumber: 345,
                                                 columnNumber: 19
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1595,7 +2092,7 @@ function ManagerPage() {
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/manager/page.tsx",
-                                                lineNumber: 268,
+                                                lineNumber: 346,
                                                 columnNumber: 19
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1611,13 +2108,13 @@ function ManagerPage() {
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/manager/page.tsx",
-                                                lineNumber: 271,
+                                                lineNumber: 349,
                                                 columnNumber: 19
                                             }, this)
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/app/manager/page.tsx",
-                                        lineNumber: 266,
+                                        lineNumber: 344,
                                         columnNumber: 17
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1640,7 +2137,7 @@ function ManagerPage() {
                                                 children: tab.tabStatus === 'awaiting_payment' ? '💳 Bill Requested' : tab.tabStatus === 'open' ? '🟢 Open' : '✅ Closed'
                                             }, void 0, false, {
                                                 fileName: "[project]/app/manager/page.tsx",
-                                                lineNumber: 274,
+                                                lineNumber: 352,
                                                 columnNumber: 19
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -1655,19 +2152,19 @@ function ManagerPage() {
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/manager/page.tsx",
-                                                lineNumber: 281,
+                                                lineNumber: 359,
                                                 columnNumber: 19
                                             }, this)
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/app/manager/page.tsx",
-                                        lineNumber: 273,
+                                        lineNumber: 351,
                                         columnNumber: 17
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/manager/page.tsx",
-                                lineNumber: 265,
+                                lineNumber: 343,
                                 columnNumber: 15
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1688,7 +2185,7 @@ function ManagerPage() {
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/app/manager/page.tsx",
-                                        lineNumber: 285,
+                                        lineNumber: 363,
                                         columnNumber: 17
                                     }, this),
                                     tab.discount > 0 && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -1702,25 +2199,25 @@ function ManagerPage() {
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/app/manager/page.tsx",
-                                        lineNumber: 286,
+                                        lineNumber: 364,
                                         columnNumber: 38
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/manager/page.tsx",
-                                lineNumber: 284,
+                                lineNumber: 362,
                                 columnNumber: 15
                             }, this)
                         ]
                     }, tab.id, true, {
                         fileName: "[project]/app/manager/page.tsx",
-                        lineNumber: 246,
+                        lineNumber: 323,
                         columnNumber: 13
                     }, this);
                 })
             }, void 0, false, {
                 fileName: "[project]/app/manager/page.tsx",
-                lineNumber: 234,
+                lineNumber: 311,
                 columnNumber: 7
             }, this),
             selTab && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1736,6 +2233,8 @@ function ManagerPage() {
                 onClick: ()=>{
                     setSelTab(null);
                     setTabCloseConfirm(false);
+                    setSplitBill(null);
+                    setShowSplitModal(false);
                 },
                 children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                     onClick: (e)=>e.stopPropagation(),
@@ -1777,7 +2276,7 @@ function ManagerPage() {
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/manager/page.tsx",
-                                            lineNumber: 306,
+                                            lineNumber: 384,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1795,19 +2294,21 @@ function ManagerPage() {
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/manager/page.tsx",
-                                            lineNumber: 309,
+                                            lineNumber: 387,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/manager/page.tsx",
-                                    lineNumber: 305,
+                                    lineNumber: 383,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
                                     onClick: ()=>{
                                         setSelTab(null);
                                         setTabCloseConfirm(false);
+                                        setSplitBill(null);
+                                        setShowSplitModal(false);
                                     },
                                     style: {
                                         background: 'none',
@@ -1819,13 +2320,13 @@ function ManagerPage() {
                                     children: "×"
                                 }, void 0, false, {
                                     fileName: "[project]/app/manager/page.tsx",
-                                    lineNumber: 314,
+                                    lineNumber: 392,
                                     columnNumber: 15
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/manager/page.tsx",
-                            lineNumber: 304,
+                            lineNumber: 382,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1869,7 +2370,7 @@ function ManagerPage() {
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/app/manager/page.tsx",
-                                                        lineNumber: 323,
+                                                        lineNumber: 401,
                                                         columnNumber: 21
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1888,7 +2389,7 @@ function ManagerPage() {
                                                                 children: STATUS_LABEL[order.status] || order.status
                                                             }, void 0, false, {
                                                                 fileName: "[project]/app/manager/page.tsx",
-                                                                lineNumber: 327,
+                                                                lineNumber: 405,
                                                                 columnNumber: 23
                                                             }, this),
                                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -1903,19 +2404,19 @@ function ManagerPage() {
                                                                 ]
                                                             }, void 0, true, {
                                                                 fileName: "[project]/app/manager/page.tsx",
-                                                                lineNumber: 330,
+                                                                lineNumber: 408,
                                                                 columnNumber: 23
                                                             }, this)
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/app/manager/page.tsx",
-                                                        lineNumber: 326,
+                                                        lineNumber: 404,
                                                         columnNumber: 21
                                                     }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/manager/page.tsx",
-                                                lineNumber: 322,
+                                                lineNumber: 400,
                                                 columnNumber: 19
                                             }, this),
                                             (order.items || []).map((item, i)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1942,13 +2443,13 @@ function ManagerPage() {
                                                                     ]
                                                                 }, void 0, true, {
                                                                     fileName: "[project]/app/manager/page.tsx",
-                                                                    lineNumber: 335,
+                                                                    lineNumber: 413,
                                                                     columnNumber: 41
                                                                 }, this)
                                                             ]
                                                         }, void 0, true, {
                                                             fileName: "[project]/app/manager/page.tsx",
-                                                            lineNumber: 335,
+                                                            lineNumber: 413,
                                                             columnNumber: 23
                                                         }, this),
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -1958,19 +2459,19 @@ function ManagerPage() {
                                                             ]
                                                         }, void 0, true, {
                                                             fileName: "[project]/app/manager/page.tsx",
-                                                            lineNumber: 336,
+                                                            lineNumber: 414,
                                                             columnNumber: 23
                                                         }, this)
                                                     ]
                                                 }, i, true, {
                                                     fileName: "[project]/app/manager/page.tsx",
-                                                    lineNumber: 334,
+                                                    lineNumber: 412,
                                                     columnNumber: 21
                                                 }, this))
                                         ]
                                     }, order.id, true, {
                                         fileName: "[project]/app/manager/page.tsx",
-                                        lineNumber: 321,
+                                        lineNumber: 399,
                                         columnNumber: 17
                                     }, this)),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1994,7 +2495,7 @@ function ManagerPage() {
                                                     children: "Subtotal"
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/manager/page.tsx",
-                                                    lineNumber: 345,
+                                                    lineNumber: 423,
                                                     columnNumber: 19
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -2007,13 +2508,13 @@ function ManagerPage() {
                                                     ]
                                                 }, void 0, true, {
                                                     fileName: "[project]/app/manager/page.tsx",
-                                                    lineNumber: 346,
+                                                    lineNumber: 424,
                                                     columnNumber: 19
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/manager/page.tsx",
-                                            lineNumber: 344,
+                                            lineNumber: 422,
                                             columnNumber: 17
                                         }, this),
                                         (selTab.discount || 0) > 0 && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2033,7 +2534,7 @@ function ManagerPage() {
                                                     ]
                                                 }, void 0, true, {
                                                     fileName: "[project]/app/manager/page.tsx",
-                                                    lineNumber: 350,
+                                                    lineNumber: 428,
                                                     columnNumber: 21
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -2046,13 +2547,13 @@ function ManagerPage() {
                                                     ]
                                                 }, void 0, true, {
                                                     fileName: "[project]/app/manager/page.tsx",
-                                                    lineNumber: 351,
+                                                    lineNumber: 429,
                                                     columnNumber: 21
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/manager/page.tsx",
-                                            lineNumber: 349,
+                                            lineNumber: 427,
                                             columnNumber: 19
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2071,7 +2572,7 @@ function ManagerPage() {
                                                     children: "TOTAL"
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/manager/page.tsx",
-                                                    lineNumber: 355,
+                                                    lineNumber: 433,
                                                     columnNumber: 19
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -2081,20 +2582,464 @@ function ManagerPage() {
                                                     ]
                                                 }, void 0, true, {
                                                     fileName: "[project]/app/manager/page.tsx",
-                                                    lineNumber: 356,
+                                                    lineNumber: 434,
                                                     columnNumber: 19
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/manager/page.tsx",
-                                            lineNumber: 354,
+                                            lineNumber: 432,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/manager/page.tsx",
-                                    lineNumber: 343,
+                                    lineNumber: 421,
                                     columnNumber: 15
+                                }, this),
+                                selTab.tabStatus !== 'closed' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                    style: {
+                                        marginBottom: '1rem'
+                                    },
+                                    children: !splitBill ? !showSplitModal ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                        onClick: ()=>setShowSplitModal(true),
+                                        style: {
+                                            ...btn('#f0fdf4', '#16a34a'),
+                                            fontSize: '0.78rem',
+                                            width: '100%',
+                                            border: '1px solid #86efac'
+                                        },
+                                        children: "✂️ Split Bill"
+                                    }, void 0, false, {
+                                        fileName: "[project]/app/manager/page.tsx",
+                                        lineNumber: 443,
+                                        columnNumber: 23
+                                    }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                        style: {
+                                            background: '#f0fdf4',
+                                            borderRadius: 10,
+                                            border: '1px solid #86efac',
+                                            padding: '1rem',
+                                            marginBottom: '0.5rem'
+                                        },
+                                        children: [
+                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                style: {
+                                                    fontWeight: 700,
+                                                    color: '#064e3b',
+                                                    fontSize: '0.85rem',
+                                                    marginBottom: '0.5rem'
+                                                },
+                                                children: "✂️ Split Equally Between"
+                                            }, void 0, false, {
+                                                fileName: "[project]/app/manager/page.tsx",
+                                                lineNumber: 451,
+                                                columnNumber: 25
+                                            }, this),
+                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                style: {
+                                                    display: 'flex',
+                                                    gap: '0.4rem',
+                                                    marginBottom: '0.5rem'
+                                                },
+                                                children: [
+                                                    2,
+                                                    3,
+                                                    4,
+                                                    5,
+                                                    6
+                                                ].map((n)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                                        onClick: ()=>setSplitCount(String(n)),
+                                                        style: {
+                                                            flex: 1,
+                                                            padding: '0.4rem',
+                                                            borderRadius: 8,
+                                                            fontWeight: 700,
+                                                            cursor: 'pointer',
+                                                            border: `2px solid ${splitCount === String(n) ? '#16a34a' : '#d1fae5'}`,
+                                                            background: splitCount === String(n) ? '#16a34a' : 'white',
+                                                            color: splitCount === String(n) ? 'white' : '#065f46',
+                                                            fontFamily: 'Poppins,sans-serif',
+                                                            fontSize: '0.85rem'
+                                                        },
+                                                        children: n
+                                                    }, n, false, {
+                                                        fileName: "[project]/app/manager/page.tsx",
+                                                        lineNumber: 454,
+                                                        columnNumber: 29
+                                                    }, this))
+                                            }, void 0, false, {
+                                                fileName: "[project]/app/manager/page.tsx",
+                                                lineNumber: 452,
+                                                columnNumber: 25
+                                            }, this),
+                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                style: {
+                                                    fontSize: '0.78rem',
+                                                    color: '#16a34a',
+                                                    fontWeight: 600,
+                                                    marginBottom: '0.5rem'
+                                                },
+                                                children: [
+                                                    "≈ ₹",
+                                                    Math.ceil(tabBillTotal / (parseInt(splitCount) || 2)),
+                                                    " per person"
+                                                ]
+                                            }, void 0, true, {
+                                                fileName: "[project]/app/manager/page.tsx",
+                                                lineNumber: 467,
+                                                columnNumber: 25
+                                            }, this),
+                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                style: {
+                                                    display: 'flex',
+                                                    gap: '0.4rem'
+                                                },
+                                                children: [
+                                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                                        onClick: handleCreateSplit,
+                                                        style: {
+                                                            ...btn('#16a34a'),
+                                                            flex: 2,
+                                                            fontSize: '0.78rem'
+                                                        },
+                                                        children: "Split Now"
+                                                    }, void 0, false, {
+                                                        fileName: "[project]/app/manager/page.tsx",
+                                                        lineNumber: 471,
+                                                        columnNumber: 27
+                                                    }, this),
+                                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                                        onClick: ()=>setShowSplitModal(false),
+                                                        style: {
+                                                            ...btn('#9ca3af'),
+                                                            flex: 1,
+                                                            fontSize: '0.78rem'
+                                                        },
+                                                        children: "Cancel"
+                                                    }, void 0, false, {
+                                                        fileName: "[project]/app/manager/page.tsx",
+                                                        lineNumber: 474,
+                                                        columnNumber: 27
+                                                    }, this)
+                                                ]
+                                            }, void 0, true, {
+                                                fileName: "[project]/app/manager/page.tsx",
+                                                lineNumber: 470,
+                                                columnNumber: 25
+                                            }, this)
+                                        ]
+                                    }, void 0, true, {
+                                        fileName: "[project]/app/manager/page.tsx",
+                                        lineNumber: 450,
+                                        columnNumber: 23
+                                    }, this) : /* Split bill UI */ /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                        style: {
+                                            background: '#f0fdf4',
+                                            borderRadius: 10,
+                                            border: '1px solid #86efac',
+                                            padding: '1rem',
+                                            marginBottom: '0.5rem'
+                                        },
+                                        children: [
+                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                style: {
+                                                    display: 'flex',
+                                                    justifyContent: 'space-between',
+                                                    alignItems: 'center',
+                                                    marginBottom: '0.5rem'
+                                                },
+                                                children: [
+                                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                        style: {
+                                                            fontWeight: 700,
+                                                            color: '#064e3b',
+                                                            fontSize: '0.85rem'
+                                                        },
+                                                        children: [
+                                                            "✂️ Split Bill (",
+                                                            splitBill.entries.length,
+                                                            " persons)"
+                                                        ]
+                                                    }, void 0, true, {
+                                                        fileName: "[project]/app/manager/page.tsx",
+                                                        lineNumber: 484,
+                                                        columnNumber: 25
+                                                    }, this),
+                                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                                        onClick: ()=>setSplitBill(null),
+                                                        style: {
+                                                            background: 'none',
+                                                            border: 'none',
+                                                            color: '#9ca3af',
+                                                            cursor: 'pointer',
+                                                            fontSize: '0.75rem'
+                                                        },
+                                                        children: "Reset"
+                                                    }, void 0, false, {
+                                                        fileName: "[project]/app/manager/page.tsx",
+                                                        lineNumber: 485,
+                                                        columnNumber: 25
+                                                    }, this)
+                                                ]
+                                            }, void 0, true, {
+                                                fileName: "[project]/app/manager/page.tsx",
+                                                lineNumber: 483,
+                                                columnNumber: 23
+                                            }, this),
+                                            splitBill.entries.map((entry, i)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                    style: {
+                                                        marginBottom: '0.5rem'
+                                                    },
+                                                    children: [
+                                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                            style: {
+                                                                display: 'flex',
+                                                                justifyContent: 'space-between',
+                                                                alignItems: 'center',
+                                                                padding: '0.5rem 0.75rem',
+                                                                background: entry.paid ? '#dcfce7' : 'white',
+                                                                borderRadius: 8,
+                                                                border: `1px solid ${entry.paid ? '#86efac' : '#d1d5db'}`
+                                                            },
+                                                            children: [
+                                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                                    children: [
+                                                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                                            style: {
+                                                                                fontWeight: 700,
+                                                                                fontSize: '0.82rem',
+                                                                                color: entry.paid ? '#16a34a' : '#1A0800'
+                                                                            },
+                                                                            children: [
+                                                                                entry.paid ? '✅' : '⬜',
+                                                                                " ",
+                                                                                entry.personLabel
+                                                                            ]
+                                                                        }, void 0, true, {
+                                                                            fileName: "[project]/app/manager/page.tsx",
+                                                                            lineNumber: 491,
+                                                                            columnNumber: 31
+                                                                        }, this),
+                                                                        entry.paid && entry.paymentMethod && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                                            style: {
+                                                                                fontSize: '0.68rem',
+                                                                                color: '#16a34a'
+                                                                            },
+                                                                            children: [
+                                                                                "Paid via ",
+                                                                                PAY_LABELS[entry.paymentMethod] || entry.paymentMethod
+                                                                            ]
+                                                                        }, void 0, true, {
+                                                                            fileName: "[project]/app/manager/page.tsx",
+                                                                            lineNumber: 495,
+                                                                            columnNumber: 33
+                                                                        }, this)
+                                                                    ]
+                                                                }, void 0, true, {
+                                                                    fileName: "[project]/app/manager/page.tsx",
+                                                                    lineNumber: 490,
+                                                                    columnNumber: 29
+                                                                }, this),
+                                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                                    style: {
+                                                                        display: 'flex',
+                                                                        alignItems: 'center',
+                                                                        gap: '0.5rem'
+                                                                    },
+                                                                    children: [
+                                                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                                                            style: {
+                                                                                fontWeight: 800,
+                                                                                color: '#064e3b',
+                                                                                fontSize: '0.9rem'
+                                                                            },
+                                                                            children: [
+                                                                                "₹",
+                                                                                entry.amount
+                                                                            ]
+                                                                        }, void 0, true, {
+                                                                            fileName: "[project]/app/manager/page.tsx",
+                                                                            lineNumber: 501,
+                                                                            columnNumber: 31
+                                                                        }, this),
+                                                                        !entry.paid && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                                                            onClick: ()=>setSplitPayEntry(entry.personLabel),
+                                                                            style: {
+                                                                                ...btn('#16a34a'),
+                                                                                fontSize: '0.72rem',
+                                                                                padding: '0.3rem 0.6rem'
+                                                                            },
+                                                                            children: "Mark Paid"
+                                                                        }, void 0, false, {
+                                                                            fileName: "[project]/app/manager/page.tsx",
+                                                                            lineNumber: 503,
+                                                                            columnNumber: 33
+                                                                        }, this)
+                                                                    ]
+                                                                }, void 0, true, {
+                                                                    fileName: "[project]/app/manager/page.tsx",
+                                                                    lineNumber: 500,
+                                                                    columnNumber: 29
+                                                                }, this)
+                                                            ]
+                                                        }, void 0, true, {
+                                                            fileName: "[project]/app/manager/page.tsx",
+                                                            lineNumber: 489,
+                                                            columnNumber: 27
+                                                        }, this),
+                                                        splitPayEntry === entry.personLabel && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                            style: {
+                                                                background: '#fffbeb',
+                                                                borderRadius: 8,
+                                                                padding: '0.6rem',
+                                                                marginTop: '0.25rem',
+                                                                border: '1px solid #fde68a'
+                                                            },
+                                                            children: [
+                                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                                    style: {
+                                                                        fontSize: '0.72rem',
+                                                                        fontWeight: 700,
+                                                                        color: '#555',
+                                                                        marginBottom: '0.3rem'
+                                                                    },
+                                                                    children: "Payment Method"
+                                                                }, void 0, false, {
+                                                                    fileName: "[project]/app/manager/page.tsx",
+                                                                    lineNumber: 515,
+                                                                    columnNumber: 31
+                                                                }, this),
+                                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                                    style: {
+                                                                        display: 'flex',
+                                                                        gap: '0.3rem',
+                                                                        flexWrap: 'wrap',
+                                                                        marginBottom: '0.4rem'
+                                                                    },
+                                                                    children: [
+                                                                        {
+                                                                            k: 'cod',
+                                                                            l: '💵 Cash'
+                                                                        },
+                                                                        {
+                                                                            k: 'gpay',
+                                                                            l: '📱 GPay'
+                                                                        },
+                                                                        {
+                                                                            k: 'card',
+                                                                            l: '💳 Card'
+                                                                        },
+                                                                        {
+                                                                            k: 'upi',
+                                                                            l: '📲 UPI'
+                                                                        }
+                                                                    ].map((p)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                                                            onClick: ()=>setSplitPayMethod(p.k),
+                                                                            style: {
+                                                                                padding: '0.25rem 0.6rem',
+                                                                                borderRadius: 6,
+                                                                                border: `1.5px solid ${splitPayMethod === p.k ? '#16a34a' : '#d1d5db'}`,
+                                                                                background: splitPayMethod === p.k ? '#f0fdf4' : 'white',
+                                                                                color: splitPayMethod === p.k ? '#16a34a' : '#666',
+                                                                                fontWeight: 600,
+                                                                                cursor: 'pointer',
+                                                                                fontSize: '0.72rem',
+                                                                                fontFamily: 'Poppins,sans-serif'
+                                                                            },
+                                                                            children: p.l
+                                                                        }, p.k, false, {
+                                                                            fileName: "[project]/app/manager/page.tsx",
+                                                                            lineNumber: 518,
+                                                                            columnNumber: 35
+                                                                        }, this))
+                                                                }, void 0, false, {
+                                                                    fileName: "[project]/app/manager/page.tsx",
+                                                                    lineNumber: 516,
+                                                                    columnNumber: 31
+                                                                }, this),
+                                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                                    style: {
+                                                                        display: 'flex',
+                                                                        gap: '0.3rem'
+                                                                    },
+                                                                    children: [
+                                                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                                                            onClick: ()=>handleMarkSplitPaid(entry.personLabel),
+                                                                            style: {
+                                                                                ...btn('#16a34a'),
+                                                                                flex: 2,
+                                                                                fontSize: '0.72rem'
+                                                                            },
+                                                                            children: [
+                                                                                "✅ Confirm ₹",
+                                                                                entry.amount,
+                                                                                " Paid"
+                                                                            ]
+                                                                        }, void 0, true, {
+                                                                            fileName: "[project]/app/manager/page.tsx",
+                                                                            lineNumber: 533,
+                                                                            columnNumber: 33
+                                                                        }, this),
+                                                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                                                            onClick: ()=>setSplitPayEntry(null),
+                                                                            style: {
+                                                                                ...btn('#9ca3af'),
+                                                                                flex: 1,
+                                                                                fontSize: '0.72rem'
+                                                                            },
+                                                                            children: "Cancel"
+                                                                        }, void 0, false, {
+                                                                            fileName: "[project]/app/manager/page.tsx",
+                                                                            lineNumber: 536,
+                                                                            columnNumber: 33
+                                                                        }, this)
+                                                                    ]
+                                                                }, void 0, true, {
+                                                                    fileName: "[project]/app/manager/page.tsx",
+                                                                    lineNumber: 532,
+                                                                    columnNumber: 31
+                                                                }, this)
+                                                            ]
+                                                        }, void 0, true, {
+                                                            fileName: "[project]/app/manager/page.tsx",
+                                                            lineNumber: 514,
+                                                            columnNumber: 29
+                                                        }, this)
+                                                    ]
+                                                }, i, true, {
+                                                    fileName: "[project]/app/manager/page.tsx",
+                                                    lineNumber: 488,
+                                                    columnNumber: 25
+                                                }, this)),
+                                            (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["isSplitFullyPaid"])(selTab.id) && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                style: {
+                                                    background: '#dcfce7',
+                                                    border: '1px solid #86efac',
+                                                    borderRadius: 8,
+                                                    padding: '0.5rem',
+                                                    textAlign: 'center',
+                                                    fontWeight: 700,
+                                                    color: '#16a34a',
+                                                    fontSize: '0.82rem',
+                                                    marginTop: '0.25rem'
+                                                },
+                                                children: "🎉 All portions paid! You can now close the tab."
+                                            }, void 0, false, {
+                                                fileName: "[project]/app/manager/page.tsx",
+                                                lineNumber: 545,
+                                                columnNumber: 25
+                                            }, this)
+                                        ]
+                                    }, void 0, true, {
+                                        fileName: "[project]/app/manager/page.tsx",
+                                        lineNumber: 482,
+                                        columnNumber: 21
+                                    }, this)
+                                }, void 0, false, {
+                                    fileName: "[project]/app/manager/page.tsx",
+                                    lineNumber: 440,
+                                    columnNumber: 17
                                 }, this),
                                 selTab.tabStatus !== 'closed' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                     style: {
@@ -2112,7 +3057,7 @@ function ManagerPage() {
                                             children: "Payment Method"
                                         }, void 0, false, {
                                             fileName: "[project]/app/manager/page.tsx",
-                                            lineNumber: 363,
+                                            lineNumber: 557,
                                             columnNumber: 19
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2158,18 +3103,18 @@ function ManagerPage() {
                                                     children: p.l
                                                 }, p.k, false, {
                                                     fileName: "[project]/app/manager/page.tsx",
-                                                    lineNumber: 372,
+                                                    lineNumber: 566,
                                                     columnNumber: 23
                                                 }, this))
                                         }, void 0, false, {
                                             fileName: "[project]/app/manager/page.tsx",
-                                            lineNumber: 364,
+                                            lineNumber: 558,
                                             columnNumber: 19
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/manager/page.tsx",
-                                    lineNumber: 362,
+                                    lineNumber: 556,
                                     columnNumber: 17
                                 }, this),
                                 selTab.tabStatus !== 'closed' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2192,7 +3137,7 @@ function ManagerPage() {
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/manager/page.tsx",
-                                            lineNumber: 394,
+                                            lineNumber: 588,
                                             columnNumber: 19
                                         }, this),
                                         showDiscForm && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2225,7 +3170,7 @@ function ManagerPage() {
                                                                     children: "Amount (₹)"
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/app/manager/page.tsx",
-                                                                    lineNumber: 404,
+                                                                    lineNumber: 598,
                                                                     columnNumber: 27
                                                                 }, this),
                                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -2239,13 +3184,13 @@ function ManagerPage() {
                                                                     }
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/app/manager/page.tsx",
-                                                                    lineNumber: 405,
+                                                                    lineNumber: 599,
                                                                     columnNumber: 27
                                                                 }, this)
                                                             ]
                                                         }, void 0, true, {
                                                             fileName: "[project]/app/manager/page.tsx",
-                                                            lineNumber: 403,
+                                                            lineNumber: 597,
                                                             columnNumber: 25
                                                         }, this),
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2261,7 +3206,7 @@ function ManagerPage() {
                                                                     children: "Reason"
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/app/manager/page.tsx",
-                                                                    lineNumber: 408,
+                                                                    lineNumber: 602,
                                                                     columnNumber: 27
                                                                 }, this),
                                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -2274,19 +3219,19 @@ function ManagerPage() {
                                                                     }
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/app/manager/page.tsx",
-                                                                    lineNumber: 409,
+                                                                    lineNumber: 603,
                                                                     columnNumber: 27
                                                                 }, this)
                                                             ]
                                                         }, void 0, true, {
                                                             fileName: "[project]/app/manager/page.tsx",
-                                                            lineNumber: 407,
+                                                            lineNumber: 601,
                                                             columnNumber: 25
                                                         }, this)
                                                     ]
                                                 }, void 0, true, {
                                                     fileName: "[project]/app/manager/page.tsx",
-                                                    lineNumber: 402,
+                                                    lineNumber: 596,
                                                     columnNumber: 23
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2302,7 +3247,7 @@ function ManagerPage() {
                                                             children: "Admin PIN"
                                                         }, void 0, false, {
                                                             fileName: "[project]/app/manager/page.tsx",
-                                                            lineNumber: 413,
+                                                            lineNumber: 607,
                                                             columnNumber: 25
                                                         }, this),
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -2319,13 +3264,13 @@ function ManagerPage() {
                                                             }
                                                         }, void 0, false, {
                                                             fileName: "[project]/app/manager/page.tsx",
-                                                            lineNumber: 414,
+                                                            lineNumber: 608,
                                                             columnNumber: 25
                                                         }, this)
                                                     ]
                                                 }, void 0, true, {
                                                     fileName: "[project]/app/manager/page.tsx",
-                                                    lineNumber: 412,
+                                                    lineNumber: 606,
                                                     columnNumber: 23
                                                 }, this),
                                                 pinMsg && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2337,7 +3282,7 @@ function ManagerPage() {
                                                     children: pinMsg
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/manager/page.tsx",
-                                                    lineNumber: 417,
+                                                    lineNumber: 611,
                                                     columnNumber: 34
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -2351,19 +3296,19 @@ function ManagerPage() {
                                                     children: "Apply Discount"
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/manager/page.tsx",
-                                                    lineNumber: 418,
+                                                    lineNumber: 612,
                                                     columnNumber: 23
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/manager/page.tsx",
-                                            lineNumber: 401,
+                                            lineNumber: 595,
                                             columnNumber: 21
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/manager/page.tsx",
-                                    lineNumber: 393,
+                                    lineNumber: 587,
                                     columnNumber: 17
                                 }, this),
                                 tabCloseConfirm && inProgressOrders.length > 0 && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2391,7 +3336,7 @@ function ManagerPage() {
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/manager/page.tsx",
-                                            lineNumber: 429,
+                                            lineNumber: 623,
                                             columnNumber: 19
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2403,7 +3348,7 @@ function ManagerPage() {
                                             children: inProgressOrders.map((o)=>`#${o.orderNum || o.id.slice(-4)} (${STATUS_LABEL[o.status] || o.status})`).join(' · ')
                                         }, void 0, false, {
                                             fileName: "[project]/app/manager/page.tsx",
-                                            lineNumber: 432,
+                                            lineNumber: 626,
                                             columnNumber: 19
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2415,13 +3360,13 @@ function ManagerPage() {
                                             children: "Closing this tab will mark all pending orders as completed."
                                         }, void 0, false, {
                                             fileName: "[project]/app/manager/page.tsx",
-                                            lineNumber: 437,
+                                            lineNumber: 631,
                                             columnNumber: 19
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/manager/page.tsx",
-                                    lineNumber: 428,
+                                    lineNumber: 622,
                                     columnNumber: 17
                                 }, this),
                                 tabBillMsg && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2437,7 +3382,7 @@ function ManagerPage() {
                                     children: tabBillMsg
                                 }, void 0, false, {
                                     fileName: "[project]/app/manager/page.tsx",
-                                    lineNumber: 445,
+                                    lineNumber: 639,
                                     columnNumber: 17
                                 }, this),
                                 selTab.tabStatus !== 'closed' && !tabBillMsg && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -2452,7 +3397,7 @@ function ManagerPage() {
                                     children: tabCloseConfirm ? '⚠️ Confirm — Close Tab Anyway' : `✅ Collect ₹${tabBillTotal} · Close Tab (${PAY_LABELS[tabPayMethod] || tabPayMethod})`
                                 }, void 0, false, {
                                     fileName: "[project]/app/manager/page.tsx",
-                                    lineNumber: 452,
+                                    lineNumber: 646,
                                     columnNumber: 17
                                 }, this),
                                 selTab.tabStatus === 'closed' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2471,34 +3416,34 @@ function ManagerPage() {
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/manager/page.tsx",
-                                    lineNumber: 466,
+                                    lineNumber: 660,
                                     columnNumber: 17
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/manager/page.tsx",
-                            lineNumber: 317,
+                            lineNumber: 395,
                             columnNumber: 13
                         }, this)
                     ]
                 }, void 0, true, {
                     fileName: "[project]/app/manager/page.tsx",
-                    lineNumber: 299,
+                    lineNumber: 377,
                     columnNumber: 11
                 }, this)
             }, void 0, false, {
                 fileName: "[project]/app/manager/page.tsx",
-                lineNumber: 295,
+                lineNumber: 373,
                 columnNumber: 9
             }, this)
         ]
     }, void 0, true, {
         fileName: "[project]/app/manager/page.tsx",
-        lineNumber: 172,
+        lineNumber: 206,
         columnNumber: 5
     }, this);
 }
-_s(ManagerPage, "4miXLkMkrv4qBc/Rsom/Icv9ADk=", false, function() {
+_s(ManagerPage, "adGQ7RGGoNO5nCzzQ6qvAZFoYbo=", false, function() {
     return [
         __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$navigation$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useRouter"]
     ];

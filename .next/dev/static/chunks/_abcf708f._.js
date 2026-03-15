@@ -3,16 +3,22 @@
 "use strict";
 
 // ─── Foodie Lover — Storage Layer ─────────────────────────────────────────────
-// All persistence via localStorage (no backend).
+// All persistence via localStorage (no backend). v2.0 — CustomerTab system.
 // Exports every type and function used across pages.
 // ─── Types ────────────────────────────────────────────────────────────────────
 __turbopack_context__.s([
     "DEFAULT_MENU",
     ()=>DEFAULT_MENU,
+    "acknowledgeWaiterCall",
+    ()=>acknowledgeWaiterCall,
+    "addFoodReceiptDispute",
+    ()=>addFoodReceiptDispute,
     "addOrder",
     ()=>addOrder,
     "addOrderToTab",
     ()=>addOrderToTab,
+    "addWaiterCall",
+    ()=>addWaiterCall,
     "applyDiscount",
     ()=>applyDiscount,
     "applyTabDiscount",
@@ -23,54 +29,102 @@ __turbopack_context__.s([
     ()=>clearFraudAlerts,
     "closeTab",
     ()=>closeTab,
+    "createSplitBill",
+    ()=>createSplitBill,
     "createTab",
     ()=>createTab,
     "exportOrdersCSV",
     ()=>exportOrdersCSV,
+    "findActiveDeviceSession",
+    ()=>findActiveDeviceSession,
     "getActiveTabsForTable",
     ()=>getActiveTabsForTable,
+    "getDeviceRecords",
+    ()=>getDeviceRecords,
+    "getDevicesForTab",
+    ()=>getDevicesForTab,
+    "getDisputeAlerts",
+    ()=>getDisputeAlerts,
     "getEndOfDayReport",
     ()=>getEndOfDayReport,
     "getFraudAlerts",
     ()=>getFraudAlerts,
+    "getLastWaiterCallTime",
+    ()=>getLastWaiterCallTime,
     "getMenu",
     ()=>getMenu,
     "getNextOrderNumber",
     ()=>getNextOrderNumber,
     "getOpenTabForCustomer",
     ()=>getOpenTabForCustomer,
+    "getOrCreateDeviceId",
+    ()=>getOrCreateDeviceId,
     "getOrders",
     ()=>getOrders,
     "getOrdersInPeriod",
     ()=>getOrdersInPeriod,
+    "getPendingDisputes",
+    ()=>getPendingDisputes,
+    "getPendingWaiterCalls",
+    ()=>getPendingWaiterCalls,
     "getPin",
     ()=>getPin,
+    "getSplitBillForTab",
+    ()=>getSplitBillForTab,
+    "getSplitBills",
+    ()=>getSplitBills,
     "getTab",
     ()=>getTab,
     "getTabOrders",
     ()=>getTabOrders,
     "getTableOccupancy",
     ()=>getTableOccupancy,
+    "getTableOccupancyStats",
+    ()=>getTableOccupancyStats,
     "getTables",
     ()=>getTables,
     "getTabs",
     ()=>getTabs,
+    "getWaiterCalls",
+    ()=>getWaiterCalls,
+    "getWaiterStats",
+    ()=>getWaiterStats,
+    "isSplitFullyPaid",
+    ()=>isSplitFullyPaid,
+    "markSplitEntryPaid",
+    ()=>markSplitEntryPaid,
+    "registerDevice",
+    ()=>registerDevice,
+    "removeDeviceRecord",
+    ()=>removeDeviceRecord,
     "requestBill",
     ()=>requestBill,
+    "resolveDispute",
+    ()=>resolveDispute,
+    "saveDeviceRecords",
+    ()=>saveDeviceRecords,
+    "saveDisputeAlerts",
+    ()=>saveDisputeAlerts,
     "saveMenu",
     ()=>saveMenu,
     "saveOrders",
     ()=>saveOrders,
     "savePin",
     ()=>savePin,
+    "saveSplitBills",
+    ()=>saveSplitBills,
     "saveTables",
     ()=>saveTables,
     "saveTabs",
     ()=>saveTabs,
+    "saveWaiterCalls",
+    ()=>saveWaiterCalls,
     "syncTabTotal",
     ()=>syncTabTotal,
     "syncTableStatus",
     ()=>syncTableStatus,
+    "updateItemStatus",
+    ()=>updateItemStatus,
     "updateOrderStatus",
     ()=>updateOrderStatus,
     "voidOrder",
@@ -84,7 +138,11 @@ const KEYS = {
     pin: 'fl_admin_pin',
     tabs: 'fl_customer_tabs',
     orderNum: 'fl_order_num_counter',
-    fraudAlerts: 'fl_fraud_alerts'
+    fraudAlerts: 'fl_fraud_alerts',
+    waiterCalls: 'fl_waiter_calls',
+    disputes: 'fl_food_disputes',
+    splitBills: 'fl_split_bills',
+    devices: 'fl_device_records'
 };
 // ─── Storage helpers ──────────────────────────────────────────────────────────
 function ls_get(key, fallback) {
@@ -727,6 +785,247 @@ function getEndOfDayReport(date) {
         voidedOrders,
         discountsTotal
     };
+}
+function updateItemStatus(orderId, itemIndex, status, by = 'Kitchen') {
+    const orders = getOrders();
+    const idx = orders.findIndex((o)=>o.id === orderId);
+    if (idx === -1) return false;
+    const items = [
+        ...orders[idx].items || []
+    ];
+    if (itemIndex < 0 || itemIndex >= items.length) return false;
+    items[itemIndex] = {
+        ...items[itemIndex],
+        itemStatus: status
+    };
+    orders[idx] = {
+        ...orders[idx],
+        items
+    };
+    saveOrders(orders);
+    return true;
+}
+const getWaiterCalls = ()=>ls_get(KEYS.waiterCalls, []);
+const saveWaiterCalls = (c)=>ls_set(KEYS.waiterCalls, c);
+const getPendingWaiterCalls = ()=>getWaiterCalls().filter((c)=>!c.acknowledged);
+function addWaiterCall(tableId, tabId, customerName) {
+    const call = {
+        id: `WC-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+        tableId,
+        tabId,
+        customerName,
+        at: new Date().toISOString(),
+        acknowledged: false
+    };
+    const calls = getWaiterCalls();
+    calls.push(call);
+    if (calls.length > 100) calls.splice(0, calls.length - 100);
+    saveWaiterCalls(calls);
+    return call;
+}
+function acknowledgeWaiterCall(id, by = 'Waiter') {
+    const calls = getWaiterCalls();
+    const idx = calls.findIndex((c)=>c.id === id);
+    if (idx === -1) return false;
+    calls[idx] = {
+        ...calls[idx],
+        acknowledged: true,
+        acknowledgedAt: new Date().toISOString(),
+        acknowledgedBy: by
+    };
+    saveWaiterCalls(calls);
+    return true;
+}
+function getLastWaiterCallTime(tableId) {
+    const calls = getWaiterCalls();
+    const recent = calls.filter((c)=>c.tableId === tableId).sort((a, b)=>new Date(b.at).getTime() - new Date(a.at).getTime());
+    if (!recent.length) return null;
+    if (Date.now() - new Date(recent[0].at).getTime() > 5 * 60 * 1000) return null;
+    return recent[0].at;
+}
+const getDisputeAlerts = ()=>ls_get(KEYS.disputes, []);
+const saveDisputeAlerts = (d)=>ls_set(KEYS.disputes, d);
+const getPendingDisputes = ()=>getDisputeAlerts().filter((d)=>!d.resolved);
+function addFoodReceiptDispute(orderId, tabId, tableId, customerName) {
+    const dispute = {
+        id: `FD-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+        orderId,
+        tabId,
+        tableId,
+        customerName,
+        at: new Date().toISOString(),
+        resolved: false
+    };
+    const disputes = getDisputeAlerts();
+    disputes.push(dispute);
+    if (disputes.length > 200) disputes.splice(0, disputes.length - 200);
+    saveDisputeAlerts(disputes);
+    return dispute;
+}
+function resolveDispute(id, by = 'Waiter') {
+    const disputes = getDisputeAlerts();
+    const idx = disputes.findIndex((d)=>d.id === id);
+    if (idx === -1) return false;
+    disputes[idx] = {
+        ...disputes[idx],
+        resolved: true,
+        resolvedBy: by,
+        resolvedAt: new Date().toISOString()
+    };
+    saveDisputeAlerts(disputes);
+    return true;
+}
+const getSplitBills = ()=>ls_get(KEYS.splitBills, []);
+const saveSplitBills = (s)=>ls_set(KEYS.splitBills, s);
+function getSplitBillForTab(tabId) {
+    return getSplitBills().find((s)=>s.tabId === tabId) ?? null;
+}
+function createSplitBill(tabId, splitType, count, totalAmount) {
+    const existing = getSplitBills().filter((s)=>s.tabId !== tabId);
+    const perPerson = Math.ceil(totalAmount / count);
+    const entries = Array.from({
+        length: count
+    }, (_, i)=>({
+            personLabel: `Person ${i + 1}`,
+            amount: i === count - 1 ? totalAmount - perPerson * (count - 1) : perPerson,
+            paid: false
+        }));
+    const split = {
+        id: `SB-${Date.now()}`,
+        tabId,
+        splitType,
+        totalAmount,
+        entries,
+        createdAt: new Date().toISOString()
+    };
+    existing.push(split);
+    saveSplitBills(existing);
+    return split;
+}
+function markSplitEntryPaid(tabId, personLabel, paymentMethod) {
+    const splits = getSplitBills();
+    const idx = splits.findIndex((s)=>s.tabId === tabId);
+    if (idx === -1) return false;
+    const eIdx = splits[idx].entries.findIndex((e)=>e.personLabel === personLabel);
+    if (eIdx === -1) return false;
+    splits[idx].entries[eIdx] = {
+        ...splits[idx].entries[eIdx],
+        paid: true,
+        paymentMethod,
+        paidAt: new Date().toISOString()
+    };
+    saveSplitBills(splits);
+    return true;
+}
+function isSplitFullyPaid(tabId) {
+    const split = getSplitBillForTab(tabId);
+    return split ? split.entries.every((e)=>e.paid) : false;
+}
+function getWaiterStats() {
+    const orders = getOrders();
+    const todayStr = new Date().toDateString();
+    const todayOrders = orders.filter((o)=>new Date(o.timestamp).toDateString() === todayStr);
+    const statMap = {};
+    todayOrders.forEach((o)=>{
+        (o.timeline || []).forEach((t)=>{
+            if (!t.by || [
+                'System',
+                'Admin',
+                'Manager',
+                'Kitchen'
+            ].includes(t.by)) return;
+            if (!statMap[t.by]) statMap[t.by] = {
+                accepted: 0,
+                cancelled: 0,
+                served: 0
+            };
+            if (t.status === 'pending') statMap[t.by].accepted++;
+            if (t.status === 'cancelled') statMap[t.by].cancelled++;
+            if (t.status === 'served') statMap[t.by].served++;
+        });
+    });
+    return Object.entries(statMap).map(([name, s])=>({
+            name,
+            ordersAccepted: s.accepted,
+            ordersCancelled: s.cancelled,
+            ordersServed: s.served,
+            cancellationRate: s.accepted > 0 ? Math.round(s.cancelled / s.accepted * 100) : 0
+        })).sort((a, b)=>b.ordersCancelled - a.ordersCancelled);
+}
+function getTableOccupancyStats() {
+    const allTabs = getTabs().filter((t)=>t.tabStatus === 'closed' && t.closedAt);
+    const map = {};
+    allTabs.forEach((tab)=>{
+        if (!map[tab.tableId]) map[tab.tableId] = {
+            sessions: 0,
+            totalMins: 0,
+            revenue: 0,
+            lastUsed: ''
+        };
+        const mins = Math.floor((new Date(tab.closedAt).getTime() - new Date(tab.createdAt).getTime()) / 60000);
+        map[tab.tableId].sessions++;
+        map[tab.tableId].totalMins += mins;
+        map[tab.tableId].revenue += Math.max(0, tab.totalAmount - tab.discount);
+        if (!map[tab.tableId].lastUsed || tab.closedAt > map[tab.tableId].lastUsed) map[tab.tableId].lastUsed = tab.closedAt;
+    });
+    return Object.entries(map).map(([tableId, s])=>({
+            tableId,
+            totalSessions: s.sessions,
+            avgMinutes: s.sessions > 0 ? Math.round(s.totalMins / s.sessions) : 0,
+            totalRevenue: s.revenue,
+            lastUsed: s.lastUsed
+        })).sort((a, b)=>b.totalSessions - a.totalSessions);
+}
+function getOrCreateDeviceId() {
+    if ("TURBOPACK compile-time falsy", 0) //TURBOPACK unreachable
+    ;
+    let id = localStorage.getItem('fl_device_id');
+    if (!id) {
+        id = `DEV-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+        localStorage.setItem('fl_device_id', id);
+    }
+    return id;
+}
+function getDeviceRecords() {
+    return ls_get(KEYS.devices, []);
+}
+function saveDeviceRecords(records) {
+    ls_set(KEYS.devices, records);
+}
+function registerDevice(deviceId, tableId, tabId, customerName) {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const pruned = getDeviceRecords().filter((r)=>new Date(r.joinedAt).getTime() > cutoff && !(r.deviceId === deviceId && r.tableId === tableId));
+    const record = {
+        deviceId,
+        tableId,
+        tabId,
+        customerName,
+        joinedAt: new Date().toISOString()
+    };
+    pruned.push(record);
+    saveDeviceRecords(pruned);
+    return record;
+}
+function findActiveDeviceSession(deviceId, tableId) {
+    const records = getDeviceRecords();
+    const record = records.find((r)=>r.deviceId === deviceId && r.tableId === tableId);
+    if (!record) return null;
+    const tab = getTabs().find((t)=>t.id === record.tabId && [
+            'open',
+            'awaiting_payment'
+        ].includes(t.tabStatus));
+    if (!tab) return null;
+    return {
+        tab,
+        record
+    };
+}
+function removeDeviceRecord(deviceId, tableId) {
+    const records = getDeviceRecords().filter((r)=>!(r.deviceId === deviceId && r.tableId === tableId));
+    saveDeviceRecords(records);
+}
+function getDevicesForTab(tabId) {
+    return getDeviceRecords().filter((r)=>r.tabId === tabId);
 }
 if (typeof globalThis.$RefreshHelpers$ === 'object' && globalThis.$RefreshHelpers !== null) {
     __turbopack_context__.k.registerExports(__turbopack_context__.m, globalThis.$RefreshHelpers$);

@@ -57,6 +57,10 @@
   display: none;
 }
 
+.inline-block {
+  display: inline-block;
+}
+
 .inline-flex {
   display: inline-flex;
 }
@@ -72,6 +76,10 @@
 .border {
   border-style: var(--tw-border-style);
   border-width: 1px;
+}
+
+.break-all {
+  word-break: break-all;
 }
 
 .capitalize {

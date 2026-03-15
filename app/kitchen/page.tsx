@@ -2,9 +2,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  getOrders, updateOrderStatus,
+  getOrders, updateOrderStatus, updateItemStatus,
   getTabs, CustomerTab,
-  Order,
+  Order, ItemStatus,
 } from '@/lib/storage';
 import { getSession, clearSession, AuthSession } from '@/lib/auth';
 
@@ -23,7 +23,7 @@ export default function KitchenPage() {
   const [orders, setOrders]           = useState<Order[]>([]);
   const [tabs, setTabs]               = useState<CustomerTab[]>([]);
   const [clock, setClock]             = useState('');
-  const [filter, setFilter]           = useState<'all' | 'pending' | 'preparing' | 'prepared'>('all');
+  const [filter, setFilter]           = useState<'all' | 'queued' | 'cooking' | 'ready'>('all');
 
   // ── Auth ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -50,7 +50,7 @@ export default function KitchenPage() {
   function logout() { clearSession('kitchen'); router.replace('/kitchen/login'); }
 
   // ── Actions ───────────────────────────────────────────────────────────────
-  function advance(order: Order) {
+  function advanceOrder(order: Order) {
     const next =
       order.status === 'pending'   ? 'preparing' :
       order.status === 'preparing' ? 'prepared'  : null;
@@ -59,18 +59,34 @@ export default function KitchenPage() {
     refresh();
   }
 
+  function advanceItem(orderId: string, itemIndex: number) {
+    const order = orders.find(o => o.id === orderId);
+    if (!order) return;
+    const item = order.items?.[itemIndex];
+    if (!item) return;
+
+    const currentStatus = item.itemStatus || 'queued';
+    const nextStatus: ItemStatus =
+      currentStatus === 'queued' ? 'preparing' :
+      currentStatus === 'preparing' ? 'prepared' : 'prepared';
+
+    updateItemStatus(orderId, itemIndex, nextStatus, session?.name || 'Kitchen');
+    refresh();
+  }
+
   // ── Derived ───────────────────────────────────────────────────────────────
   const kitchenOrders = orders.filter(o =>
     ['pending', 'preparing', 'prepared'].includes(o.status),
-  );
+  ).sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
-  const shown = filter === 'all'
-    ? kitchenOrders
-    : kitchenOrders.filter(o => o.status === filter);
+  const shown = filter === 'all' ? kitchenOrders :
+    filter === 'queued' ? kitchenOrders.filter(o => o.status === 'pending') :
+    filter === 'cooking' ? kitchenOrders.filter(o => o.status === 'preparing') :
+    kitchenOrders.filter(o => o.status === 'prepared');
 
-  const pendingCount   = kitchenOrders.filter(o => o.status === 'pending').length;
-  const preparingCount = kitchenOrders.filter(o => o.status === 'preparing').length;
-  const preparedCount  = kitchenOrders.filter(o => o.status === 'prepared').length;
+  const queuedCount   = kitchenOrders.filter(o => o.status === 'pending').length;
+  const cookingCount  = kitchenOrders.filter(o => o.status === 'preparing').length;
+  const readyCount    = kitchenOrders.filter(o => o.status === 'prepared').length;
 
   // ── Styles ────────────────────────────────────────────────────────────────
   const btn = (bg = '#E65C00', c = 'white'): React.CSSProperties => ({
@@ -105,9 +121,9 @@ export default function KitchenPage() {
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
           {/* Status counters */}
           {[
-            { count: pendingCount,   color: '#f59e0b', label: 'Queued'    },
-            { count: preparingCount, color: '#3b82f6', label: 'Cooking'   },
-            { count: preparedCount,  color: '#8b5cf6', label: 'Ready'     },
+            { count: queuedCount,  color: '#f59e0b', label: 'Queued'  },
+            { count: cookingCount, color: '#3b82f6', label: 'Cooking' },
+            { count: readyCount,   color: '#8b5cf6', label: 'Ready'   },
           ].map(s => (
             <div key={s.label} style={{ textAlign: 'center' }}>
               <div style={{ fontSize: '1rem', fontWeight: 900, color: s.color }}>{s.count}</div>
@@ -123,10 +139,10 @@ export default function KitchenPage() {
       {/* Filter row */}
       <div style={{ padding: '0.6rem 1.25rem', display: 'flex', gap: '0.4rem', background: '#1a1a1a', borderBottom: '1px solid #2a2a2a', overflowX: 'auto' }}>
         {[
-          { key: 'all',      label: `🍳 All (${kitchenOrders.length})` },
-          { key: 'pending',  label: `⏱ Queued (${pendingCount})`       },
-          { key: 'preparing',label: `🔥 Cooking (${preparingCount})`   },
-          { key: 'prepared', label: `✅ Ready (${preparedCount})`       },
+          { key: 'all',     label: `🍳 All (${kitchenOrders.length})` },
+          { key: 'queued',  label: `⏱ Queued (${queuedCount})`        },
+          { key: 'cooking', label: `🔥 Cooking (${cookingCount})`     },
+          { key: 'ready',   label: `✅ Ready (${readyCount})`         },
         ].map(f => (
           <button
             key={f.key}
@@ -156,12 +172,17 @@ export default function KitchenPage() {
       <div style={{ padding: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(280px,1fr))', gap: '0.85rem' }}>
         {shown.map(order => {
           const mins = Math.floor((Date.now() - new Date(order.timestamp).getTime()) / 60000);
-          const isUrgent = mins >= 20 && order.status !== 'prepared';
+          const isUrgent = mins > 25;
+          const isHighPriority = mins > 15 && !isUrgent;
 
           // Check if this order's tab has requested the bill
           const billRequested = tabs.some(
             t => t.orderIds.includes(order.id) && t.tabStatus === 'awaiting_payment',
           );
+
+          // Check total item quantity
+          const totalItems = (order.items || []).reduce((sum, item) => sum + item.qty, 0);
+          const isLargeOrder = totalItems > 4;
 
           const nextAction =
             order.status === 'pending'   ? { label: '🔥 Start Cooking', bg: '#3b82f6' } :
@@ -186,17 +207,35 @@ export default function KitchenPage() {
                   padding: '0.22rem 1rem', fontSize: '0.72rem',
                   fontWeight: 800, textAlign: 'center', letterSpacing: '0.03em',
                 }}>
-                  💳 BILL REQUESTED — Rush this order!
+                  💳 BILL REQUESTED — Rush!
                 </div>
               )}
 
-              {/* Urgent badge */}
+              {/* Urgency badges */}
               {isUrgent && (
                 <div style={{
                   background: '#ef4444', color: 'white',
                   padding: '0.2rem 0.75rem', fontSize: '0.7rem', fontWeight: 800, textAlign: 'center',
                 }}>
-                  ⚠️ URGENT — {mins}m waiting
+                  🔥 URGENT — {mins}m waiting
+                </div>
+              )}
+              {isHighPriority && !isUrgent && (
+                <div style={{
+                  background: '#f59e0b', color: 'white',
+                  padding: '0.2rem 0.75rem', fontSize: '0.7rem', fontWeight: 800, textAlign: 'center',
+                }}>
+                  ⚠️ 15+ MIN — {mins}m waiting
+                </div>
+              )}
+
+              {/* Large order badge */}
+              {isLargeOrder && (
+                <div style={{
+                  background: '#06b6d4', color: 'white',
+                  padding: '0.2rem 0.75rem', fontSize: '0.7rem', fontWeight: 800, textAlign: 'center',
+                }}>
+                  📦 LARGE ORDER
                 </div>
               )}
 
@@ -218,20 +257,62 @@ export default function KitchenPage() {
                   </div>
                 </div>
 
-                {/* Items */}
+                {/* Items with item-level status */}
                 <div style={{ borderTop: '1px solid #2a2a2a', paddingTop: '0.5rem', marginBottom: '0.6rem' }}>
-                  {(order.items || []).map((item, i) => (
-                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem', padding: '0.2rem 0', color: '#ccc' }}>
-                      <span style={{ fontWeight: 700 }}>{item.name}</span>
-                      <span style={{ color: '#F9A826', fontWeight: 800 }}>×{item.qty}</span>
-                    </div>
-                  ))}
+                  {(order.items || []).map((item, i) => {
+                    const itemStatus = item.itemStatus || 'queued';
+                    const isItemPrepared = itemStatus === 'prepared';
+
+                    return (
+                      <div key={i} style={{ marginBottom: '0.5rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flex: 1 }}>
+                            <span style={{ fontWeight: 700, fontSize: '0.82rem', color: '#ccc' }}>{item.name}</span>
+                            <span style={{ color: '#F9A826', fontWeight: 800, fontSize: '0.75rem' }}>×{item.qty}</span>
+                          </div>
+                          <div style={{ display: 'flex', gap: '0.3rem', alignItems: 'center' }}>
+                            {itemStatus === 'queued' && (
+                              <>
+                                <div style={{ fontSize: '0.65rem', fontWeight: 700, padding: '0.1rem 0.4rem', borderRadius: 6, background: '#66666640', color: '#999' }}>
+                                  Queued
+                                </div>
+                                <button
+                                  onClick={() => advanceItem(order.id, i)}
+                                  style={{ ...btn('#3b82f6'), fontSize: '0.65rem', padding: '0.25rem 0.5rem', borderRadius: 6 }}
+                                >
+                                  ▶ Start
+                                </button>
+                              </>
+                            )}
+                            {itemStatus === 'preparing' && (
+                              <>
+                                <div style={{ fontSize: '0.65rem', fontWeight: 700, padding: '0.1rem 0.4rem', borderRadius: 6, background: '#3b82f640', color: '#60a5fa' }}>
+                                  Cooking
+                                </div>
+                                <button
+                                  onClick={() => advanceItem(order.id, i)}
+                                  style={{ ...btn('#10b981'), fontSize: '0.65rem', padding: '0.25rem 0.5rem', borderRadius: 6 }}
+                                >
+                                  ✅ Done
+                                </button>
+                              </>
+                            )}
+                            {itemStatus === 'prepared' && (
+                              <div style={{ fontSize: '0.65rem', fontWeight: 700, padding: '0.1rem 0.4rem', borderRadius: 6, background: '#8b5cf640', color: '#a78bfa' }}>
+                                Ready
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
 
-                {/* Action button */}
+                {/* Order-level action button */}
                 {nextAction && (
                   <button
-                    onClick={() => advance(order)}
+                    onClick={() => advanceOrder(order)}
                     style={{ ...btn(nextAction.bg), width: '100%', padding: '0.55rem', borderRadius: 10, fontSize: '0.82rem' }}
                   >
                     {nextAction.label}

@@ -3,8 +3,9 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   getOrders, updateOrderStatus, cancelOrder,
-  getTabs, CustomerTab,
-  Order,
+  getTabs, getPendingDisputes, resolveDispute, getPendingWaiterCalls, acknowledgeWaiterCall,
+  getWaiterStats,
+  CustomerTab, Order, FoodReceiptDispute, WaiterCall,
 } from '@/lib/storage';
 import { getSession, clearSession, AuthSession } from '@/lib/auth';
 
@@ -31,6 +32,8 @@ export default function WaiterPage() {
 
   const [orders, setOrders]           = useState<Order[]>([]);
   const [tabs, setTabs]               = useState<CustomerTab[]>([]);
+  const [disputes, setDisputes]       = useState<FoodReceiptDispute[]>([]);
+  const [waiterCalls, setWaiterCalls] = useState<WaiterCall[]>([]);
   const [filter, setFilter]           = useState<'active' | 'served' | 'all'>('active');
   const [selOrder, setSelOrder]       = useState<Order | null>(null);
   const [actionMsg, setActionMsg]     = useState('');
@@ -49,6 +52,8 @@ export default function WaiterPage() {
   const refresh = useCallback(() => {
     setOrders(getOrders());
     setTabs(getTabs());
+    setDisputes(getPendingDisputes());
+    setWaiterCalls(getPendingWaiterCalls());
     setSelOrder(prev => {
       if (!prev) return null;
       return getOrders().find(o => o.id === prev.id) ?? null;
@@ -97,6 +102,20 @@ export default function WaiterPage() {
     }
   }
 
+  function handleResolveDispute(disputeId: string) {
+    const ok = resolveDispute(disputeId, session?.name || 'Waiter');
+    if (ok) {
+      refresh();
+    }
+  }
+
+  function handleAcknowledgeWaiterCall(callId: string) {
+    const ok = acknowledgeWaiterCall(callId, session?.name || 'Waiter');
+    if (ok) {
+      refresh();
+    }
+  }
+
   // ── Derived ───────────────────────────────────────────────────────────────
   const active = orders.filter(o =>
     ['awaiting_waiter', 'pending', 'preparing', 'prepared'].includes(o.status),
@@ -114,6 +133,10 @@ export default function WaiterPage() {
   const tabsReadyForCounter = awaitingPaymentTabs.filter(tab =>
     !orders.some(o => tab.orderIds.includes(o.id) && o.status === 'prepared'),
   );
+
+  // Get waiter stats for today
+  const waiterStats = getWaiterStats();
+  const myStats = waiterStats.find(s => s.name === session?.name);
 
   // ── Styles ────────────────────────────────────────────────────────────────
   const btn = (bg = '#E65C00', c = 'white'): React.CSSProperties => ({
@@ -143,7 +166,9 @@ export default function WaiterPage() {
             <span style={{ fontSize: '1.5rem' }}>🛎️</span>
             <div>
               <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.15rem', fontWeight: 900 }}>Waiter Station</div>
-              <div style={{ fontSize: '0.68rem', color: '#c4b5fd' }}>Hello, {session?.name}</div>
+              <div style={{ fontSize: '0.68rem', color: '#c4b5fd' }}>
+                {session?.name} {myStats && `· ${myStats.ordersAccepted} accepted · ${myStats.ordersCancelled} cancelled · ${myStats.ordersServed} served`}
+              </div>
             </div>
           </div>
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
@@ -158,6 +183,49 @@ export default function WaiterPage() {
           </div>
         </div>
       </div>
+
+      {/* ── Food Dispute Banner ── */}
+      {disputes.length > 0 && (
+        <div style={{ background: '#7f1d1d', borderBottom: '2px solid #dc2626', padding: '0.65rem 1.25rem' }}>
+          <div style={{ fontWeight: 800, fontSize: '0.82rem', color: '#fca5a5', marginBottom: '0.35rem' }}>
+            🚨 Food Disputes — Customers denied receiving food
+          </div>
+          {disputes.map(d => (
+            <div key={d.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.25rem 0', fontSize: '0.78rem', color: '#fca5a5' }}>
+              <span>Table {d.tableId} · {d.customerName} — Order dispute</span>
+              <button
+                onClick={() => handleResolveDispute(d.id)}
+                style={{ ...btn('#10b981'), fontSize: '0.65rem', padding: '0.2rem 0.5rem' }}
+              >
+                ✓ Resolved
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── Waiter Calls Banner ── */}
+      {waiterCalls.length > 0 && (
+        <div style={{ background: '#b45309', borderBottom: '2px solid #f59e0b', padding: '0.65rem 1.25rem' }}>
+          <div style={{ fontWeight: 800, fontSize: '0.82rem', color: '#fef3c7', marginBottom: '0.35rem' }}>
+            🔔 Waiter Calls
+          </div>
+          {waiterCalls.map(call => {
+            const callMinutesAgo = Math.floor((Date.now() - new Date(call.at).getTime()) / 60000);
+            return (
+              <div key={call.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.25rem 0', fontSize: '0.78rem', color: '#78350f' }}>
+                <span>Table {call.tableId} · {call.customerName} ({callMinutesAgo}m ago)</span>
+                <button
+                  onClick={() => handleAcknowledgeWaiterCall(call.id)}
+                  style={{ ...btn('#f59e0b', '#1A0800'), fontSize: '0.65rem', padding: '0.2rem 0.5rem' }}
+                >
+                  ✓ Go
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* ── Smart Bill-Requested Banner ── */}
       {awaitingPaymentTabs.length > 0 && (

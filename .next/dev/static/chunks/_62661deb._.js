@@ -3,16 +3,22 @@
 "use strict";
 
 // ─── Foodie Lover — Storage Layer ─────────────────────────────────────────────
-// All persistence via localStorage (no backend).
+// All persistence via localStorage (no backend). v2.0 — CustomerTab system.
 // Exports every type and function used across pages.
 // ─── Types ────────────────────────────────────────────────────────────────────
 __turbopack_context__.s([
     "DEFAULT_MENU",
     ()=>DEFAULT_MENU,
+    "acknowledgeWaiterCall",
+    ()=>acknowledgeWaiterCall,
+    "addFoodReceiptDispute",
+    ()=>addFoodReceiptDispute,
     "addOrder",
     ()=>addOrder,
     "addOrderToTab",
     ()=>addOrderToTab,
+    "addWaiterCall",
+    ()=>addWaiterCall,
     "applyDiscount",
     ()=>applyDiscount,
     "applyTabDiscount",
@@ -23,54 +29,102 @@ __turbopack_context__.s([
     ()=>clearFraudAlerts,
     "closeTab",
     ()=>closeTab,
+    "createSplitBill",
+    ()=>createSplitBill,
     "createTab",
     ()=>createTab,
     "exportOrdersCSV",
     ()=>exportOrdersCSV,
+    "findActiveDeviceSession",
+    ()=>findActiveDeviceSession,
     "getActiveTabsForTable",
     ()=>getActiveTabsForTable,
+    "getDeviceRecords",
+    ()=>getDeviceRecords,
+    "getDevicesForTab",
+    ()=>getDevicesForTab,
+    "getDisputeAlerts",
+    ()=>getDisputeAlerts,
     "getEndOfDayReport",
     ()=>getEndOfDayReport,
     "getFraudAlerts",
     ()=>getFraudAlerts,
+    "getLastWaiterCallTime",
+    ()=>getLastWaiterCallTime,
     "getMenu",
     ()=>getMenu,
     "getNextOrderNumber",
     ()=>getNextOrderNumber,
     "getOpenTabForCustomer",
     ()=>getOpenTabForCustomer,
+    "getOrCreateDeviceId",
+    ()=>getOrCreateDeviceId,
     "getOrders",
     ()=>getOrders,
     "getOrdersInPeriod",
     ()=>getOrdersInPeriod,
+    "getPendingDisputes",
+    ()=>getPendingDisputes,
+    "getPendingWaiterCalls",
+    ()=>getPendingWaiterCalls,
     "getPin",
     ()=>getPin,
+    "getSplitBillForTab",
+    ()=>getSplitBillForTab,
+    "getSplitBills",
+    ()=>getSplitBills,
     "getTab",
     ()=>getTab,
     "getTabOrders",
     ()=>getTabOrders,
     "getTableOccupancy",
     ()=>getTableOccupancy,
+    "getTableOccupancyStats",
+    ()=>getTableOccupancyStats,
     "getTables",
     ()=>getTables,
     "getTabs",
     ()=>getTabs,
+    "getWaiterCalls",
+    ()=>getWaiterCalls,
+    "getWaiterStats",
+    ()=>getWaiterStats,
+    "isSplitFullyPaid",
+    ()=>isSplitFullyPaid,
+    "markSplitEntryPaid",
+    ()=>markSplitEntryPaid,
+    "registerDevice",
+    ()=>registerDevice,
+    "removeDeviceRecord",
+    ()=>removeDeviceRecord,
     "requestBill",
     ()=>requestBill,
+    "resolveDispute",
+    ()=>resolveDispute,
+    "saveDeviceRecords",
+    ()=>saveDeviceRecords,
+    "saveDisputeAlerts",
+    ()=>saveDisputeAlerts,
     "saveMenu",
     ()=>saveMenu,
     "saveOrders",
     ()=>saveOrders,
     "savePin",
     ()=>savePin,
+    "saveSplitBills",
+    ()=>saveSplitBills,
     "saveTables",
     ()=>saveTables,
     "saveTabs",
     ()=>saveTabs,
+    "saveWaiterCalls",
+    ()=>saveWaiterCalls,
     "syncTabTotal",
     ()=>syncTabTotal,
     "syncTableStatus",
     ()=>syncTableStatus,
+    "updateItemStatus",
+    ()=>updateItemStatus,
     "updateOrderStatus",
     ()=>updateOrderStatus,
     "voidOrder",
@@ -84,7 +138,11 @@ const KEYS = {
     pin: 'fl_admin_pin',
     tabs: 'fl_customer_tabs',
     orderNum: 'fl_order_num_counter',
-    fraudAlerts: 'fl_fraud_alerts'
+    fraudAlerts: 'fl_fraud_alerts',
+    waiterCalls: 'fl_waiter_calls',
+    disputes: 'fl_food_disputes',
+    splitBills: 'fl_split_bills',
+    devices: 'fl_device_records'
 };
 // ─── Storage helpers ──────────────────────────────────────────────────────────
 function ls_get(key, fallback) {
@@ -728,6 +786,247 @@ function getEndOfDayReport(date) {
         discountsTotal
     };
 }
+function updateItemStatus(orderId, itemIndex, status, by = 'Kitchen') {
+    const orders = getOrders();
+    const idx = orders.findIndex((o)=>o.id === orderId);
+    if (idx === -1) return false;
+    const items = [
+        ...orders[idx].items || []
+    ];
+    if (itemIndex < 0 || itemIndex >= items.length) return false;
+    items[itemIndex] = {
+        ...items[itemIndex],
+        itemStatus: status
+    };
+    orders[idx] = {
+        ...orders[idx],
+        items
+    };
+    saveOrders(orders);
+    return true;
+}
+const getWaiterCalls = ()=>ls_get(KEYS.waiterCalls, []);
+const saveWaiterCalls = (c)=>ls_set(KEYS.waiterCalls, c);
+const getPendingWaiterCalls = ()=>getWaiterCalls().filter((c)=>!c.acknowledged);
+function addWaiterCall(tableId, tabId, customerName) {
+    const call = {
+        id: `WC-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+        tableId,
+        tabId,
+        customerName,
+        at: new Date().toISOString(),
+        acknowledged: false
+    };
+    const calls = getWaiterCalls();
+    calls.push(call);
+    if (calls.length > 100) calls.splice(0, calls.length - 100);
+    saveWaiterCalls(calls);
+    return call;
+}
+function acknowledgeWaiterCall(id, by = 'Waiter') {
+    const calls = getWaiterCalls();
+    const idx = calls.findIndex((c)=>c.id === id);
+    if (idx === -1) return false;
+    calls[idx] = {
+        ...calls[idx],
+        acknowledged: true,
+        acknowledgedAt: new Date().toISOString(),
+        acknowledgedBy: by
+    };
+    saveWaiterCalls(calls);
+    return true;
+}
+function getLastWaiterCallTime(tableId) {
+    const calls = getWaiterCalls();
+    const recent = calls.filter((c)=>c.tableId === tableId).sort((a, b)=>new Date(b.at).getTime() - new Date(a.at).getTime());
+    if (!recent.length) return null;
+    if (Date.now() - new Date(recent[0].at).getTime() > 5 * 60 * 1000) return null;
+    return recent[0].at;
+}
+const getDisputeAlerts = ()=>ls_get(KEYS.disputes, []);
+const saveDisputeAlerts = (d)=>ls_set(KEYS.disputes, d);
+const getPendingDisputes = ()=>getDisputeAlerts().filter((d)=>!d.resolved);
+function addFoodReceiptDispute(orderId, tabId, tableId, customerName) {
+    const dispute = {
+        id: `FD-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+        orderId,
+        tabId,
+        tableId,
+        customerName,
+        at: new Date().toISOString(),
+        resolved: false
+    };
+    const disputes = getDisputeAlerts();
+    disputes.push(dispute);
+    if (disputes.length > 200) disputes.splice(0, disputes.length - 200);
+    saveDisputeAlerts(disputes);
+    return dispute;
+}
+function resolveDispute(id, by = 'Waiter') {
+    const disputes = getDisputeAlerts();
+    const idx = disputes.findIndex((d)=>d.id === id);
+    if (idx === -1) return false;
+    disputes[idx] = {
+        ...disputes[idx],
+        resolved: true,
+        resolvedBy: by,
+        resolvedAt: new Date().toISOString()
+    };
+    saveDisputeAlerts(disputes);
+    return true;
+}
+const getSplitBills = ()=>ls_get(KEYS.splitBills, []);
+const saveSplitBills = (s)=>ls_set(KEYS.splitBills, s);
+function getSplitBillForTab(tabId) {
+    return getSplitBills().find((s)=>s.tabId === tabId) ?? null;
+}
+function createSplitBill(tabId, splitType, count, totalAmount) {
+    const existing = getSplitBills().filter((s)=>s.tabId !== tabId);
+    const perPerson = Math.ceil(totalAmount / count);
+    const entries = Array.from({
+        length: count
+    }, (_, i)=>({
+            personLabel: `Person ${i + 1}`,
+            amount: i === count - 1 ? totalAmount - perPerson * (count - 1) : perPerson,
+            paid: false
+        }));
+    const split = {
+        id: `SB-${Date.now()}`,
+        tabId,
+        splitType,
+        totalAmount,
+        entries,
+        createdAt: new Date().toISOString()
+    };
+    existing.push(split);
+    saveSplitBills(existing);
+    return split;
+}
+function markSplitEntryPaid(tabId, personLabel, paymentMethod) {
+    const splits = getSplitBills();
+    const idx = splits.findIndex((s)=>s.tabId === tabId);
+    if (idx === -1) return false;
+    const eIdx = splits[idx].entries.findIndex((e)=>e.personLabel === personLabel);
+    if (eIdx === -1) return false;
+    splits[idx].entries[eIdx] = {
+        ...splits[idx].entries[eIdx],
+        paid: true,
+        paymentMethod,
+        paidAt: new Date().toISOString()
+    };
+    saveSplitBills(splits);
+    return true;
+}
+function isSplitFullyPaid(tabId) {
+    const split = getSplitBillForTab(tabId);
+    return split ? split.entries.every((e)=>e.paid) : false;
+}
+function getWaiterStats() {
+    const orders = getOrders();
+    const todayStr = new Date().toDateString();
+    const todayOrders = orders.filter((o)=>new Date(o.timestamp).toDateString() === todayStr);
+    const statMap = {};
+    todayOrders.forEach((o)=>{
+        (o.timeline || []).forEach((t)=>{
+            if (!t.by || [
+                'System',
+                'Admin',
+                'Manager',
+                'Kitchen'
+            ].includes(t.by)) return;
+            if (!statMap[t.by]) statMap[t.by] = {
+                accepted: 0,
+                cancelled: 0,
+                served: 0
+            };
+            if (t.status === 'pending') statMap[t.by].accepted++;
+            if (t.status === 'cancelled') statMap[t.by].cancelled++;
+            if (t.status === 'served') statMap[t.by].served++;
+        });
+    });
+    return Object.entries(statMap).map(([name, s])=>({
+            name,
+            ordersAccepted: s.accepted,
+            ordersCancelled: s.cancelled,
+            ordersServed: s.served,
+            cancellationRate: s.accepted > 0 ? Math.round(s.cancelled / s.accepted * 100) : 0
+        })).sort((a, b)=>b.ordersCancelled - a.ordersCancelled);
+}
+function getTableOccupancyStats() {
+    const allTabs = getTabs().filter((t)=>t.tabStatus === 'closed' && t.closedAt);
+    const map = {};
+    allTabs.forEach((tab)=>{
+        if (!map[tab.tableId]) map[tab.tableId] = {
+            sessions: 0,
+            totalMins: 0,
+            revenue: 0,
+            lastUsed: ''
+        };
+        const mins = Math.floor((new Date(tab.closedAt).getTime() - new Date(tab.createdAt).getTime()) / 60000);
+        map[tab.tableId].sessions++;
+        map[tab.tableId].totalMins += mins;
+        map[tab.tableId].revenue += Math.max(0, tab.totalAmount - tab.discount);
+        if (!map[tab.tableId].lastUsed || tab.closedAt > map[tab.tableId].lastUsed) map[tab.tableId].lastUsed = tab.closedAt;
+    });
+    return Object.entries(map).map(([tableId, s])=>({
+            tableId,
+            totalSessions: s.sessions,
+            avgMinutes: s.sessions > 0 ? Math.round(s.totalMins / s.sessions) : 0,
+            totalRevenue: s.revenue,
+            lastUsed: s.lastUsed
+        })).sort((a, b)=>b.totalSessions - a.totalSessions);
+}
+function getOrCreateDeviceId() {
+    if ("TURBOPACK compile-time falsy", 0) //TURBOPACK unreachable
+    ;
+    let id = localStorage.getItem('fl_device_id');
+    if (!id) {
+        id = `DEV-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+        localStorage.setItem('fl_device_id', id);
+    }
+    return id;
+}
+function getDeviceRecords() {
+    return ls_get(KEYS.devices, []);
+}
+function saveDeviceRecords(records) {
+    ls_set(KEYS.devices, records);
+}
+function registerDevice(deviceId, tableId, tabId, customerName) {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const pruned = getDeviceRecords().filter((r)=>new Date(r.joinedAt).getTime() > cutoff && !(r.deviceId === deviceId && r.tableId === tableId));
+    const record = {
+        deviceId,
+        tableId,
+        tabId,
+        customerName,
+        joinedAt: new Date().toISOString()
+    };
+    pruned.push(record);
+    saveDeviceRecords(pruned);
+    return record;
+}
+function findActiveDeviceSession(deviceId, tableId) {
+    const records = getDeviceRecords();
+    const record = records.find((r)=>r.deviceId === deviceId && r.tableId === tableId);
+    if (!record) return null;
+    const tab = getTabs().find((t)=>t.id === record.tabId && [
+            'open',
+            'awaiting_payment'
+        ].includes(t.tabStatus));
+    if (!tab) return null;
+    return {
+        tab,
+        record
+    };
+}
+function removeDeviceRecord(deviceId, tableId) {
+    const records = getDeviceRecords().filter((r)=>!(r.deviceId === deviceId && r.tableId === tableId));
+    saveDeviceRecords(records);
+}
+function getDevicesForTab(tabId) {
+    return getDeviceRecords().filter((r)=>r.tabId === tabId);
+}
 if (typeof globalThis.$RefreshHelpers$ === 'object' && globalThis.$RefreshHelpers !== null) {
     __turbopack_context__.k.registerExports(__turbopack_context__.m, globalThis.$RefreshHelpers$);
 }
@@ -1102,6 +1401,9 @@ function AdminPage() {
     const [showPinMgr, setShowPinMgr] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(false);
     const [newPin, setNewPin] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('');
     const [newPinMsg, setNewPinMsg] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('');
+    // ── Analytics state ──
+    const [waiterStats, setWaiterStats] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])([]);
+    const [tableOccupancy, setTableOccupancy] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])([]);
     // ── Staff management state ──
     const [staffAccounts, setStaffAccounts] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])([]);
     const [staffForm, setStaffForm] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])({
@@ -1137,6 +1439,8 @@ function AdminPage() {
             setKitchenPin((0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$auth$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getKitchenPin"])());
             setManagerPin((0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$auth$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getManagerPin"])());
             setSecSetup((0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$auth$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getSecuritySetup"])());
+            setWaiterStats((0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getWaiterStats"])());
+            setTableOccupancy((0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getTableOccupancyStats"])());
         }
     }["AdminPage.useCallback[refresh]"], []);
     // ── Auth check ──
@@ -1463,7 +1767,7 @@ function AdminPage() {
             children: label
         }, void 0, false, {
             fileName: "[project]/app/admin/page.tsx",
-            lineNumber: 255,
+            lineNumber: 262,
             columnNumber: 5
         }, this);
     // ── Admin PIN change ─────────────────────────────────────────────────────
@@ -1576,25 +1880,25 @@ function AdminPage() {
                         children: "📊"
                     }, void 0, false, {
                         fileName: "[project]/app/admin/page.tsx",
-                        lineNumber: 317,
+                        lineNumber: 324,
                         columnNumber: 11
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                         children: "Loading Admin Dashboard…"
                     }, void 0, false, {
                         fileName: "[project]/app/admin/page.tsx",
-                        lineNumber: 318,
+                        lineNumber: 325,
                         columnNumber: 11
                     }, this)
                 ]
             }, void 0, true, {
                 fileName: "[project]/app/admin/page.tsx",
-                lineNumber: 316,
+                lineNumber: 323,
                 columnNumber: 9
             }, this)
         }, void 0, false, {
             fileName: "[project]/app/admin/page.tsx",
-            lineNumber: 315,
+            lineNumber: 322,
             columnNumber: 7
         }, this);
     }
@@ -1633,7 +1937,7 @@ function AdminPage() {
                                 children: "📊"
                             }, void 0, false, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 330,
+                                lineNumber: 337,
                                 columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1647,7 +1951,7 @@ function AdminPage() {
                                         children: "Admin Dashboard"
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 332,
+                                        lineNumber: 339,
                                         columnNumber: 13
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1658,19 +1962,19 @@ function AdminPage() {
                                         children: "Foodie Lover — Owner Control Panel"
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 333,
+                                        lineNumber: 340,
                                         columnNumber: 13
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 331,
+                                lineNumber: 338,
                                 columnNumber: 11
                             }, this)
                         ]
                     }, void 0, true, {
                         fileName: "[project]/app/admin/page.tsx",
-                        lineNumber: 329,
+                        lineNumber: 336,
                         columnNumber: 9
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1699,7 +2003,7 @@ function AdminPage() {
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 337,
+                                lineNumber: 344,
                                 columnNumber: 31
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1712,7 +2016,7 @@ function AdminPage() {
                                 children: "🔐 PIN & Staff"
                             }, void 0, false, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 338,
+                                lineNumber: 345,
                                 columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1725,7 +2029,7 @@ function AdminPage() {
                                 children: "🚪 Logout"
                             }, void 0, false, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 339,
+                                lineNumber: 346,
                                 columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1741,7 +2045,7 @@ function AdminPage() {
                                         children: clock.date
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 341,
+                                        lineNumber: 348,
                                         columnNumber: 13
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1752,25 +2056,25 @@ function AdminPage() {
                                         children: clock.time
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 342,
+                                        lineNumber: 349,
                                         columnNumber: 13
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 340,
+                                lineNumber: 347,
                                 columnNumber: 11
                             }, this)
                         ]
                     }, void 0, true, {
                         fileName: "[project]/app/admin/page.tsx",
-                        lineNumber: 336,
+                        lineNumber: 343,
                         columnNumber: 9
                     }, this)
                 ]
             }, void 0, true, {
                 fileName: "[project]/app/admin/page.tsx",
-                lineNumber: 328,
+                lineNumber: 335,
                 columnNumber: 7
             }, this),
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1787,7 +2091,7 @@ function AdminPage() {
                         label: "📋 Overview"
                     }, void 0, false, {
                         fileName: "[project]/app/admin/page.tsx",
-                        lineNumber: 349,
+                        lineNumber: 356,
                         columnNumber: 9
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(NavBtn, {
@@ -1795,7 +2099,7 @@ function AdminPage() {
                         label: "🧾 Orders"
                     }, void 0, false, {
                         fileName: "[project]/app/admin/page.tsx",
-                        lineNumber: 350,
+                        lineNumber: 357,
                         columnNumber: 9
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(NavBtn, {
@@ -1803,7 +2107,7 @@ function AdminPage() {
                         label: "📊 Sales Report"
                     }, void 0, false, {
                         fileName: "[project]/app/admin/page.tsx",
-                        lineNumber: 351,
+                        lineNumber: 358,
                         columnNumber: 9
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(NavBtn, {
@@ -1811,7 +2115,7 @@ function AdminPage() {
                         label: "🍽️ Menu Management"
                     }, void 0, false, {
                         fileName: "[project]/app/admin/page.tsx",
-                        lineNumber: 352,
+                        lineNumber: 359,
                         columnNumber: 9
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(NavBtn, {
@@ -1819,7 +2123,7 @@ function AdminPage() {
                         label: "🔍 Transparency"
                     }, void 0, false, {
                         fileName: "[project]/app/admin/page.tsx",
-                        lineNumber: 353,
+                        lineNumber: 360,
                         columnNumber: 9
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(NavBtn, {
@@ -1827,13 +2131,13 @@ function AdminPage() {
                         label: "👥 Staff"
                     }, void 0, false, {
                         fileName: "[project]/app/admin/page.tsx",
-                        lineNumber: 354,
+                        lineNumber: 361,
                         columnNumber: 9
                     }, this)
                 ]
             }, void 0, true, {
                 fileName: "[project]/app/admin/page.tsx",
-                lineNumber: 348,
+                lineNumber: 355,
                 columnNumber: 7
             }, this),
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1906,7 +2210,7 @@ function AdminPage() {
                                                 children: s.icon
                                             }, void 0, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 371,
+                                                lineNumber: 378,
                                                 columnNumber: 17
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1918,7 +2222,7 @@ function AdminPage() {
                                                 children: s.val
                                             }, void 0, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 372,
+                                                lineNumber: 379,
                                                 columnNumber: 17
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1929,18 +2233,18 @@ function AdminPage() {
                                                 children: s.label
                                             }, void 0, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 373,
+                                                lineNumber: 380,
                                                 columnNumber: 17
                                             }, this)
                                         ]
                                     }, s.label, true, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 370,
+                                        lineNumber: 377,
                                         columnNumber: 15
                                     }, this))
                             }, void 0, false, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 361,
+                                lineNumber: 368,
                                 columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1957,7 +2261,7 @@ function AdminPage() {
                                         children: "🪑 Table Overview"
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 380,
+                                        lineNumber: 387,
                                         columnNumber: 13
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1991,7 +2295,7 @@ function AdminPage() {
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 388,
+                                                        lineNumber: 395,
                                                         columnNumber: 21
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2004,7 +2308,7 @@ function AdminPage() {
                                                         children: t.status
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 389,
+                                                        lineNumber: 396,
                                                         columnNumber: 21
                                                     }, this),
                                                     sessionMins !== null && t.status === 'occupied' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2019,26 +2323,378 @@ function AdminPage() {
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 390,
+                                                        lineNumber: 397,
                                                         columnNumber: 65
                                                     }, this)
                                                 ]
                                             }, t.id, true, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 387,
+                                                lineNumber: 394,
                                                 columnNumber: 19
                                             }, this);
                                         })
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 381,
+                                        lineNumber: 388,
                                         columnNumber: 13
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 379,
+                                lineNumber: 386,
                                 columnNumber: 11
+                            }, this),
+                            (()=>{
+                                const eod = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getEndOfDayReport"])();
+                                return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                    style: card('#16a34a'),
+                                    children: [
+                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("h2", {
+                                            style: {
+                                                fontFamily: "'Playfair Display',serif",
+                                                fontSize: '1.05rem',
+                                                fontWeight: 700,
+                                                marginBottom: '0.85rem',
+                                                color: '#1A0800'
+                                            },
+                                            children: "📊 End-of-Day Report — Today"
+                                        }, void 0, false, {
+                                            fileName: "[project]/app/admin/page.tsx",
+                                            lineNumber: 409,
+                                            columnNumber: 17
+                                        }, this),
+                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                            style: {
+                                                display: 'grid',
+                                                gridTemplateColumns: 'repeat(auto-fill,minmax(130px,1fr))',
+                                                gap: '0.7rem',
+                                                marginBottom: '0.75rem'
+                                            },
+                                            children: [
+                                                {
+                                                    icon: '🧾',
+                                                    val: eod.totalOrders,
+                                                    label: 'Orders Completed',
+                                                    color: '#16a34a'
+                                                },
+                                                {
+                                                    icon: '💰',
+                                                    val: `₹${eod.totalRevenue}`,
+                                                    label: 'Total Revenue',
+                                                    color: '#E65C00'
+                                                },
+                                                {
+                                                    icon: '📊',
+                                                    val: `₹${eod.avgOrderValue}`,
+                                                    label: 'Avg Order Value',
+                                                    color: '#8b5cf6'
+                                                },
+                                                {
+                                                    icon: '✅',
+                                                    val: eod.completedTabs,
+                                                    label: 'Closed Tabs',
+                                                    color: '#3b82f6'
+                                                },
+                                                {
+                                                    icon: '🏷️',
+                                                    val: `₹${eod.discountsTotal}`,
+                                                    label: 'Discounts',
+                                                    color: '#f59e0b'
+                                                },
+                                                {
+                                                    icon: '🚫',
+                                                    val: eod.voidedOrders,
+                                                    label: 'Voided Orders',
+                                                    color: '#ef4444'
+                                                }
+                                            ].map((s)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                    style: {
+                                                        background: 'white',
+                                                        border: `1px solid ${s.color}30`,
+                                                        borderRadius: 10,
+                                                        padding: '0.75rem',
+                                                        textAlign: 'center',
+                                                        borderLeft: `3px solid ${s.color}`
+                                                    },
+                                                    children: [
+                                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                            style: {
+                                                                fontSize: '1.1rem',
+                                                                marginBottom: '0.15rem'
+                                                            },
+                                                            children: s.icon
+                                                        }, void 0, false, {
+                                                            fileName: "[project]/app/admin/page.tsx",
+                                                            lineNumber: 420,
+                                                            columnNumber: 23
+                                                        }, this),
+                                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                            style: {
+                                                                fontSize: '1.1rem',
+                                                                fontWeight: 900,
+                                                                color: s.color
+                                                            },
+                                                            children: s.val
+                                                        }, void 0, false, {
+                                                            fileName: "[project]/app/admin/page.tsx",
+                                                            lineNumber: 421,
+                                                            columnNumber: 23
+                                                        }, this),
+                                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                            style: {
+                                                                fontSize: '0.62rem',
+                                                                color: '#999'
+                                                            },
+                                                            children: s.label
+                                                        }, void 0, false, {
+                                                            fileName: "[project]/app/admin/page.tsx",
+                                                            lineNumber: 422,
+                                                            columnNumber: 23
+                                                        }, this)
+                                                    ]
+                                                }, s.label, true, {
+                                                    fileName: "[project]/app/admin/page.tsx",
+                                                    lineNumber: 419,
+                                                    columnNumber: 21
+                                                }, this))
+                                        }, void 0, false, {
+                                            fileName: "[project]/app/admin/page.tsx",
+                                            lineNumber: 410,
+                                            columnNumber: 17
+                                        }, this),
+                                        eod.topItems.length > 0 && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                            children: [
+                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                    style: {
+                                                        fontSize: '0.78rem',
+                                                        fontWeight: 700,
+                                                        color: '#16a34a',
+                                                        marginBottom: '0.35rem'
+                                                    },
+                                                    children: "🏆 Today's Top Items"
+                                                }, void 0, false, {
+                                                    fileName: "[project]/app/admin/page.tsx",
+                                                    lineNumber: 428,
+                                                    columnNumber: 21
+                                                }, this),
+                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                    style: {
+                                                        display: 'flex',
+                                                        gap: '0.4rem',
+                                                        flexWrap: 'wrap'
+                                                    },
+                                                    children: eod.topItems.map((item, i)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                            style: {
+                                                                background: '#f0fdf4',
+                                                                borderRadius: 20,
+                                                                padding: '0.2rem 0.7rem',
+                                                                fontSize: '0.75rem',
+                                                                color: '#064e3b',
+                                                                fontWeight: 600
+                                                            },
+                                                            children: [
+                                                                item.name,
+                                                                " ",
+                                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                                                    style: {
+                                                                        color: '#E65C00',
+                                                                        fontWeight: 700
+                                                                    },
+                                                                    children: [
+                                                                        "×",
+                                                                        item.qty
+                                                                    ]
+                                                                }, void 0, true, {
+                                                                    fileName: "[project]/app/admin/page.tsx",
+                                                                    lineNumber: 432,
+                                                                    columnNumber: 39
+                                                                }, this)
+                                                            ]
+                                                        }, i, true, {
+                                                            fileName: "[project]/app/admin/page.tsx",
+                                                            lineNumber: 431,
+                                                            columnNumber: 25
+                                                        }, this))
+                                                }, void 0, false, {
+                                                    fileName: "[project]/app/admin/page.tsx",
+                                                    lineNumber: 429,
+                                                    columnNumber: 21
+                                                }, this)
+                                            ]
+                                        }, void 0, true, {
+                                            fileName: "[project]/app/admin/page.tsx",
+                                            lineNumber: 427,
+                                            columnNumber: 19
+                                        }, this)
+                                    ]
+                                }, void 0, true, {
+                                    fileName: "[project]/app/admin/page.tsx",
+                                    lineNumber: 408,
+                                    columnNumber: 15
+                                }, this);
+                            })(),
+                            tableOccupancy.length > 0 && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                style: card('#3b82f6'),
+                                children: [
+                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("h2", {
+                                        style: {
+                                            fontFamily: "'Playfair Display',serif",
+                                            fontSize: '1.05rem',
+                                            fontWeight: 700,
+                                            marginBottom: '0.75rem',
+                                            color: '#1A0800'
+                                        },
+                                        children: "🪑 Table Occupancy Analytics"
+                                    }, void 0, false, {
+                                        fileName: "[project]/app/admin/page.tsx",
+                                        lineNumber: 445,
+                                        columnNumber: 15
+                                    }, this),
+                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                        style: {
+                                            overflowX: 'auto'
+                                        },
+                                        children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("table", {
+                                            style: {
+                                                width: '100%',
+                                                borderCollapse: 'collapse',
+                                                fontSize: '0.82rem'
+                                            },
+                                            children: [
+                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("thead", {
+                                                    children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("tr", {
+                                                        style: {
+                                                            background: '#eff6ff'
+                                                        },
+                                                        children: [
+                                                            'Table',
+                                                            'Sessions',
+                                                            'Avg Time',
+                                                            'Revenue',
+                                                            'Last Used'
+                                                        ].map((h)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("th", {
+                                                                style: {
+                                                                    padding: '0.48rem 0.75rem',
+                                                                    textAlign: 'left',
+                                                                    fontSize: '0.7rem',
+                                                                    fontWeight: 700,
+                                                                    color: '#1d4ed8',
+                                                                    textTransform: 'uppercase'
+                                                                },
+                                                                children: h
+                                                            }, h, false, {
+                                                                fileName: "[project]/app/admin/page.tsx",
+                                                                lineNumber: 450,
+                                                                columnNumber: 23
+                                                            }, this))
+                                                    }, void 0, false, {
+                                                        fileName: "[project]/app/admin/page.tsx",
+                                                        lineNumber: 448,
+                                                        columnNumber: 26
+                                                    }, this)
+                                                }, void 0, false, {
+                                                    fileName: "[project]/app/admin/page.tsx",
+                                                    lineNumber: 448,
+                                                    columnNumber: 19
+                                                }, this),
+                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("tbody", {
+                                                    children: tableOccupancy.slice(0, 10).map((t, i)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("tr", {
+                                                            style: {
+                                                                borderBottom: '1px solid #dbeafe',
+                                                                background: i % 2 ? '#f0f9ff' : 'white'
+                                                            },
+                                                            children: [
+                                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
+                                                                    style: {
+                                                                        padding: '0.48rem 0.75rem',
+                                                                        fontWeight: 700,
+                                                                        color: '#1A0800'
+                                                                    },
+                                                                    children: t.tableId
+                                                                }, void 0, false, {
+                                                                    fileName: "[project]/app/admin/page.tsx",
+                                                                    lineNumber: 456,
+                                                                    columnNumber: 25
+                                                                }, this),
+                                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
+                                                                    style: {
+                                                                        padding: '0.48rem 0.75rem',
+                                                                        fontWeight: 700,
+                                                                        color: '#3b82f6'
+                                                                    },
+                                                                    children: t.totalSessions
+                                                                }, void 0, false, {
+                                                                    fileName: "[project]/app/admin/page.tsx",
+                                                                    lineNumber: 457,
+                                                                    columnNumber: 25
+                                                                }, this),
+                                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
+                                                                    style: {
+                                                                        padding: '0.48rem 0.75rem'
+                                                                    },
+                                                                    children: [
+                                                                        t.avgMinutes,
+                                                                        " min"
+                                                                    ]
+                                                                }, void 0, true, {
+                                                                    fileName: "[project]/app/admin/page.tsx",
+                                                                    lineNumber: 458,
+                                                                    columnNumber: 25
+                                                                }, this),
+                                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
+                                                                    style: {
+                                                                        padding: '0.48rem 0.75rem',
+                                                                        fontWeight: 700,
+                                                                        color: '#16a34a'
+                                                                    },
+                                                                    children: [
+                                                                        "₹",
+                                                                        t.totalRevenue
+                                                                    ]
+                                                                }, void 0, true, {
+                                                                    fileName: "[project]/app/admin/page.tsx",
+                                                                    lineNumber: 459,
+                                                                    columnNumber: 25
+                                                                }, this),
+                                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
+                                                                    style: {
+                                                                        padding: '0.48rem 0.75rem',
+                                                                        color: '#888',
+                                                                        fontSize: '0.75rem'
+                                                                    },
+                                                                    children: t.lastUsed ? new Date(t.lastUsed).toLocaleDateString('en-IN') : '—'
+                                                                }, void 0, false, {
+                                                                    fileName: "[project]/app/admin/page.tsx",
+                                                                    lineNumber: 460,
+                                                                    columnNumber: 25
+                                                                }, this)
+                                                            ]
+                                                        }, t.tableId, true, {
+                                                            fileName: "[project]/app/admin/page.tsx",
+                                                            lineNumber: 455,
+                                                            columnNumber: 23
+                                                        }, this))
+                                                }, void 0, false, {
+                                                    fileName: "[project]/app/admin/page.tsx",
+                                                    lineNumber: 453,
+                                                    columnNumber: 19
+                                                }, this)
+                                            ]
+                                        }, void 0, true, {
+                                            fileName: "[project]/app/admin/page.tsx",
+                                            lineNumber: 447,
+                                            columnNumber: 17
+                                        }, this)
+                                    }, void 0, false, {
+                                        fileName: "[project]/app/admin/page.tsx",
+                                        lineNumber: 446,
+                                        columnNumber: 15
+                                    }, this)
+                                ]
+                            }, void 0, true, {
+                                fileName: "[project]/app/admin/page.tsx",
+                                lineNumber: 444,
+                                columnNumber: 13
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                 style: card(),
@@ -2054,7 +2710,7 @@ function AdminPage() {
                                         children: "👥 Staff Pages"
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 399,
+                                        lineNumber: 471,
                                         columnNumber: 13
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2066,25 +2722,39 @@ function AdminPage() {
                                         children: [
                                             {
                                                 href: '/kitchen',
-                                                label: '🔥 Kitchen'
+                                                label: '🔥 Kitchen',
+                                                color: 'linear-gradient(135deg,#E65C00,#F9A826)'
                                             },
                                             {
                                                 href: '/waiter',
-                                                label: '🧑‍🍳 Waiter'
+                                                label: '🧑‍🍳 Waiter',
+                                                color: 'linear-gradient(135deg,#E65C00,#F9A826)'
                                             },
                                             {
-                                                href: '/table?table=1',
-                                                label: '📱 Table Ordering'
+                                                href: '/manager',
+                                                label: '💳 Manager Counter',
+                                                color: 'linear-gradient(135deg,#064e3b,#16a34a)'
+                                            },
+                                            {
+                                                href: '/table?table=T01',
+                                                label: '📱 Table Ordering',
+                                                color: 'linear-gradient(135deg,#E65C00,#F9A826)'
                                             },
                                             {
                                                 href: '/',
-                                                label: '🛍️ Customer Menu'
+                                                label: '🛍️ Customer Menu',
+                                                color: 'linear-gradient(135deg,#E65C00,#F9A826)'
+                                            },
+                                            {
+                                                href: '/qr',
+                                                label: '📱 QR Generator',
+                                                color: 'linear-gradient(135deg,#3b82f6,#1d4ed8)'
                                             }
                                         ].map((l)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("a", {
                                                 href: l.href,
                                                 style: {
                                                     padding: '0.55rem 1.1rem',
-                                                    background: 'linear-gradient(135deg,#E65C00,#F9A826)',
+                                                    background: l.color,
                                                     color: 'white',
                                                     borderRadius: 8,
                                                     fontWeight: 700,
@@ -2094,18 +2764,18 @@ function AdminPage() {
                                                 children: l.label
                                             }, l.href, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 402,
+                                                lineNumber: 481,
                                                 columnNumber: 17
                                             }, this))
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 400,
+                                        lineNumber: 472,
                                         columnNumber: 13
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 398,
+                                lineNumber: 470,
                                 columnNumber: 11
                             }, this)
                         ]
@@ -2134,7 +2804,7 @@ function AdminPage() {
                                         children: "🧾 All Orders"
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 412,
+                                        lineNumber: 491,
                                         columnNumber: 15
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2162,18 +2832,18 @@ function AdminPage() {
                                                 children: s
                                             }, s, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 415,
+                                                lineNumber: 494,
                                                 columnNumber: 19
                                             }, this))
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 413,
+                                        lineNumber: 492,
                                         columnNumber: 15
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 411,
+                                lineNumber: 490,
                                 columnNumber: 13
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2218,17 +2888,17 @@ function AdminPage() {
                                                         children: h
                                                     }, h, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 423,
+                                                        lineNumber: 502,
                                                         columnNumber: 21
                                                     }, this))
                                             }, void 0, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 421,
+                                                lineNumber: 500,
                                                 columnNumber: 24
                                             }, this)
                                         }, void 0, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 421,
+                                            lineNumber: 500,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("tbody", {
@@ -2243,12 +2913,12 @@ function AdminPage() {
                                                     children: "No orders"
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/admin/page.tsx",
-                                                    lineNumber: 428,
+                                                    lineNumber: 507,
                                                     columnNumber: 27
                                                 }, this)
                                             }, void 0, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 428,
+                                                lineNumber: 507,
                                                 columnNumber: 23
                                             }, this) : filteredOrders.map((order)=>{
                                                 const t = new Date(order.timestamp).toLocaleTimeString([], {
@@ -2283,12 +2953,12 @@ function AdminPage() {
                                                                 children: order.id
                                                             }, void 0, false, {
                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                lineNumber: 436,
+                                                                lineNumber: 515,
                                                                 columnNumber: 68
                                                             }, this)
                                                         }, void 0, false, {
                                                             fileName: "[project]/app/admin/page.tsx",
-                                                            lineNumber: 436,
+                                                            lineNumber: 515,
                                                             columnNumber: 29
                                                         }, this),
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -2307,12 +2977,12 @@ function AdminPage() {
                                                                 children: order.type
                                                             }, void 0, false, {
                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                lineNumber: 437,
+                                                                lineNumber: 516,
                                                                 columnNumber: 68
                                                             }, this)
                                                         }, void 0, false, {
                                                             fileName: "[project]/app/admin/page.tsx",
-                                                            lineNumber: 437,
+                                                            lineNumber: 516,
                                                             columnNumber: 29
                                                         }, this),
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -2322,7 +2992,7 @@ function AdminPage() {
                                                             children: order.type === 'dine-in' ? `T${order.tableId}` : 'Pickup'
                                                         }, void 0, false, {
                                                             fileName: "[project]/app/admin/page.tsx",
-                                                            lineNumber: 438,
+                                                            lineNumber: 517,
                                                             columnNumber: 29
                                                         }, this),
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -2333,7 +3003,7 @@ function AdminPage() {
                                                             children: order.customerName
                                                         }, void 0, false, {
                                                             fileName: "[project]/app/admin/page.tsx",
-                                                            lineNumber: 439,
+                                                            lineNumber: 518,
                                                             columnNumber: 29
                                                         }, this),
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -2344,7 +3014,7 @@ function AdminPage() {
                                                             children: order.items?.length || 0
                                                         }, void 0, false, {
                                                             fileName: "[project]/app/admin/page.tsx",
-                                                            lineNumber: 440,
+                                                            lineNumber: 519,
                                                             columnNumber: 29
                                                         }, this),
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -2357,7 +3027,7 @@ function AdminPage() {
                                                             ]
                                                         }, void 0, true, {
                                                             fileName: "[project]/app/admin/page.tsx",
-                                                            lineNumber: 441,
+                                                            lineNumber: 520,
                                                             columnNumber: 29
                                                         }, this),
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -2369,7 +3039,7 @@ function AdminPage() {
                                                             children: (order.discount || 0) > 0 ? `-₹${order.discount}` : '—'
                                                         }, void 0, false, {
                                                             fileName: "[project]/app/admin/page.tsx",
-                                                            lineNumber: 442,
+                                                            lineNumber: 521,
                                                             columnNumber: 29
                                                         }, this),
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -2383,7 +3053,7 @@ function AdminPage() {
                                                             ]
                                                         }, void 0, true, {
                                                             fileName: "[project]/app/admin/page.tsx",
-                                                            lineNumber: 443,
+                                                            lineNumber: 522,
                                                             columnNumber: 29
                                                         }, this),
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -2394,7 +3064,7 @@ function AdminPage() {
                                                             children: order.payment || 'N/A'
                                                         }, void 0, false, {
                                                             fileName: "[project]/app/admin/page.tsx",
-                                                            lineNumber: 444,
+                                                            lineNumber: 523,
                                                             columnNumber: 29
                                                         }, this),
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -2414,12 +3084,12 @@ function AdminPage() {
                                                                 children: order.status
                                                             }, void 0, false, {
                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                lineNumber: 445,
+                                                                lineNumber: 524,
                                                                 columnNumber: 68
                                                             }, this)
                                                         }, void 0, false, {
                                                             fileName: "[project]/app/admin/page.tsx",
-                                                            lineNumber: 445,
+                                                            lineNumber: 524,
                                                             columnNumber: 29
                                                         }, this),
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -2431,7 +3101,7 @@ function AdminPage() {
                                                             children: t
                                                         }, void 0, false, {
                                                             fileName: "[project]/app/admin/page.tsx",
-                                                            lineNumber: 446,
+                                                            lineNumber: 525,
                                                             columnNumber: 29
                                                         }, this),
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -2455,7 +3125,7 @@ function AdminPage() {
                                                                     ]
                                                                 }, void 0, true, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 448,
+                                                                    lineNumber: 527,
                                                                     columnNumber: 43
                                                                 }, this),
                                                                 !isc && order.status !== 'completed' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -2474,7 +3144,7 @@ function AdminPage() {
                                                                     children: "✕"
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 449,
+                                                                    lineNumber: 528,
                                                                     columnNumber: 66
                                                                 }, this),
                                                                 !isc && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -2496,42 +3166,42 @@ function AdminPage() {
                                                                     children: "🏷"
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 450,
+                                                                    lineNumber: 529,
                                                                     columnNumber: 38
                                                                 }, this)
                                                             ]
                                                         }, void 0, true, {
                                                             fileName: "[project]/app/admin/page.tsx",
-                                                            lineNumber: 447,
+                                                            lineNumber: 526,
                                                             columnNumber: 29
                                                         }, this)
                                                     ]
                                                 }, order.id, true, {
                                                     fileName: "[project]/app/admin/page.tsx",
-                                                    lineNumber: 435,
+                                                    lineNumber: 514,
                                                     columnNumber: 27
                                                 }, this);
                                             })
                                         }, void 0, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 426,
+                                            lineNumber: 505,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/admin/page.tsx",
-                                    lineNumber: 420,
+                                    lineNumber: 499,
                                     columnNumber: 15
                                 }, this)
                             }, void 0, false, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 419,
+                                lineNumber: 498,
                                 columnNumber: 13
                             }, this)
                         ]
                     }, void 0, true, {
                         fileName: "[project]/app/admin/page.tsx",
-                        lineNumber: 410,
+                        lineNumber: 489,
                         columnNumber: 11
                     }, this),
                     section === 'sales' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["Fragment"], {
@@ -2563,12 +3233,12 @@ function AdminPage() {
                                                 children: t === 'today' ? '📅 Today' : t === 'week' ? '📆 This Week' : t === 'month' ? '🗓️ This Month' : '📊 All Time'
                                             }, t, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 467,
+                                                lineNumber: 546,
                                                 columnNumber: 17
                                             }, this))
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 465,
+                                        lineNumber: 544,
                                         columnNumber: 13
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -2582,13 +3252,13 @@ function AdminPage() {
                                         children: "📁 Export CSV"
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 472,
+                                        lineNumber: 551,
                                         columnNumber: 13
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 464,
+                                lineNumber: 543,
                                 columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2652,7 +3322,7 @@ function AdminPage() {
                                                 children: c.val
                                             }, void 0, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 479,
+                                                lineNumber: 558,
                                                 columnNumber: 17
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2663,18 +3333,18 @@ function AdminPage() {
                                                 children: c.label
                                             }, void 0, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 480,
+                                                lineNumber: 559,
                                                 columnNumber: 17
                                             }, this)
                                         ]
                                     }, c.label, true, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 478,
+                                        lineNumber: 557,
                                         columnNumber: 15
                                     }, this))
                             }, void 0, false, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 476,
+                                lineNumber: 555,
                                 columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2691,7 +3361,7 @@ function AdminPage() {
                                         children: "💳 Payment Method Breakdown"
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 487,
+                                        lineNumber: 566,
                                         columnNumber: 13
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2708,7 +3378,7 @@ function AdminPage() {
                                             children: "No data for this period"
                                         }, void 0, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 490,
+                                            lineNumber: 569,
                                             columnNumber: 19
                                         }, this) : Object.entries(payMap).map(([method, data])=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                                 style: {
@@ -2731,7 +3401,7 @@ function AdminPage() {
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 493,
+                                                        lineNumber: 572,
                                                         columnNumber: 21
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2748,24 +3418,24 @@ function AdminPage() {
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 494,
+                                                        lineNumber: 573,
                                                         columnNumber: 21
                                                     }, this)
                                                 ]
                                             }, method, true, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 492,
+                                                lineNumber: 571,
                                                 columnNumber: 19
                                             }, this))
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 488,
+                                        lineNumber: 567,
                                         columnNumber: 13
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 486,
+                                lineNumber: 565,
                                 columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2785,7 +3455,7 @@ function AdminPage() {
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 503,
+                                        lineNumber: 582,
                                         columnNumber: 13
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2820,17 +3490,17 @@ function AdminPage() {
                                                                 children: h
                                                             }, h, false, {
                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                lineNumber: 509,
+                                                                lineNumber: 588,
                                                                 columnNumber: 73
                                                             }, this))
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 508,
+                                                        lineNumber: 587,
                                                         columnNumber: 24
                                                     }, this)
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/admin/page.tsx",
-                                                    lineNumber: 508,
+                                                    lineNumber: 587,
                                                     columnNumber: 17
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("tbody", {
@@ -2845,12 +3515,12 @@ function AdminPage() {
                                                             children: "No data"
                                                         }, void 0, false, {
                                                             fileName: "[project]/app/admin/page.tsx",
-                                                            lineNumber: 513,
+                                                            lineNumber: 592,
                                                             columnNumber: 27
                                                         }, this)
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 513,
+                                                        lineNumber: 592,
                                                         columnNumber: 23
                                                     }, this) : breakdownRows.map((r, i)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("tr", {
                                                             style: {
@@ -2866,7 +3536,7 @@ function AdminPage() {
                                                                     children: r.label
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 516,
+                                                                    lineNumber: 595,
                                                                     columnNumber: 27
                                                                 }, this),
                                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -2876,7 +3546,7 @@ function AdminPage() {
                                                                     children: r.orders
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 517,
+                                                                    lineNumber: 596,
                                                                     columnNumber: 27
                                                                 }, this),
                                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -2891,7 +3561,7 @@ function AdminPage() {
                                                                     ]
                                                                 }, void 0, true, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 518,
+                                                                    lineNumber: 597,
                                                                     columnNumber: 27
                                                                 }, this),
                                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -2902,18 +3572,18 @@ function AdminPage() {
                                                                     children: r.disc > 0 ? `-₹${r.disc}` : '—'
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 519,
+                                                                    lineNumber: 598,
                                                                     columnNumber: 27
                                                                 }, this)
                                                             ]
                                                         }, i, true, {
                                                             fileName: "[project]/app/admin/page.tsx",
-                                                            lineNumber: 515,
+                                                            lineNumber: 594,
                                                             columnNumber: 25
                                                         }, this))
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/admin/page.tsx",
-                                                    lineNumber: 511,
+                                                    lineNumber: 590,
                                                     columnNumber: 17
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("tfoot", {
@@ -2931,7 +3601,7 @@ function AdminPage() {
                                                                 children: "TOTAL"
                                                             }, void 0, false, {
                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                lineNumber: 525,
+                                                                lineNumber: 604,
                                                                 columnNumber: 19
                                                             }, this),
                                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -2942,7 +3612,7 @@ function AdminPage() {
                                                                 children: pCount
                                                             }, void 0, false, {
                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                lineNumber: 526,
+                                                                lineNumber: 605,
                                                                 columnNumber: 19
                                                             }, this),
                                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -2957,7 +3627,7 @@ function AdminPage() {
                                                                 ]
                                                             }, void 0, true, {
                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                lineNumber: 527,
+                                                                lineNumber: 606,
                                                                 columnNumber: 19
                                                             }, this),
                                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -2969,35 +3639,35 @@ function AdminPage() {
                                                                 children: pDisc > 0 ? `-₹${pDisc}` : '—'
                                                             }, void 0, false, {
                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                lineNumber: 528,
+                                                                lineNumber: 607,
                                                                 columnNumber: 19
                                                             }, this)
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 524,
+                                                        lineNumber: 603,
                                                         columnNumber: 24
                                                     }, this)
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/admin/page.tsx",
-                                                    lineNumber: 524,
+                                                    lineNumber: 603,
                                                     columnNumber: 17
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 507,
+                                            lineNumber: 586,
                                             columnNumber: 15
                                         }, this)
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 506,
+                                        lineNumber: 585,
                                         columnNumber: 13
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 502,
+                                lineNumber: 581,
                                 columnNumber: 11
                             }, this),
                             topItems.length > 0 && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3014,7 +3684,7 @@ function AdminPage() {
                                         children: "🏆 Top Selling Items"
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 537,
+                                        lineNumber: 616,
                                         columnNumber: 15
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3048,7 +3718,7 @@ function AdminPage() {
                                                                 ]
                                                             }, void 0, true, {
                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                lineNumber: 542,
+                                                                lineNumber: 621,
                                                                 columnNumber: 23
                                                             }, this),
                                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3060,7 +3730,7 @@ function AdminPage() {
                                                                 children: name
                                                             }, void 0, false, {
                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                lineNumber: 543,
+                                                                lineNumber: 622,
                                                                 columnNumber: 23
                                                             }, this),
                                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3074,13 +3744,13 @@ function AdminPage() {
                                                                 ]
                                                             }, void 0, true, {
                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                lineNumber: 544,
+                                                                lineNumber: 623,
                                                                 columnNumber: 23
                                                             }, this)
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 541,
+                                                        lineNumber: 620,
                                                         columnNumber: 21
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3101,30 +3771,30 @@ function AdminPage() {
                                                                 children: "sold"
                                                             }, void 0, false, {
                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                lineNumber: 546,
+                                                                lineNumber: 625,
                                                                 columnNumber: 114
                                                             }, this)
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 546,
+                                                        lineNumber: 625,
                                                         columnNumber: 21
                                                     }, this)
                                                 ]
                                             }, name, true, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 540,
+                                                lineNumber: 619,
                                                 columnNumber: 19
                                             }, this))
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 538,
+                                        lineNumber: 617,
                                         columnNumber: 15
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 536,
+                                lineNumber: 615,
                                 columnNumber: 13
                             }, this)
                         ]
@@ -3156,12 +3826,12 @@ function AdminPage() {
                                                 children: c
                                             }, c, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 559,
+                                                lineNumber: 638,
                                                 columnNumber: 17
                                             }, this))
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 557,
+                                        lineNumber: 636,
                                         columnNumber: 13
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3186,7 +3856,7 @@ function AdminPage() {
                                                 children: "↺ Reset"
                                             }, void 0, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 563,
+                                                lineNumber: 642,
                                                 columnNumber: 15
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -3210,26 +3880,26 @@ function AdminPage() {
                                                         children: "＋"
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 564,
+                                                        lineNumber: 643,
                                                         columnNumber: 161
                                                     }, this),
                                                     " Add Item"
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 564,
+                                                lineNumber: 643,
                                                 columnNumber: 15
                                             }, this)
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 562,
+                                        lineNumber: 641,
                                         columnNumber: 13
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 556,
+                                lineNumber: 635,
                                 columnNumber: 11
                             }, this),
                             !menuItems.length ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3243,7 +3913,7 @@ function AdminPage() {
                                 children: "No items in this category"
                             }, void 0, false, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 569,
+                                lineNumber: 648,
                                 columnNumber: 15
                             }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                 style: {
@@ -3287,7 +3957,7 @@ function AdminPage() {
                                                         }
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 574,
+                                                        lineNumber: 653,
                                                         columnNumber: 36
                                                     }, this),
                                                     !item.img && '🍽️',
@@ -3307,7 +3977,7 @@ function AdminPage() {
                                                         children: BADGE_LABEL[item.badge] || item.badge
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 576,
+                                                        lineNumber: 655,
                                                         columnNumber: 38
                                                     }, this),
                                                     item.available === false && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3326,13 +3996,13 @@ function AdminPage() {
                                                         children: "UNAVAILABLE"
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 577,
+                                                        lineNumber: 656,
                                                         columnNumber: 50
                                                     }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 573,
+                                                lineNumber: 652,
                                                 columnNumber: 21
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3351,7 +4021,7 @@ function AdminPage() {
                                                         children: item.category
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 580,
+                                                        lineNumber: 659,
                                                         columnNumber: 23
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3372,7 +4042,7 @@ function AdminPage() {
                                                                 children: item.name
                                                             }, void 0, false, {
                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                lineNumber: 582,
+                                                                lineNumber: 661,
                                                                 columnNumber: 25
                                                             }, this),
                                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3388,13 +4058,13 @@ function AdminPage() {
                                                                 ]
                                                             }, void 0, true, {
                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                lineNumber: 583,
+                                                                lineNumber: 662,
                                                                 columnNumber: 25
                                                             }, this)
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 581,
+                                                        lineNumber: 660,
                                                         columnNumber: 23
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3407,7 +4077,7 @@ function AdminPage() {
                                                         children: item.desc
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 585,
+                                                        lineNumber: 664,
                                                         columnNumber: 23
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3433,7 +4103,7 @@ function AdminPage() {
                                                                 children: "✏️ Edit"
                                                             }, void 0, false, {
                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                lineNumber: 587,
+                                                                lineNumber: 666,
                                                                 columnNumber: 25
                                                             }, this),
                                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -3452,7 +4122,7 @@ function AdminPage() {
                                                                 children: item.available === false ? '✅' : '⏸'
                                                             }, void 0, false, {
                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                lineNumber: 588,
+                                                                lineNumber: 667,
                                                                 columnNumber: 25
                                                             }, this),
                                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -3470,30 +4140,30 @@ function AdminPage() {
                                                                 children: "🗑"
                                                             }, void 0, false, {
                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                lineNumber: 589,
+                                                                lineNumber: 668,
                                                                 columnNumber: 25
                                                             }, this)
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 586,
+                                                        lineNumber: 665,
                                                         columnNumber: 23
                                                     }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 579,
+                                                lineNumber: 658,
                                                 columnNumber: 21
                                             }, this)
                                         ]
                                     }, item.id, true, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 572,
+                                        lineNumber: 651,
                                         columnNumber: 19
                                     }, this))
                             }, void 0, false, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 570,
+                                lineNumber: 649,
                                 columnNumber: 15
                             }, this)
                         ]
@@ -3519,7 +4189,7 @@ function AdminPage() {
                                         children: "🚨 Active Alerts"
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 602,
+                                        lineNumber: 681,
                                         columnNumber: 15
                                     }, this),
                                     alerts.map((a, i)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3532,13 +4202,13 @@ function AdminPage() {
                                             children: a
                                         }, i, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 603,
+                                            lineNumber: 682,
                                             columnNumber: 34
                                         }, this))
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 601,
+                                lineNumber: 680,
                                 columnNumber: 13
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3592,7 +4262,7 @@ function AdminPage() {
                                                 children: c.val
                                             }, void 0, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 610,
+                                                lineNumber: 689,
                                                 columnNumber: 17
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3603,18 +4273,18 @@ function AdminPage() {
                                                 children: c.label
                                             }, void 0, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 611,
+                                                lineNumber: 690,
                                                 columnNumber: 17
                                             }, this)
                                         ]
                                     }, c.label, true, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 609,
+                                        lineNumber: 688,
                                         columnNumber: 15
                                     }, this))
                             }, void 0, false, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 607,
+                                lineNumber: 686,
                                 columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3631,7 +4301,7 @@ function AdminPage() {
                                         children: "🏷️ Discount Log"
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 618,
+                                        lineNumber: 697,
                                         columnNumber: 13
                                     }, this),
                                     !discountOrders.length ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3642,7 +4312,7 @@ function AdminPage() {
                                         children: "No discounts applied yet"
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 620,
+                                        lineNumber: 699,
                                         columnNumber: 17
                                     }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                         style: {
@@ -3681,17 +4351,17 @@ function AdminPage() {
                                                                 children: h
                                                             }, h, false, {
                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                lineNumber: 624,
+                                                                lineNumber: 703,
                                                                 columnNumber: 107
                                                             }, this))
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 623,
+                                                        lineNumber: 702,
                                                         columnNumber: 28
                                                     }, this)
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/admin/page.tsx",
-                                                    lineNumber: 623,
+                                                    lineNumber: 702,
                                                     columnNumber: 21
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("tbody", {
@@ -3723,12 +4393,12 @@ function AdminPage() {
                                                                         children: o.id
                                                                     }, void 0, false, {
                                                                         fileName: "[project]/app/admin/page.tsx",
-                                                                        lineNumber: 632,
+                                                                        lineNumber: 711,
                                                                         columnNumber: 68
                                                                     }, this)
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 632,
+                                                                    lineNumber: 711,
                                                                     columnNumber: 29
                                                                 }, this),
                                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -3739,7 +4409,7 @@ function AdminPage() {
                                                                     children: o.customerName
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 633,
+                                                                    lineNumber: 712,
                                                                     columnNumber: 29
                                                                 }, this),
                                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -3750,7 +4420,7 @@ function AdminPage() {
                                                                     children: new Date(o.timestamp).toLocaleDateString()
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 634,
+                                                                    lineNumber: 713,
                                                                     columnNumber: 29
                                                                 }, this),
                                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -3763,7 +4433,7 @@ function AdminPage() {
                                                                     ]
                                                                 }, void 0, true, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 635,
+                                                                    lineNumber: 714,
                                                                     columnNumber: 29
                                                                 }, this),
                                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -3778,7 +4448,7 @@ function AdminPage() {
                                                                     ]
                                                                 }, void 0, true, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 636,
+                                                                    lineNumber: 715,
                                                                     columnNumber: 29
                                                                 }, this),
                                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -3797,12 +4467,12 @@ function AdminPage() {
                                                                         ]
                                                                     }, void 0, true, {
                                                                         fileName: "[project]/app/admin/page.tsx",
-                                                                        lineNumber: 637,
+                                                                        lineNumber: 716,
                                                                         columnNumber: 68
                                                                     }, this)
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 637,
+                                                                    lineNumber: 716,
                                                                     columnNumber: 29
                                                                 }, this),
                                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -3813,7 +4483,7 @@ function AdminPage() {
                                                                     children: o.discountReason || '—'
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 638,
+                                                                    lineNumber: 717,
                                                                     columnNumber: 29
                                                                 }, this),
                                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -3833,41 +4503,41 @@ function AdminPage() {
                                                                         children: o.status
                                                                     }, void 0, false, {
                                                                         fileName: "[project]/app/admin/page.tsx",
-                                                                        lineNumber: 639,
+                                                                        lineNumber: 718,
                                                                         columnNumber: 68
                                                                     }, this)
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 639,
+                                                                    lineNumber: 718,
                                                                     columnNumber: 29
                                                                 }, this)
                                                             ]
                                                         }, o.id, true, {
                                                             fileName: "[project]/app/admin/page.tsx",
-                                                            lineNumber: 631,
+                                                            lineNumber: 710,
                                                             columnNumber: 27
                                                         }, this);
                                                     })
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/admin/page.tsx",
-                                                    lineNumber: 626,
+                                                    lineNumber: 705,
                                                     columnNumber: 21
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 622,
+                                            lineNumber: 701,
                                             columnNumber: 19
                                         }, this)
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 621,
+                                        lineNumber: 700,
                                         columnNumber: 17
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 617,
+                                lineNumber: 696,
                                 columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3884,7 +4554,7 @@ function AdminPage() {
                                         children: "❌ Cancellation Log"
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 651,
+                                        lineNumber: 730,
                                         columnNumber: 13
                                     }, this),
                                     !cancelledOrders.length ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3895,7 +4565,7 @@ function AdminPage() {
                                         children: "No cancellations recorded"
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 653,
+                                        lineNumber: 732,
                                         columnNumber: 17
                                     }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                         style: {
@@ -3932,17 +4602,17 @@ function AdminPage() {
                                                                 children: h
                                                             }, h, false, {
                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                lineNumber: 657,
+                                                                lineNumber: 736,
                                                                 columnNumber: 92
                                                             }, this))
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 656,
+                                                        lineNumber: 735,
                                                         columnNumber: 28
                                                     }, this)
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/admin/page.tsx",
-                                                    lineNumber: 656,
+                                                    lineNumber: 735,
                                                     columnNumber: 21
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("tbody", {
@@ -3970,12 +4640,12 @@ function AdminPage() {
                                                                         children: o.id
                                                                     }, void 0, false, {
                                                                         fileName: "[project]/app/admin/page.tsx",
-                                                                        lineNumber: 662,
+                                                                        lineNumber: 741,
                                                                         columnNumber: 66
                                                                     }, this)
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 662,
+                                                                    lineNumber: 741,
                                                                     columnNumber: 27
                                                                 }, this),
                                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -3986,7 +4656,7 @@ function AdminPage() {
                                                                     children: o.customerName
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 663,
+                                                                    lineNumber: 742,
                                                                     columnNumber: 27
                                                                 }, this),
                                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -3997,7 +4667,7 @@ function AdminPage() {
                                                                     children: o.type
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 664,
+                                                                    lineNumber: 743,
                                                                     columnNumber: 27
                                                                 }, this),
                                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -4012,7 +4682,7 @@ function AdminPage() {
                                                                     ]
                                                                 }, void 0, true, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 665,
+                                                                    lineNumber: 744,
                                                                     columnNumber: 27
                                                                 }, this),
                                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -4023,7 +4693,7 @@ function AdminPage() {
                                                                     children: new Date(o.timestamp).toLocaleString()
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 666,
+                                                                    lineNumber: 745,
                                                                     columnNumber: 27
                                                                 }, this),
                                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -4034,37 +4704,413 @@ function AdminPage() {
                                                                     children: o.cancelReason || '—'
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 667,
+                                                                    lineNumber: 746,
                                                                     columnNumber: 27
                                                                 }, this)
                                                             ]
                                                         }, o.id, true, {
                                                             fileName: "[project]/app/admin/page.tsx",
-                                                            lineNumber: 661,
+                                                            lineNumber: 740,
                                                             columnNumber: 25
                                                         }, this))
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/admin/page.tsx",
-                                                    lineNumber: 659,
+                                                    lineNumber: 738,
                                                     columnNumber: 21
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 655,
+                                            lineNumber: 734,
                                             columnNumber: 19
                                         }, this)
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 654,
+                                        lineNumber: 733,
                                         columnNumber: 17
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 650,
+                                lineNumber: 729,
                                 columnNumber: 11
-                            }, this)
+                            }, this),
+                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                style: card('#06b6d4'),
+                                children: [
+                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("h3", {
+                                        style: {
+                                            fontFamily: "'Playfair Display',serif",
+                                            fontSize: '0.98rem',
+                                            fontWeight: 700,
+                                            marginBottom: '0.75rem',
+                                            color: '#1A0800'
+                                        },
+                                        children: "👤 Staff Accountability — Today"
+                                    }, void 0, false, {
+                                        fileName: "[project]/app/admin/page.tsx",
+                                        lineNumber: 757,
+                                        columnNumber: 13
+                                    }, this),
+                                    !waiterStats.length ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                        style: {
+                                            color: '#999',
+                                            fontSize: '0.85rem'
+                                        },
+                                        children: "No waiter activity recorded today."
+                                    }, void 0, false, {
+                                        fileName: "[project]/app/admin/page.tsx",
+                                        lineNumber: 759,
+                                        columnNumber: 17
+                                    }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                        style: {
+                                            overflowX: 'auto'
+                                        },
+                                        children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("table", {
+                                            style: {
+                                                width: '100%',
+                                                borderCollapse: 'collapse',
+                                                fontSize: '0.82rem'
+                                            },
+                                            children: [
+                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("thead", {
+                                                    children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("tr", {
+                                                        style: {
+                                                            background: '#ecfeff'
+                                                        },
+                                                        children: [
+                                                            'Waiter',
+                                                            'Accepted',
+                                                            'Cancelled',
+                                                            'Served',
+                                                            'Cancel Rate'
+                                                        ].map((h)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("th", {
+                                                                style: {
+                                                                    padding: '0.48rem 0.75rem',
+                                                                    textAlign: 'left',
+                                                                    fontSize: '0.7rem',
+                                                                    fontWeight: 700,
+                                                                    color: '#0e7490',
+                                                                    textTransform: 'uppercase'
+                                                                },
+                                                                children: h
+                                                            }, h, false, {
+                                                                fileName: "[project]/app/admin/page.tsx",
+                                                                lineNumber: 764,
+                                                                columnNumber: 25
+                                                            }, this))
+                                                    }, void 0, false, {
+                                                        fileName: "[project]/app/admin/page.tsx",
+                                                        lineNumber: 762,
+                                                        columnNumber: 28
+                                                    }, this)
+                                                }, void 0, false, {
+                                                    fileName: "[project]/app/admin/page.tsx",
+                                                    lineNumber: 762,
+                                                    columnNumber: 21
+                                                }, this),
+                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("tbody", {
+                                                    children: waiterStats.map((s, i)=>{
+                                                        const isFlagged = s.cancellationRate > 20;
+                                                        return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("tr", {
+                                                            style: {
+                                                                borderBottom: '1px solid #cffafe',
+                                                                background: isFlagged ? '#fef2f2' : i % 2 ? '#f0fdfe' : 'white'
+                                                            },
+                                                            children: [
+                                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
+                                                                    style: {
+                                                                        padding: '0.48rem 0.75rem',
+                                                                        fontWeight: 700,
+                                                                        color: '#1A0800'
+                                                                    },
+                                                                    children: [
+                                                                        s.name,
+                                                                        isFlagged && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                                                            style: {
+                                                                                marginLeft: '0.3rem',
+                                                                                color: '#ef4444',
+                                                                                fontSize: '0.7rem'
+                                                                            },
+                                                                            children: "⚠️ High"
+                                                                        }, void 0, false, {
+                                                                            fileName: "[project]/app/admin/page.tsx",
+                                                                            lineNumber: 772,
+                                                                            columnNumber: 120
+                                                                        }, this)
+                                                                    ]
+                                                                }, void 0, true, {
+                                                                    fileName: "[project]/app/admin/page.tsx",
+                                                                    lineNumber: 772,
+                                                                    columnNumber: 29
+                                                                }, this),
+                                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
+                                                                    style: {
+                                                                        padding: '0.48rem 0.75rem',
+                                                                        fontWeight: 700,
+                                                                        color: '#16a34a'
+                                                                    },
+                                                                    children: s.ordersAccepted
+                                                                }, void 0, false, {
+                                                                    fileName: "[project]/app/admin/page.tsx",
+                                                                    lineNumber: 773,
+                                                                    columnNumber: 29
+                                                                }, this),
+                                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
+                                                                    style: {
+                                                                        padding: '0.48rem 0.75rem',
+                                                                        fontWeight: 700,
+                                                                        color: s.ordersCancelled > 0 ? '#ef4444' : '#9ca3af'
+                                                                    },
+                                                                    children: s.ordersCancelled
+                                                                }, void 0, false, {
+                                                                    fileName: "[project]/app/admin/page.tsx",
+                                                                    lineNumber: 774,
+                                                                    columnNumber: 29
+                                                                }, this),
+                                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
+                                                                    style: {
+                                                                        padding: '0.48rem 0.75rem',
+                                                                        fontWeight: 700,
+                                                                        color: '#06b6d4'
+                                                                    },
+                                                                    children: s.ordersServed
+                                                                }, void 0, false, {
+                                                                    fileName: "[project]/app/admin/page.tsx",
+                                                                    lineNumber: 775,
+                                                                    columnNumber: 29
+                                                                }, this),
+                                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
+                                                                    style: {
+                                                                        padding: '0.48rem 0.75rem'
+                                                                    },
+                                                                    children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                                                        style: {
+                                                                            fontWeight: 700,
+                                                                            color: s.cancellationRate > 20 ? '#ef4444' : s.cancellationRate > 10 ? '#f59e0b' : '#16a34a'
+                                                                        },
+                                                                        children: [
+                                                                            s.cancellationRate,
+                                                                            "%"
+                                                                        ]
+                                                                    }, void 0, true, {
+                                                                        fileName: "[project]/app/admin/page.tsx",
+                                                                        lineNumber: 777,
+                                                                        columnNumber: 31
+                                                                    }, this)
+                                                                }, void 0, false, {
+                                                                    fileName: "[project]/app/admin/page.tsx",
+                                                                    lineNumber: 776,
+                                                                    columnNumber: 29
+                                                                }, this)
+                                                            ]
+                                                        }, s.name, true, {
+                                                            fileName: "[project]/app/admin/page.tsx",
+                                                            lineNumber: 771,
+                                                            columnNumber: 27
+                                                        }, this);
+                                                    })
+                                                }, void 0, false, {
+                                                    fileName: "[project]/app/admin/page.tsx",
+                                                    lineNumber: 767,
+                                                    columnNumber: 21
+                                                }, this)
+                                            ]
+                                        }, void 0, true, {
+                                            fileName: "[project]/app/admin/page.tsx",
+                                            lineNumber: 761,
+                                            columnNumber: 19
+                                        }, this)
+                                    }, void 0, false, {
+                                        fileName: "[project]/app/admin/page.tsx",
+                                        lineNumber: 760,
+                                        columnNumber: 17
+                                    }, this)
+                                ]
+                            }, void 0, true, {
+                                fileName: "[project]/app/admin/page.tsx",
+                                lineNumber: 756,
+                                columnNumber: 11
+                            }, this),
+                            (()=>{
+                                const fraudAlerts = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getFraudAlerts"])().slice(0, 20);
+                                if (!fraudAlerts.length) return null;
+                                return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                    style: card('#f97316'),
+                                    children: [
+                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("h3", {
+                                            style: {
+                                                fontFamily: "'Playfair Display',serif",
+                                                fontSize: '0.98rem',
+                                                fontWeight: 700,
+                                                marginBottom: '0.75rem',
+                                                color: '#1A0800'
+                                            },
+                                            children: "🚨 Fraud Alert Log"
+                                        }, void 0, false, {
+                                            fileName: "[project]/app/admin/page.tsx",
+                                            lineNumber: 796,
+                                            columnNumber: 17
+                                        }, this),
+                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                            style: {
+                                                overflowX: 'auto'
+                                            },
+                                            children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("table", {
+                                                style: {
+                                                    width: '100%',
+                                                    borderCollapse: 'collapse',
+                                                    fontSize: '0.8rem'
+                                                },
+                                                children: [
+                                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("thead", {
+                                                        children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("tr", {
+                                                            style: {
+                                                                background: '#fff7ed'
+                                                            },
+                                                            children: [
+                                                                'Type',
+                                                                'Detail',
+                                                                'By',
+                                                                'Amount',
+                                                                'Date'
+                                                            ].map((h)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("th", {
+                                                                    style: {
+                                                                        padding: '0.48rem 0.7rem',
+                                                                        textAlign: 'left',
+                                                                        fontSize: '0.7rem',
+                                                                        fontWeight: 700,
+                                                                        color: '#9a3412',
+                                                                        textTransform: 'uppercase'
+                                                                    },
+                                                                    children: h
+                                                                }, h, false, {
+                                                                    fileName: "[project]/app/admin/page.tsx",
+                                                                    lineNumber: 800,
+                                                                    columnNumber: 70
+                                                                }, this))
+                                                        }, void 0, false, {
+                                                            fileName: "[project]/app/admin/page.tsx",
+                                                            lineNumber: 799,
+                                                            columnNumber: 28
+                                                        }, this)
+                                                    }, void 0, false, {
+                                                        fileName: "[project]/app/admin/page.tsx",
+                                                        lineNumber: 799,
+                                                        columnNumber: 21
+                                                    }, this),
+                                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("tbody", {
+                                                        children: fraudAlerts.map((a)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("tr", {
+                                                                style: {
+                                                                    borderBottom: '1px solid #fed7aa'
+                                                                },
+                                                                children: [
+                                                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
+                                                                        style: {
+                                                                            padding: '0.48rem 0.7rem'
+                                                                        },
+                                                                        children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                                                            style: {
+                                                                                fontSize: '0.7rem',
+                                                                                fontWeight: 700,
+                                                                                padding: '0.12rem 0.45rem',
+                                                                                borderRadius: 10,
+                                                                                background: '#fff7ed',
+                                                                                color: '#ea580c'
+                                                                            },
+                                                                            children: a.type.replace(/_/g, ' ')
+                                                                        }, void 0, false, {
+                                                                            fileName: "[project]/app/admin/page.tsx",
+                                                                            lineNumber: 805,
+                                                                            columnNumber: 66
+                                                                        }, this)
+                                                                    }, void 0, false, {
+                                                                        fileName: "[project]/app/admin/page.tsx",
+                                                                        lineNumber: 805,
+                                                                        columnNumber: 27
+                                                                    }, this),
+                                                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
+                                                                        style: {
+                                                                            padding: '0.48rem 0.7rem',
+                                                                            color: '#555',
+                                                                            maxWidth: '200px',
+                                                                            overflow: 'hidden',
+                                                                            textOverflow: 'ellipsis',
+                                                                            whiteSpace: 'nowrap'
+                                                                        },
+                                                                        children: a.detail
+                                                                    }, void 0, false, {
+                                                                        fileName: "[project]/app/admin/page.tsx",
+                                                                        lineNumber: 806,
+                                                                        columnNumber: 27
+                                                                    }, this),
+                                                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
+                                                                        style: {
+                                                                            padding: '0.48rem 0.7rem',
+                                                                            fontWeight: 600
+                                                                        },
+                                                                        children: a.by
+                                                                    }, void 0, false, {
+                                                                        fileName: "[project]/app/admin/page.tsx",
+                                                                        lineNumber: 807,
+                                                                        columnNumber: 27
+                                                                    }, this),
+                                                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
+                                                                        style: {
+                                                                            padding: '0.48rem 0.7rem',
+                                                                            color: '#ef4444',
+                                                                            fontWeight: 700
+                                                                        },
+                                                                        children: a.amount ? `₹${a.amount}` : '—'
+                                                                    }, void 0, false, {
+                                                                        fileName: "[project]/app/admin/page.tsx",
+                                                                        lineNumber: 808,
+                                                                        columnNumber: 27
+                                                                    }, this),
+                                                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
+                                                                        style: {
+                                                                            padding: '0.48rem 0.7rem',
+                                                                            color: '#888',
+                                                                            fontSize: '0.75rem'
+                                                                        },
+                                                                        children: new Date(a.at).toLocaleString('en-IN', {
+                                                                            dateStyle: 'short',
+                                                                            timeStyle: 'short'
+                                                                        })
+                                                                    }, void 0, false, {
+                                                                        fileName: "[project]/app/admin/page.tsx",
+                                                                        lineNumber: 809,
+                                                                        columnNumber: 27
+                                                                    }, this)
+                                                                ]
+                                                            }, a.id, true, {
+                                                                fileName: "[project]/app/admin/page.tsx",
+                                                                lineNumber: 804,
+                                                                columnNumber: 25
+                                                            }, this))
+                                                    }, void 0, false, {
+                                                        fileName: "[project]/app/admin/page.tsx",
+                                                        lineNumber: 802,
+                                                        columnNumber: 21
+                                                    }, this)
+                                                ]
+                                            }, void 0, true, {
+                                                fileName: "[project]/app/admin/page.tsx",
+                                                lineNumber: 798,
+                                                columnNumber: 19
+                                            }, this)
+                                        }, void 0, false, {
+                                            fileName: "[project]/app/admin/page.tsx",
+                                            lineNumber: 797,
+                                            columnNumber: 17
+                                        }, this)
+                                    ]
+                                }, void 0, true, {
+                                    fileName: "[project]/app/admin/page.tsx",
+                                    lineNumber: 795,
+                                    columnNumber: 15
+                                }, this);
+                            })()
                         ]
                     }, void 0, true),
                     section === 'staff' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["Fragment"], {
@@ -4083,7 +5129,7 @@ function AdminPage() {
                                         children: "🔐 Change Admin PIN"
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 682,
+                                        lineNumber: 825,
                                         columnNumber: 13
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
@@ -4095,7 +5141,7 @@ function AdminPage() {
                                         children: "Used to login to this dashboard and authorise discounts. Requires your current PIN to change."
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 683,
+                                        lineNumber: 826,
                                         columnNumber: 13
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4119,7 +5165,7 @@ function AdminPage() {
                                                         children: "Current PIN"
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 686,
+                                                        lineNumber: 829,
                                                         columnNumber: 17
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -4136,13 +5182,13 @@ function AdminPage() {
                                                         }
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 687,
+                                                        lineNumber: 830,
                                                         columnNumber: 17
                                                     }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 685,
+                                                lineNumber: 828,
                                                 columnNumber: 15
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4158,7 +5204,7 @@ function AdminPage() {
                                                         children: "New PIN"
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 690,
+                                                        lineNumber: 833,
                                                         columnNumber: 17
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -4175,13 +5221,13 @@ function AdminPage() {
                                                         }
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 691,
+                                                        lineNumber: 834,
                                                         columnNumber: 17
                                                     }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 689,
+                                                lineNumber: 832,
                                                 columnNumber: 15
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4197,7 +5243,7 @@ function AdminPage() {
                                                         children: "Confirm PIN"
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 694,
+                                                        lineNumber: 837,
                                                         columnNumber: 17
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -4214,19 +5260,19 @@ function AdminPage() {
                                                         }
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 695,
+                                                        lineNumber: 838,
                                                         columnNumber: 17
                                                     }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 693,
+                                                lineNumber: 836,
                                                 columnNumber: 15
                                             }, this)
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 684,
+                                        lineNumber: 827,
                                         columnNumber: 13
                                     }, this),
                                     adminPinMsg && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4238,7 +5284,7 @@ function AdminPage() {
                                         children: adminPinMsg
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 698,
+                                        lineNumber: 841,
                                         columnNumber: 29
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -4250,13 +5296,13 @@ function AdminPage() {
                                         children: "🔐 Update Admin PIN"
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 699,
+                                        lineNumber: 842,
                                         columnNumber: 13
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 681,
+                                lineNumber: 824,
                                 columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4273,7 +5319,7 @@ function AdminPage() {
                                         children: "🛡️ PIN Recovery — Security Question"
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 704,
+                                        lineNumber: 847,
                                         columnNumber: 13
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
@@ -4295,13 +5341,13 @@ function AdminPage() {
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 707,
+                                                lineNumber: 850,
                                                 columnNumber: 28
                                             }, this)
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 705,
+                                        lineNumber: 848,
                                         columnNumber: 13
                                     }, this),
                                     secSetup && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4321,7 +5367,7 @@ function AdminPage() {
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 710,
+                                        lineNumber: 853,
                                         columnNumber: 15
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4348,7 +5394,7 @@ function AdminPage() {
                                                         children: "Security Question"
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 716,
+                                                        lineNumber: 859,
                                                         columnNumber: 17
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("select", {
@@ -4364,7 +5410,7 @@ function AdminPage() {
                                                                 children: "— Select a question —"
                                                             }, void 0, false, {
                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                lineNumber: 722,
+                                                                lineNumber: 865,
                                                                 columnNumber: 19
                                                             }, this),
                                                             __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$auth$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["SECURITY_QUESTIONS"].map((q)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("option", {
@@ -4372,19 +5418,19 @@ function AdminPage() {
                                                                     children: q
                                                                 }, q, false, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 723,
+                                                                    lineNumber: 866,
                                                                     columnNumber: 46
                                                                 }, this))
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 717,
+                                                        lineNumber: 860,
                                                         columnNumber: 17
                                                     }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 715,
+                                                lineNumber: 858,
                                                 columnNumber: 15
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4400,7 +5446,7 @@ function AdminPage() {
                                                         children: "Your Answer"
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 727,
+                                                        lineNumber: 870,
                                                         columnNumber: 17
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -4415,13 +5461,13 @@ function AdminPage() {
                                                         }
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 728,
+                                                        lineNumber: 871,
                                                         columnNumber: 17
                                                     }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 726,
+                                                lineNumber: 869,
                                                 columnNumber: 15
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4437,7 +5483,7 @@ function AdminPage() {
                                                         children: "Confirm Answer"
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 731,
+                                                        lineNumber: 874,
                                                         columnNumber: 17
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -4452,19 +5498,19 @@ function AdminPage() {
                                                         }
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 732,
+                                                        lineNumber: 875,
                                                         columnNumber: 17
                                                     }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 730,
+                                                lineNumber: 873,
                                                 columnNumber: 15
                                             }, this)
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 714,
+                                        lineNumber: 857,
                                         columnNumber: 13
                                     }, this),
                                     secMsg && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4476,7 +5522,7 @@ function AdminPage() {
                                         children: secMsg
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 735,
+                                        lineNumber: 878,
                                         columnNumber: 24
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -4491,13 +5537,13 @@ function AdminPage() {
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 736,
+                                        lineNumber: 879,
                                         columnNumber: 13
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 703,
+                                lineNumber: 846,
                                 columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4522,7 +5568,7 @@ function AdminPage() {
                                                 children: "🔥 Kitchen PIN"
                                             }, void 0, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 742,
+                                                lineNumber: 885,
                                                 columnNumber: 15
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
@@ -4537,13 +5583,13 @@ function AdminPage() {
                                                         children: "/kitchen"
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 743,
+                                                        lineNumber: 886,
                                                         columnNumber: 133
                                                     }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 743,
+                                                lineNumber: 886,
                                                 columnNumber: 15
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -4560,7 +5606,7 @@ function AdminPage() {
                                                 }
                                             }, void 0, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 744,
+                                                lineNumber: 887,
                                                 columnNumber: 15
                                             }, this),
                                             kitchenPinMsg && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4572,7 +5618,7 @@ function AdminPage() {
                                                 children: kitchenPinMsg
                                             }, void 0, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 750,
+                                                lineNumber: 893,
                                                 columnNumber: 33
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -4584,13 +5630,13 @@ function AdminPage() {
                                                 children: "💾 Save Kitchen PIN"
                                             }, void 0, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 751,
+                                                lineNumber: 894,
                                                 columnNumber: 15
                                             }, this)
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 741,
+                                        lineNumber: 884,
                                         columnNumber: 13
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4607,7 +5653,7 @@ function AdminPage() {
                                                 children: "💳 Manager PIN"
                                             }, void 0, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 754,
+                                                lineNumber: 897,
                                                 columnNumber: 15
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
@@ -4622,13 +5668,13 @@ function AdminPage() {
                                                         children: "/manager"
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 755,
+                                                        lineNumber: 898,
                                                         columnNumber: 133
                                                     }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 755,
+                                                lineNumber: 898,
                                                 columnNumber: 15
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -4645,7 +5691,7 @@ function AdminPage() {
                                                 }
                                             }, void 0, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 756,
+                                                lineNumber: 899,
                                                 columnNumber: 15
                                             }, this),
                                             managerPinMsg && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4657,7 +5703,7 @@ function AdminPage() {
                                                 children: managerPinMsg
                                             }, void 0, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 762,
+                                                lineNumber: 905,
                                                 columnNumber: 33
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -4669,19 +5715,19 @@ function AdminPage() {
                                                 children: "💾 Save Manager PIN"
                                             }, void 0, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 763,
+                                                lineNumber: 906,
                                                 columnNumber: 15
                                             }, this)
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 753,
+                                        lineNumber: 896,
                                         columnNumber: 13
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 740,
+                                lineNumber: 883,
                                 columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4698,7 +5744,7 @@ function AdminPage() {
                                         children: "➕ Create Waiter Account"
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 769,
+                                        lineNumber: 912,
                                         columnNumber: 13
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4722,7 +5768,7 @@ function AdminPage() {
                                                         children: "Full Name"
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 772,
+                                                        lineNumber: 915,
                                                         columnNumber: 17
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -4737,13 +5783,13 @@ function AdminPage() {
                                                         }
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 773,
+                                                        lineNumber: 916,
                                                         columnNumber: 17
                                                     }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 771,
+                                                lineNumber: 914,
                                                 columnNumber: 15
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4759,7 +5805,7 @@ function AdminPage() {
                                                         children: "Username"
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 776,
+                                                        lineNumber: 919,
                                                         columnNumber: 17
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -4774,13 +5820,13 @@ function AdminPage() {
                                                         }
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 777,
+                                                        lineNumber: 920,
                                                         columnNumber: 17
                                                     }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 775,
+                                                lineNumber: 918,
                                                 columnNumber: 15
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4796,7 +5842,7 @@ function AdminPage() {
                                                         children: "PIN (4+ digits)"
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 780,
+                                                        lineNumber: 923,
                                                         columnNumber: 17
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -4816,13 +5862,13 @@ function AdminPage() {
                                                         }
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 781,
+                                                        lineNumber: 924,
                                                         columnNumber: 17
                                                     }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 779,
+                                                lineNumber: 922,
                                                 columnNumber: 15
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -4835,13 +5881,13 @@ function AdminPage() {
                                                 children: "✅ Add"
                                             }, void 0, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 791,
+                                                lineNumber: 934,
                                                 columnNumber: 15
                                             }, this)
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 770,
+                                        lineNumber: 913,
                                         columnNumber: 13
                                     }, this),
                                     staffMsg && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4853,13 +5899,13 @@ function AdminPage() {
                                         children: staffMsg
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 793,
+                                        lineNumber: 936,
                                         columnNumber: 26
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 768,
+                                lineNumber: 911,
                                 columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4880,7 +5926,7 @@ function AdminPage() {
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 798,
+                                        lineNumber: 941,
                                         columnNumber: 13
                                     }, this),
                                     !staffAccounts.length ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -4893,7 +5939,7 @@ function AdminPage() {
                                         children: "No waiter accounts yet. Create one above."
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 802,
+                                        lineNumber: 945,
                                         columnNumber: 17
                                     }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                         style: {
@@ -4929,17 +5975,17 @@ function AdminPage() {
                                                                 children: h
                                                             }, h, false, {
                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                lineNumber: 808,
+                                                                lineNumber: 951,
                                                                 columnNumber: 27
                                                             }, this))
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 806,
+                                                        lineNumber: 949,
                                                         columnNumber: 23
                                                     }, this)
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/admin/page.tsx",
-                                                    lineNumber: 805,
+                                                    lineNumber: 948,
                                                     columnNumber: 21
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("tbody", {
@@ -4957,7 +6003,7 @@ function AdminPage() {
                                                                     children: acc.name
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 815,
+                                                                    lineNumber: 958,
                                                                     columnNumber: 27
                                                                 }, this),
                                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -4969,7 +6015,7 @@ function AdminPage() {
                                                                     children: acc.username
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 816,
+                                                                    lineNumber: 959,
                                                                     columnNumber: 27
                                                                 }, this),
                                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -4988,12 +6034,12 @@ function AdminPage() {
                                                                         children: acc.active ? 'Active' : 'Inactive'
                                                                     }, void 0, false, {
                                                                         fileName: "[project]/app/admin/page.tsx",
-                                                                        lineNumber: 818,
+                                                                        lineNumber: 961,
                                                                         columnNumber: 29
                                                                     }, this)
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 817,
+                                                                    lineNumber: 960,
                                                                     columnNumber: 27
                                                                 }, this),
                                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -5009,7 +6055,7 @@ function AdminPage() {
                                                                     })
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 822,
+                                                                    lineNumber: 965,
                                                                     columnNumber: 27
                                                                 }, this),
                                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -5037,7 +6083,7 @@ function AdminPage() {
                                                                                 children: acc.active ? '⛔ Disable' : '✅ Enable'
                                                                             }, void 0, false, {
                                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                                lineNumber: 827,
+                                                                                lineNumber: 970,
                                                                                 columnNumber: 31
                                                                             }, this),
                                                                             editPinId === acc.id ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -5066,7 +6112,7 @@ function AdminPage() {
                                                                                         }
                                                                                     }, void 0, false, {
                                                                                         fileName: "[project]/app/admin/page.tsx",
-                                                                                        lineNumber: 835,
+                                                                                        lineNumber: 978,
                                                                                         columnNumber: 37
                                                                                     }, this),
                                                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -5086,7 +6132,7 @@ function AdminPage() {
                                                                                         children: "Save"
                                                                                     }, void 0, false, {
                                                                                         fileName: "[project]/app/admin/page.tsx",
-                                                                                        lineNumber: 844,
+                                                                                        lineNumber: 987,
                                                                                         columnNumber: 37
                                                                                     }, this),
                                                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -5102,13 +6148,13 @@ function AdminPage() {
                                                                                         children: "✕"
                                                                                     }, void 0, false, {
                                                                                         fileName: "[project]/app/admin/page.tsx",
-                                                                                        lineNumber: 845,
+                                                                                        lineNumber: 988,
                                                                                         columnNumber: 37
                                                                                     }, this)
                                                                                 ]
                                                                             }, void 0, true, {
                                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                                lineNumber: 834,
+                                                                                lineNumber: 977,
                                                                                 columnNumber: 35
                                                                             }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
                                                                                 onClick: ()=>{
@@ -5123,7 +6169,7 @@ function AdminPage() {
                                                                                 children: "🔑 PIN"
                                                                             }, void 0, false, {
                                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                                lineNumber: 847,
+                                                                                lineNumber: 990,
                                                                                 columnNumber: 35
                                                                             }, this),
                                                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -5141,46 +6187,46 @@ function AdminPage() {
                                                                                 children: "🗑️ Delete"
                                                                             }, void 0, false, {
                                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                                lineNumber: 849,
+                                                                                lineNumber: 992,
                                                                                 columnNumber: 31
                                                                             }, this)
                                                                         ]
                                                                     }, void 0, true, {
                                                                         fileName: "[project]/app/admin/page.tsx",
-                                                                        lineNumber: 826,
+                                                                        lineNumber: 969,
                                                                         columnNumber: 29
                                                                     }, this)
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/app/admin/page.tsx",
-                                                                    lineNumber: 825,
+                                                                    lineNumber: 968,
                                                                     columnNumber: 27
                                                                 }, this)
                                                             ]
                                                         }, acc.id, true, {
                                                             fileName: "[project]/app/admin/page.tsx",
-                                                            lineNumber: 814,
+                                                            lineNumber: 957,
                                                             columnNumber: 25
                                                         }, this))
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/admin/page.tsx",
-                                                    lineNumber: 812,
+                                                    lineNumber: 955,
                                                     columnNumber: 21
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 804,
+                                            lineNumber: 947,
                                             columnNumber: 19
                                         }, this)
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 803,
+                                        lineNumber: 946,
                                         columnNumber: 17
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 797,
+                                lineNumber: 940,
                                 columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -5197,7 +6243,7 @@ function AdminPage() {
                                         children: "🔗 Staff Portal Links"
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 867,
+                                        lineNumber: 1010,
                                         columnNumber: 13
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -5255,18 +6301,18 @@ function AdminPage() {
                                                 children: l.label
                                             }, l.href, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 877,
+                                                lineNumber: 1020,
                                                 columnNumber: 17
                                             }, this))
                                     }, void 0, false, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 868,
+                                        lineNumber: 1011,
                                         columnNumber: 13
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/admin/page.tsx",
-                                lineNumber: 866,
+                                lineNumber: 1009,
                                 columnNumber: 11
                             }, this)
                         ]
@@ -5274,7 +6320,7 @@ function AdminPage() {
                 ]
             }, void 0, true, {
                 fileName: "[project]/app/admin/page.tsx",
-                lineNumber: 357,
+                lineNumber: 364,
                 columnNumber: 7
             }, this),
             selOrder && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -5318,7 +6364,7 @@ function AdminPage() {
                                             children: "Order Details"
                                         }, void 0, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 893,
+                                            lineNumber: 1036,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -5330,7 +6376,7 @@ function AdminPage() {
                                             children: selOrder.id
                                         }, void 0, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 894,
+                                            lineNumber: 1037,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -5341,13 +6387,13 @@ function AdminPage() {
                                             children: new Date(selOrder.timestamp).toLocaleString()
                                         }, void 0, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 895,
+                                            lineNumber: 1038,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/admin/page.tsx",
-                                    lineNumber: 892,
+                                    lineNumber: 1035,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -5370,7 +6416,7 @@ function AdminPage() {
                                             children: selOrder.status
                                         }, void 0, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 898,
+                                            lineNumber: 1041,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -5386,19 +6432,19 @@ function AdminPage() {
                                             children: "×"
                                         }, void 0, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 899,
+                                            lineNumber: 1042,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/admin/page.tsx",
-                                    lineNumber: 897,
+                                    lineNumber: 1040,
                                     columnNumber: 15
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 891,
+                            lineNumber: 1034,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -5449,7 +6495,7 @@ function AdminPage() {
                                                 children: l
                                             }, void 0, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 904,
+                                                lineNumber: 1047,
                                                 columnNumber: 30
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -5462,13 +6508,13 @@ function AdminPage() {
                                                 children: v
                                             }, void 0, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 904,
+                                                lineNumber: 1047,
                                                 columnNumber: 150
                                             }, this)
                                         ]
                                     }, l, true, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 904,
+                                        lineNumber: 1047,
                                         columnNumber: 17
                                     }, this)),
                                 selOrder.cancelReason && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -5486,7 +6532,7 @@ function AdminPage() {
                                             children: "Cancel Reason"
                                         }, void 0, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 906,
+                                            lineNumber: 1049,
                                             columnNumber: 74
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -5498,13 +6544,13 @@ function AdminPage() {
                                             children: selOrder.cancelReason
                                         }, void 0, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 906,
+                                            lineNumber: 1049,
                                             columnNumber: 184
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/admin/page.tsx",
-                                    lineNumber: 906,
+                                    lineNumber: 1049,
                                     columnNumber: 41
                                 }, this),
                                 selOrder.discountReason && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -5522,7 +6568,7 @@ function AdminPage() {
                                             children: "Discount Reason"
                                         }, void 0, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 907,
+                                            lineNumber: 1050,
                                             columnNumber: 76
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -5534,19 +6580,19 @@ function AdminPage() {
                                             children: selOrder.discountReason
                                         }, void 0, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 907,
+                                            lineNumber: 1050,
                                             columnNumber: 188
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/admin/page.tsx",
-                                    lineNumber: 907,
+                                    lineNumber: 1050,
                                     columnNumber: 43
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 902,
+                            lineNumber: 1045,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -5566,7 +6612,7 @@ function AdminPage() {
                                     children: "Items Ordered"
                                 }, void 0, false, {
                                     fileName: "[project]/app/admin/page.tsx",
-                                    lineNumber: 910,
+                                    lineNumber: 1053,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("table", {
@@ -5599,17 +6645,17 @@ function AdminPage() {
                                                         children: h
                                                     }, h, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 912,
+                                                        lineNumber: 1055,
                                                         columnNumber: 101
                                                     }, this))
                                             }, void 0, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 912,
+                                                lineNumber: 1055,
                                                 columnNumber: 24
                                             }, this)
                                         }, void 0, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 912,
+                                            lineNumber: 1055,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("tbody", {
@@ -5626,7 +6672,7 @@ function AdminPage() {
                                                             children: i + 1
                                                         }, void 0, false, {
                                                             fileName: "[project]/app/admin/page.tsx",
-                                                            lineNumber: 916,
+                                                            lineNumber: 1059,
                                                             columnNumber: 23
                                                         }, this),
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -5637,7 +6683,7 @@ function AdminPage() {
                                                             children: item.name
                                                         }, void 0, false, {
                                                             fileName: "[project]/app/admin/page.tsx",
-                                                            lineNumber: 917,
+                                                            lineNumber: 1060,
                                                             columnNumber: 23
                                                         }, this),
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -5649,7 +6695,7 @@ function AdminPage() {
                                                             children: item.qty
                                                         }, void 0, false, {
                                                             fileName: "[project]/app/admin/page.tsx",
-                                                            lineNumber: 918,
+                                                            lineNumber: 1061,
                                                             columnNumber: 23
                                                         }, this),
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -5662,7 +6708,7 @@ function AdminPage() {
                                                             ]
                                                         }, void 0, true, {
                                                             fileName: "[project]/app/admin/page.tsx",
-                                                            lineNumber: 919,
+                                                            lineNumber: 1062,
                                                             columnNumber: 23
                                                         }, this),
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("td", {
@@ -5676,24 +6722,24 @@ function AdminPage() {
                                                             ]
                                                         }, void 0, true, {
                                                             fileName: "[project]/app/admin/page.tsx",
-                                                            lineNumber: 920,
+                                                            lineNumber: 1063,
                                                             columnNumber: 23
                                                         }, this)
                                                     ]
                                                 }, i, true, {
                                                     fileName: "[project]/app/admin/page.tsx",
-                                                    lineNumber: 915,
+                                                    lineNumber: 1058,
                                                     columnNumber: 21
                                                 }, this))
                                         }, void 0, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 913,
+                                            lineNumber: 1056,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/admin/page.tsx",
-                                    lineNumber: 911,
+                                    lineNumber: 1054,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -5716,13 +6762,13 @@ function AdminPage() {
                                                     ]
                                                 }, void 0, true, {
                                                     fileName: "[project]/app/admin/page.tsx",
-                                                    lineNumber: 926,
+                                                    lineNumber: 1069,
                                                     columnNumber: 74
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 926,
+                                            lineNumber: 1069,
                                             columnNumber: 17
                                         }, this),
                                         (selOrder.discount || 0) > 0 && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -5739,13 +6785,13 @@ function AdminPage() {
                                                     ]
                                                 }, void 0, true, {
                                                     fileName: "[project]/app/admin/page.tsx",
-                                                    lineNumber: 927,
+                                                    lineNumber: 1070,
                                                     columnNumber: 106
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 927,
+                                            lineNumber: 1070,
                                             columnNumber: 46
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -5763,19 +6809,19 @@ function AdminPage() {
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 928,
+                                            lineNumber: 1071,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/admin/page.tsx",
-                                    lineNumber: 925,
+                                    lineNumber: 1068,
                                     columnNumber: 15
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 909,
+                            lineNumber: 1052,
                             columnNumber: 13
                         }, this),
                         (selOrder.timeline?.length ?? 0) > 0 && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -5796,7 +6842,7 @@ function AdminPage() {
                                     children: "⏱ Order Timeline"
                                 }, void 0, false, {
                                     fileName: "[project]/app/admin/page.tsx",
-                                    lineNumber: 933,
+                                    lineNumber: 1076,
                                     columnNumber: 17
                                 }, this),
                                 (selOrder.timeline || []).map((ev, i)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -5818,7 +6864,7 @@ function AdminPage() {
                                                 }
                                             }, void 0, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 936,
+                                                lineNumber: 1079,
                                                 columnNumber: 21
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -5833,7 +6879,7 @@ function AdminPage() {
                                                         children: ev.status
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 938,
+                                                        lineNumber: 1081,
                                                         columnNumber: 23
                                                     }, this),
                                                     ev.by && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -5847,7 +6893,7 @@ function AdminPage() {
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 939,
+                                                        lineNumber: 1082,
                                                         columnNumber: 31
                                                     }, this),
                                                     ev.note && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -5859,7 +6905,7 @@ function AdminPage() {
                                                         children: ev.note
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 940,
+                                                        lineNumber: 1083,
                                                         columnNumber: 33
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -5870,36 +6916,36 @@ function AdminPage() {
                                                         children: new Date(ev.at || ev.timestamp || '').toLocaleTimeString()
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/admin/page.tsx",
-                                                        lineNumber: 941,
+                                                        lineNumber: 1084,
                                                         columnNumber: 23
                                                     }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 937,
+                                                lineNumber: 1080,
                                                 columnNumber: 21
                                             }, this)
                                         ]
                                     }, i, true, {
                                         fileName: "[project]/app/admin/page.tsx",
-                                        lineNumber: 935,
+                                        lineNumber: 1078,
                                         columnNumber: 19
                                     }, this))
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 932,
+                            lineNumber: 1075,
                             columnNumber: 15
                         }, this)
                     ]
                 }, void 0, true, {
                     fileName: "[project]/app/admin/page.tsx",
-                    lineNumber: 890,
+                    lineNumber: 1033,
                     columnNumber: 11
                 }, this)
             }, void 0, false, {
                 fileName: "[project]/app/admin/page.tsx",
-                lineNumber: 889,
+                lineNumber: 1032,
                 columnNumber: 9
             }, this),
             menuModal.open && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -5944,7 +6990,7 @@ function AdminPage() {
                                     children: menuModal.isEdit ? '✏️ Edit Menu Item' : '➕ Add New Item'
                                 }, void 0, false, {
                                     fileName: "[project]/app/admin/page.tsx",
-                                    lineNumber: 956,
+                                    lineNumber: 1099,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -5964,13 +7010,13 @@ function AdminPage() {
                                     children: "×"
                                 }, void 0, false, {
                                     fileName: "[project]/app/admin/page.tsx",
-                                    lineNumber: 957,
+                                    lineNumber: 1100,
                                     columnNumber: 15
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 955,
+                            lineNumber: 1098,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -5999,7 +7045,7 @@ function AdminPage() {
                                                     children: "Category *"
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/admin/page.tsx",
-                                                    lineNumber: 962,
+                                                    lineNumber: 1105,
                                                     columnNumber: 19
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("select", {
@@ -6019,18 +7065,18 @@ function AdminPage() {
                                                             children: c
                                                         }, c, false, {
                                                             fileName: "[project]/app/admin/page.tsx",
-                                                            lineNumber: 964,
+                                                            lineNumber: 1107,
                                                             columnNumber: 40
                                                         }, this))
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/admin/page.tsx",
-                                                    lineNumber: 963,
+                                                    lineNumber: 1106,
                                                     columnNumber: 19
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 961,
+                                            lineNumber: 1104,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -6046,7 +7092,7 @@ function AdminPage() {
                                                     children: "Badge"
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/admin/page.tsx",
-                                                    lineNumber: 968,
+                                                    lineNumber: 1111,
                                                     columnNumber: 19
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("select", {
@@ -6067,7 +7113,7 @@ function AdminPage() {
                                                             children: "— None —"
                                                         }, void 0, false, {
                                                             fileName: "[project]/app/admin/page.tsx",
-                                                            lineNumber: 970,
+                                                            lineNumber: 1113,
                                                             columnNumber: 21
                                                         }, this),
                                                         Object.entries(BADGE_LABEL).map(([k, v])=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("option", {
@@ -6075,25 +7121,25 @@ function AdminPage() {
                                                                 children: v
                                                             }, k, false, {
                                                                 fileName: "[project]/app/admin/page.tsx",
-                                                                lineNumber: 971,
+                                                                lineNumber: 1114,
                                                                 columnNumber: 63
                                                             }, this))
                                                     ]
                                                 }, void 0, true, {
                                                     fileName: "[project]/app/admin/page.tsx",
-                                                    lineNumber: 969,
+                                                    lineNumber: 1112,
                                                     columnNumber: 19
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 967,
+                                            lineNumber: 1110,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/admin/page.tsx",
-                                    lineNumber: 960,
+                                    lineNumber: 1103,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -6112,7 +7158,7 @@ function AdminPage() {
                                             children: "Item Name *"
                                         }, void 0, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 976,
+                                            lineNumber: 1119,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -6130,13 +7176,13 @@ function AdminPage() {
                                             }
                                         }, void 0, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 977,
+                                            lineNumber: 1120,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/admin/page.tsx",
-                                    lineNumber: 975,
+                                    lineNumber: 1118,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -6155,7 +7201,7 @@ function AdminPage() {
                                             children: "Description"
                                         }, void 0, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 980,
+                                            lineNumber: 1123,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("textarea", {
@@ -6175,13 +7221,13 @@ function AdminPage() {
                                             }
                                         }, void 0, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 981,
+                                            lineNumber: 1124,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/admin/page.tsx",
-                                    lineNumber: 979,
+                                    lineNumber: 1122,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -6200,7 +7246,7 @@ function AdminPage() {
                                             children: "Price (₹) *"
                                         }, void 0, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 984,
+                                            lineNumber: 1127,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -6220,13 +7266,13 @@ function AdminPage() {
                                             }
                                         }, void 0, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 985,
+                                            lineNumber: 1128,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/admin/page.tsx",
-                                    lineNumber: 983,
+                                    lineNumber: 1126,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -6245,7 +7291,7 @@ function AdminPage() {
                                             children: "Image URL"
                                         }, void 0, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 988,
+                                            lineNumber: 1131,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -6263,7 +7309,7 @@ function AdminPage() {
                                             }
                                         }, void 0, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 989,
+                                            lineNumber: 1132,
                                             columnNumber: 17
                                         }, this),
                                         menuModal.item.img && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -6288,18 +7334,18 @@ function AdminPage() {
                                                 }
                                             }, void 0, false, {
                                                 fileName: "[project]/app/admin/page.tsx",
-                                                lineNumber: 992,
+                                                lineNumber: 1135,
                                                 columnNumber: 21
                                             }, this)
                                         }, void 0, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 991,
+                                            lineNumber: 1134,
                                             columnNumber: 19
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/admin/page.tsx",
-                                    lineNumber: 987,
+                                    lineNumber: 1130,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -6321,7 +7367,7 @@ function AdminPage() {
                                             children: "Cancel"
                                         }, void 0, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 997,
+                                            lineNumber: 1140,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -6333,30 +7379,30 @@ function AdminPage() {
                                             children: menuModal.isEdit ? '💾 Save Changes' : '✅ Add to Menu'
                                         }, void 0, false, {
                                             fileName: "[project]/app/admin/page.tsx",
-                                            lineNumber: 998,
+                                            lineNumber: 1141,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/admin/page.tsx",
-                                    lineNumber: 996,
+                                    lineNumber: 1139,
                                     columnNumber: 15
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 959,
+                            lineNumber: 1102,
                             columnNumber: 13
                         }, this)
                     ]
                 }, void 0, true, {
                     fileName: "[project]/app/admin/page.tsx",
-                    lineNumber: 954,
+                    lineNumber: 1097,
                     columnNumber: 11
                 }, this)
             }, void 0, false, {
                 fileName: "[project]/app/admin/page.tsx",
-                lineNumber: 953,
+                lineNumber: 1096,
                 columnNumber: 9
             }, this),
             cancelModal.open && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -6386,7 +7432,7 @@ function AdminPage() {
                             children: "❌ Cancel Order"
                         }, void 0, false, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 1009,
+                            lineNumber: 1152,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
@@ -6398,7 +7444,7 @@ function AdminPage() {
                             children: "Cannot be undone. Order stays in the Cancellation Log."
                         }, void 0, false, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 1010,
+                            lineNumber: 1153,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("label", {
@@ -6412,7 +7458,7 @@ function AdminPage() {
                             children: "Reason *"
                         }, void 0, false, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 1011,
+                            lineNumber: 1154,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("textarea", {
@@ -6427,7 +7473,7 @@ function AdminPage() {
                             }
                         }, void 0, false, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 1012,
+                            lineNumber: 1155,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -6448,7 +7494,7 @@ function AdminPage() {
                                     children: "Back"
                                 }, void 0, false, {
                                     fileName: "[project]/app/admin/page.tsx",
-                                    lineNumber: 1014,
+                                    lineNumber: 1157,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -6460,24 +7506,24 @@ function AdminPage() {
                                     children: "Confirm Cancel"
                                 }, void 0, false, {
                                     fileName: "[project]/app/admin/page.tsx",
-                                    lineNumber: 1015,
+                                    lineNumber: 1158,
                                     columnNumber: 15
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 1013,
+                            lineNumber: 1156,
                             columnNumber: 13
                         }, this)
                     ]
                 }, void 0, true, {
                     fileName: "[project]/app/admin/page.tsx",
-                    lineNumber: 1008,
+                    lineNumber: 1151,
                     columnNumber: 11
                 }, this)
             }, void 0, false, {
                 fileName: "[project]/app/admin/page.tsx",
-                lineNumber: 1007,
+                lineNumber: 1150,
                 columnNumber: 9
             }, this),
             discountModal.open && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -6507,7 +7553,7 @@ function AdminPage() {
                             children: "🏷️ Apply Discount"
                         }, void 0, false, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 1025,
+                            lineNumber: 1168,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
@@ -6519,7 +7565,7 @@ function AdminPage() {
                             children: "Owner PIN required. Every discount is logged permanently."
                         }, void 0, false, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 1026,
+                            lineNumber: 1169,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("label", {
@@ -6533,7 +7579,7 @@ function AdminPage() {
                             children: "Discount Amount (₹)"
                         }, void 0, false, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 1027,
+                            lineNumber: 1170,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -6547,7 +7593,7 @@ function AdminPage() {
                             }
                         }, void 0, false, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 1028,
+                            lineNumber: 1171,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("label", {
@@ -6561,7 +7607,7 @@ function AdminPage() {
                             children: "Reason"
                         }, void 0, false, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 1029,
+                            lineNumber: 1172,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -6574,7 +7620,7 @@ function AdminPage() {
                             }
                         }, void 0, false, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 1030,
+                            lineNumber: 1173,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("label", {
@@ -6588,7 +7634,7 @@ function AdminPage() {
                             children: "Owner PIN"
                         }, void 0, false, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 1031,
+                            lineNumber: 1174,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -6605,7 +7651,7 @@ function AdminPage() {
                             }
                         }, void 0, false, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 1032,
+                            lineNumber: 1175,
                             columnNumber: 13
                         }, this),
                         pinMsg && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -6617,7 +7663,7 @@ function AdminPage() {
                             children: pinMsg
                         }, void 0, false, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 1033,
+                            lineNumber: 1176,
                             columnNumber: 24
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -6639,7 +7685,7 @@ function AdminPage() {
                                     children: "Cancel"
                                 }, void 0, false, {
                                     fileName: "[project]/app/admin/page.tsx",
-                                    lineNumber: 1035,
+                                    lineNumber: 1178,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -6651,24 +7697,24 @@ function AdminPage() {
                                     children: "Apply Discount"
                                 }, void 0, false, {
                                     fileName: "[project]/app/admin/page.tsx",
-                                    lineNumber: 1036,
+                                    lineNumber: 1179,
                                     columnNumber: 15
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 1034,
+                            lineNumber: 1177,
                             columnNumber: 13
                         }, this)
                     ]
                 }, void 0, true, {
                     fileName: "[project]/app/admin/page.tsx",
-                    lineNumber: 1024,
+                    lineNumber: 1167,
                     columnNumber: 11
                 }, this)
             }, void 0, false, {
                 fileName: "[project]/app/admin/page.tsx",
-                lineNumber: 1023,
+                lineNumber: 1166,
                 columnNumber: 9
             }, this),
             showPinMgr && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -6698,7 +7744,7 @@ function AdminPage() {
                             children: "🔑 Owner PIN"
                         }, void 0, false, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 1046,
+                            lineNumber: 1189,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
@@ -6713,13 +7759,13 @@ function AdminPage() {
                                     children: (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getPin"])()
                                 }, void 0, false, {
                                     fileName: "[project]/app/admin/page.tsx",
-                                    lineNumber: 1047,
+                                    lineNumber: 1190,
                                     columnNumber: 121
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 1047,
+                            lineNumber: 1190,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("label", {
@@ -6733,7 +7779,7 @@ function AdminPage() {
                             children: "New 4-digit PIN"
                         }, void 0, false, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 1048,
+                            lineNumber: 1191,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -6750,7 +7796,7 @@ function AdminPage() {
                             }
                         }, void 0, false, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 1049,
+                            lineNumber: 1192,
                             columnNumber: 13
                         }, this),
                         newPinMsg && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -6762,7 +7808,7 @@ function AdminPage() {
                             children: newPinMsg
                         }, void 0, false, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 1050,
+                            lineNumber: 1193,
                             columnNumber: 27
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -6787,28 +7833,28 @@ function AdminPage() {
                             children: "Save PIN"
                         }, void 0, false, {
                             fileName: "[project]/app/admin/page.tsx",
-                            lineNumber: 1051,
+                            lineNumber: 1194,
                             columnNumber: 13
                         }, this)
                     ]
                 }, void 0, true, {
                     fileName: "[project]/app/admin/page.tsx",
-                    lineNumber: 1045,
+                    lineNumber: 1188,
                     columnNumber: 11
                 }, this)
             }, void 0, false, {
                 fileName: "[project]/app/admin/page.tsx",
-                lineNumber: 1044,
+                lineNumber: 1187,
                 columnNumber: 9
             }, this)
         ]
     }, void 0, true, {
         fileName: "[project]/app/admin/page.tsx",
-        lineNumber: 325,
+        lineNumber: 332,
         columnNumber: 5
     }, this);
 }
-_s(AdminPage, "nWbFkKLEYndUKGf+sweEDf2NKdY=", false, function() {
+_s(AdminPage, "RaJHbWWr2H+RztMv1fdndyv/0kI=", false, function() {
     return [
         __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$navigation$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useRouter"]
     ];
