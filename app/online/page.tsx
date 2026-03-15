@@ -1,6 +1,9 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
-import { getMenu, addOrder, MenuItem, Order, OrderItem } from '@/lib/storage';
+import {
+  getMenu, addOrder, getWhatsappNumber, buildWhatsappOrderUrl,
+  MenuItem, Order, OrderItem,
+} from '@/lib/storage';
 
 const CATEGORIES = ['All', 'Biryani', 'Starters', 'Mains', 'Breads', 'Desserts', 'Drinks'];
 const BADGE_LABELS: Record<string, string> = {
@@ -68,7 +71,7 @@ export default function OnlineOrderPage() {
 
   function placeOrder() {
     if (submittingRef.current || isSubmitting) return;
-    if (!form.name.trim()) { alert('Please enter your name'); return; }
+    if (!form.name.trim())  { alert('Please enter your name'); return; }
     if (!form.phone.trim()) { alert('Please enter your phone number'); return; }
     if (form.type === 'delivery' && !form.address.trim()) { alert('Please enter delivery address'); return; }
     if (!cart.length) { alert('Cart is empty'); return; }
@@ -81,25 +84,26 @@ export default function OnlineOrderPage() {
       const id = `ONL-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
 
       const items: OrderItem[] = cart.map(c => ({
-        name: c.item.name,
-        price: c.item.price, qty: c.qty, subtotal: c.item.price * c.qty,
+        name: c.item.name, price: c.item.price, qty: c.qty,
+        subtotal: c.item.price * c.qty,
       }));
 
       const order: Order = {
         id,
-        type:           'pickup',       // Online orders are pickup (no tableId)
-        customerName:   form.name.trim(),
-        phone:          form.phone.trim(),
+        source:          'online',
+        type:            form.type,                   // 'pickup' or 'delivery' — was hardcoded 'pickup' before (BUG FIX)
+        customerName:    form.name.trim(),
+        phone:           form.phone.trim(),
+        deliveryAddress: form.type === 'delivery' ? form.address.trim() : undefined,
         items,
-        subtotal:       cartTotal,
-        discount:       0,
-        discountReason: '',
-        total:          cartTotal,
-        payment:        form.payment,
-        status:         'pending',
-        timeline:       [{ status: 'pending', at: ts, note: form.type === 'delivery' ? `Delivery: ${form.address}` : 'Pickup' }],
-        timestamp:      ts,
-        staffName:      form.type === 'delivery' ? `Delivery: ${form.address}` : 'Pickup',
+        subtotal:        cartTotal,
+        discount:        0,
+        discountReason:  '',
+        total:           cartTotal,
+        payment:         form.payment,
+        status:          'pending',
+        timeline:        [{ status: 'pending', at: ts, note: form.type === 'delivery' ? `Delivery to: ${form.address}` : 'Pickup' }],
+        timestamp:       ts,
       };
 
       addOrder(order);
@@ -108,6 +112,14 @@ export default function OnlineOrderPage() {
       setShowCheckout(false);
       setOrderPlaced(true);
       setForm({ name: '', phone: '', type: 'pickup', address: '', payment: 'cod' });
+
+      // ── WhatsApp Notification ──────────────────────────────────────────────
+      // Open wa.me link so customer can send order details to the restaurant.
+      // getWhatsappNumber() returns the number set by admin (empty string if not set).
+      const waUrl = buildWhatsappOrderUrl(order, getWhatsappNumber());
+      setTimeout(() => {
+        window.open(waUrl, '_blank', 'noopener');
+      }, 400); // slight delay so order-placed banner appears first
     } finally {
       submittingRef.current = false;
       setIsSubmitting(false);
@@ -147,9 +159,22 @@ export default function OnlineOrderPage() {
 
       {/* Order placed confirmation */}
       {orderPlaced && (
-        <div style={{ background: '#dcfce7', border: '1px solid #86efac', color: '#15803d', padding: '1rem 1.5rem', textAlign: 'center', fontWeight: 700 }}>
-          ✅ Order placed! ID: <strong>{lastOrderId}</strong> — We'll prepare it right away.
-          <button onClick={() => setOrderPlaced(false)} style={{ marginLeft: '1rem', background: 'none', border: 'none', color: '#15803d', cursor: 'pointer', fontWeight: 700, fontFamily: 'Poppins,sans-serif', fontSize: '0.85rem' }}>×</button>
+        <div style={{ background: '#dcfce7', border: '1px solid #86efac', color: '#15803d', padding: '1rem 1.5rem' }}>
+          <div style={{ fontWeight: 700, marginBottom: '0.25rem' }}>
+            ✅ Order placed! ID: <strong>{lastOrderId}</strong> — We&apos;ll prepare it right away.
+            <button onClick={() => setOrderPlaced(false)} style={{ marginLeft: '1rem', background: 'none', border: 'none', color: '#15803d', cursor: 'pointer', fontWeight: 700, fontFamily: 'Poppins,sans-serif', fontSize: '0.85rem' }}>×</button>
+          </div>
+          <div style={{ fontSize: '0.8rem', color: '#166534' }}>
+            📱 A WhatsApp window opened — send it to notify the restaurant instantly.
+            {' '}<span
+              onClick={() => {
+                const orders = (JSON.parse(localStorage.getItem('fl_orders') || '[]') as Order[]);
+                const o = orders.find(x => x.id === lastOrderId);
+                if (o) window.open(buildWhatsappOrderUrl(o, getWhatsappNumber()), '_blank', 'noopener');
+              }}
+              style={{ cursor: 'pointer', textDecoration: 'underline', fontWeight: 700 }}
+            >Resend WhatsApp</span>
+          </div>
         </div>
       )}
 

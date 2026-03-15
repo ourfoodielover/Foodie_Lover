@@ -14,7 +14,7 @@ export type OrderStatus =
   | 'cancelled'         // cancelled before completion
   | 'void';             // voided by manager
 
-export type OrderType = 'dine-in' | 'pickup';
+export type OrderType = 'dine-in' | 'pickup' | 'delivery';
 
 export type TabStatus = 'open' | 'awaiting_payment' | 'closed';
 
@@ -48,11 +48,13 @@ export interface Order {
   discountReason: string;
   payment:        string;
   timestamp:      string;
-  cancelReason?:  string;
-  cancelledAt?:   string;   // legacy alias — use timeline for cancellation time
-  phone?:         string;   // optional customer phone (legacy)
-  staffName?:     string;   // optional staff name (legacy)
-  timeline?:      TimelineEntry[];
+  cancelReason?:    string;
+  cancelledAt?:     string;     // legacy alias — use timeline for cancellation time
+  phone?:           string;     // customer phone number
+  staffName?:       string;     // optional staff name (legacy)
+  timeline?:        TimelineEntry[];
+  source?:          'online' | 'in-store';  // where the order originated
+  deliveryAddress?: string;     // filled for delivery orders
 }
 
 export interface CustomerTab {
@@ -141,6 +143,7 @@ const KEYS = {
   disputes:    'fl_food_disputes',
   splitBills:  'fl_split_bills',
   devices:     'fl_device_records',   // device-based session tracking
+  whatsapp:    'fl_whatsapp_number',  // restaurant WhatsApp number
 };
 
 // ─── Storage helpers ──────────────────────────────────────────────────────────
@@ -975,4 +978,67 @@ export function removeDeviceRecord(deviceId: string, tableId: string): void {
 /** Return all device records linked to a specific tab (i.e. all customers at the table). */
 export function getDevicesForTab(tabId: string): DeviceRecord[] {
   return getDeviceRecords().filter(r => r.tabId === tabId);
+}
+
+// ─── WhatsApp Number ──────────────────────────────────────────────────────────
+export function getWhatsappNumber(): string {
+  return ls_get<string>(KEYS.whatsapp, '');
+}
+export function saveWhatsappNumber(num: string): void {
+  ls_set(KEYS.whatsapp, num.replace(/\D/g, '')); // store digits only
+}
+
+// ─── Online Order Stats ───────────────────────────────────────────────────────
+export interface OnlineOrderStats {
+  todayTotal:        number;   // count of all online orders today
+  todayPickup:       number;   // online pickup count today
+  todayDelivery:     number;   // online delivery count today
+  todayRevenue:      number;   // total revenue from online orders today
+  pendingOnline:     number;   // online orders still in progress
+  allTimeTotal:      number;   // all-time online orders
+  allTimePickup:     number;
+  allTimeDelivery:   number;
+}
+
+export function getOnlineOrderStats(): OnlineOrderStats {
+  const orders   = getOrders();
+  const todayStr = new Date().toDateString();
+  const online   = orders.filter(o => o.source === 'online');
+  const todayOnline = online.filter(o => new Date(o.timestamp).toDateString() === todayStr);
+  return {
+    todayTotal:      todayOnline.length,
+    todayPickup:     todayOnline.filter(o => o.type === 'pickup').length,
+    todayDelivery:   todayOnline.filter(o => o.type === 'delivery').length,
+    todayRevenue:    todayOnline.filter(o => o.status !== 'cancelled').reduce((s, o) => s + (o.total || 0), 0),
+    pendingOnline:   online.filter(o => !['completed', 'cancelled', 'void'].includes(o.status)).length,
+    allTimeTotal:    online.length,
+    allTimePickup:   online.filter(o => o.type === 'pickup').length,
+    allTimeDelivery: online.filter(o => o.type === 'delivery').length,
+  };
+}
+
+/**
+ * Build a WhatsApp message pre-fill URL for a new online order.
+ * Opens wa.me with order details so the customer can send it to the restaurant.
+ */
+export function buildWhatsappOrderUrl(order: Order, restaurantNumber: string): string {
+  const lines: string[] = [
+    `🍽️ *New Online Order — Foodie Lover*`,
+    `📋 Order ID: ${order.id}`,
+    `👤 Name: ${order.customerName}`,
+    `📱 Phone: ${order.phone || '—'}`,
+    `📦 Type: ${order.type === 'delivery' ? '🚗 Delivery' : '🏪 Pickup'}`,
+    order.deliveryAddress ? `📍 Address: ${order.deliveryAddress}` : '',
+    `💳 Payment: ${order.payment?.toUpperCase() || 'COD'}`,
+    ``,
+    `*Items:*`,
+    ...(order.items || []).map(i => `  • ${i.name} × ${i.qty}  ₹${i.subtotal}`),
+    ``,
+    `💰 *Total: ₹${order.total}*`,
+    `🕐 Time: ${new Date(order.timestamp).toLocaleTimeString('en-IN')}`,
+  ].filter(l => l !== null);
+
+  const msg = encodeURIComponent(lines.join('\n'));
+  const num = restaurantNumber.replace(/\D/g, '');
+  return num ? `https://wa.me/${num}?text=${msg}` : `https://wa.me/?text=${msg}`;
 }

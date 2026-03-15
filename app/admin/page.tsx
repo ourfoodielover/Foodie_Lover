@@ -5,7 +5,8 @@ import {
   getOrders, getTables, getMenu, saveMenu, getPin, savePin,
   updateOrderStatus, cancelOrder, applyDiscount, exportOrdersCSV, getOrdersInPeriod,
   getEndOfDayReport, getWaiterStats, getTableOccupancyStats, getFraudAlerts,
-  Order, Table, MenuItem, DEFAULT_MENU, WaiterStats, TableOccupancyStats,
+  getOnlineOrderStats, getWhatsappNumber, saveWhatsappNumber,
+  Order, Table, MenuItem, DEFAULT_MENU, WaiterStats, TableOccupancyStats, OnlineOrderStats,
 } from '@/lib/storage';
 import {
   getSession, clearSession, AuthSession,
@@ -68,6 +69,11 @@ export default function AdminPage() {
   // ── Analytics state ──
   const [waiterStats,    setWaiterStats]    = useState<WaiterStats[]>([]);
   const [tableOccupancy, setTableOccupancy] = useState<TableOccupancyStats[]>([]);
+  const [onlineStats,    setOnlineStats]    = useState<OnlineOrderStats | null>(null);
+
+  // ── WhatsApp setting ──
+  const [waNum,    setWaNum]    = useState('');
+  const [waNumMsg, setWaNumMsg] = useState('');
 
   // ── Staff management state ──
   const [staffAccounts, setStaffAccounts] = useState<StaffAccount[]>([]);
@@ -104,6 +110,8 @@ export default function AdminPage() {
     setSecSetup(getSecuritySetup());
     setWaiterStats(getWaiterStats());
     setTableOccupancy(getTableOccupancyStats());
+    setOnlineStats(getOnlineOrderStats());
+    setWaNum(getWhatsappNumber());
   }, []);
 
   // ── Auth check ──
@@ -316,6 +324,14 @@ export default function AdminPage() {
     setTimeout(() => setManagerPinMsg(''), 3000);
   }
 
+  function saveWaNumFn() {
+    const digits = waNum.replace(/\D/g, '');
+    if (digits.length < 10) { setWaNumMsg('❌ Enter a valid number (min 10 digits with country code)'); return; }
+    saveWhatsappNumber(digits);
+    setWaNumMsg('✅ WhatsApp number saved!');
+    setTimeout(() => setWaNumMsg(''), 3000);
+  }
+
   // ─────────────────────────────── RENDER ────────────────────────────────────
   if (!authChecked) {
     return (
@@ -365,7 +381,9 @@ export default function AdminPage() {
 
         {/* ═══════════ OVERVIEW ═══════════ */}
         {section==='overview' && <>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(165px,1fr))',gap:'1rem',marginBottom:'1.5rem'}}>
+          {/* Dine-in stats */}
+          <div style={{fontSize:'0.7rem',fontWeight:700,color:'#888',textTransform:'uppercase',letterSpacing:1,marginBottom:'0.5rem'}}>🍽️ Dine-In &amp; General</div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(165px,1fr))',gap:'1rem',marginBottom:'1.25rem'}}>
             {[
               {icon:'📋',val:todayOrders.length,   label:"Today's Orders",   color:'#E65C00'},
               {icon:'💰',val:`₹${todayRevenue}`,    label:'Net Revenue',      color:'#E65C00'},
@@ -373,6 +391,24 @@ export default function AdminPage() {
               {icon:'❌',val:todayCancel.length,    label:'Cancelled Today',  color:'#ef4444'},
               {icon:'🪑',val:activeTables,          label:'Active Tables',    color:'#3b82f6'},
               {icon:'⏳',val:pendingCount,          label:'Pending Orders',   color:'#f59e0b'},
+            ].map(s=>(
+              <div key={s.label} style={{background:'white',padding:'1.1rem',borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,0.08)',borderLeft:`4px solid ${s.color}`}}>
+                <div style={{fontSize:'1.5rem',marginBottom:'0.25rem'}}>{s.icon}</div>
+                <div style={{fontSize:'1.4rem',fontWeight:900,color:s.color}}>{s.val}</div>
+                <div style={{color:'#888',fontSize:'0.76rem'}}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Online order stats */}
+          <div style={{fontSize:'0.7rem',fontWeight:700,color:'#888',textTransform:'uppercase',letterSpacing:1,marginBottom:'0.5rem'}}>📦 Online Orders (Today)</div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(165px,1fr))',gap:'1rem',marginBottom:'1.5rem'}}>
+            {[
+              {icon:'📦',val:onlineStats?.todayTotal    ?? 0, label:'Online Orders Today', color:'#2563eb'},
+              {icon:'🏪',val:onlineStats?.todayPickup   ?? 0, label:'Pickup Orders',       color:'#0891b2'},
+              {icon:'🚗',val:onlineStats?.todayDelivery ?? 0, label:'Delivery Orders',     color:'#7c3aed'},
+              {icon:'💵',val:`₹${onlineStats?.todayRevenue ?? 0}`, label:'Online Revenue', color:'#16a34a'},
+              {icon:'⏳',val:onlineStats?.pendingOnline ?? 0, label:'Pending Online',      color:'#f59e0b'},
             ].map(s=>(
               <div key={s.label} style={{background:'white',padding:'1.1rem',borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,0.08)',borderLeft:`4px solid ${s.color}`}}>
                 <div style={{fontSize:'1.5rem',marginBottom:'0.25rem'}}>{s.icon}</div>
@@ -513,8 +549,15 @@ export default function AdminPage() {
                         return (
                           <tr key={order.id} style={{borderBottom:'1px solid #f5f0e8',opacity:isc?0.6:1}}>
                             <td style={{padding:'0.5rem 0.65rem'}}><button onClick={()=>setSelOrder(order)} style={{background:'none',border:'none',color:'#E65C00',textDecoration:'underline',fontWeight:700,cursor:'pointer',fontFamily:'Poppins,sans-serif',fontSize:'0.81rem'}}>{order.id}</button></td>
-                            <td style={{padding:'0.5rem 0.65rem'}}><span style={{fontSize:'0.7rem',fontWeight:700,padding:'0.12rem 0.45rem',borderRadius:10,background:order.type==='dine-in'?'#fff7ed':'#f0fdf4',color:order.type==='dine-in'?'#ea580c':'#16a34a'}}>{order.type}</span></td>
-                            <td style={{padding:'0.5rem 0.65rem'}}>{order.type==='dine-in'?`T${order.tableId}`:'Pickup'}</td>
+                            <td style={{padding:'0.5rem 0.65rem'}}>
+                              <span style={{fontSize:'0.7rem',fontWeight:700,padding:'0.12rem 0.45rem',borderRadius:10,background:order.type==='dine-in'?'#fff7ed':order.type==='delivery'?'#f5f3ff':'#f0fdf4',color:order.type==='dine-in'?'#ea580c':order.type==='delivery'?'#7c3aed':'#16a34a'}}>
+                                {order.type==='dine-in'?'🍽️ Dine-In':order.type==='delivery'?'🚗 Delivery':'🏪 Pickup'}
+                              </span>
+                              {order.source==='online' && <span style={{marginLeft:'0.25rem',fontSize:'0.62rem',fontWeight:700,background:'#dbeafe',color:'#1d4ed8',padding:'0.1rem 0.35rem',borderRadius:6}}>ONLINE</span>}
+                            </td>
+                            <td style={{padding:'0.5rem 0.65rem',fontSize:'0.8rem'}}>
+                              {order.type==='dine-in'?`Table ${order.tableId}`:order.deliveryAddress?<span title={order.deliveryAddress}>📍 {order.deliveryAddress.slice(0,22)}{order.deliveryAddress.length>22?'…':''}</span>:'—'}
+                            </td>
                             <td style={{padding:'0.5rem 0.65rem',fontWeight:600}}>{order.customerName}</td>
                             <td style={{padding:'0.5rem 0.65rem',textAlign:'center'}}>{order.items?.length||0}</td>
                             <td style={{padding:'0.5rem 0.65rem'}}>₹{order.subtotal||order.total}</td>
@@ -553,7 +596,7 @@ export default function AdminPage() {
 
           {/* Summary cards */}
           <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))',gap:'0.7rem',marginBottom:'1.4rem'}}>
-            {[{val:pCount,label:'Orders',color:'#3b82f6'},{val:`₹${pGross}`,label:'Gross Rev.',color:'#E65C00'},{val:`₹${pDisc}`,label:'Discounts',color:'#ef4444'},{val:`₹${pTotal}`,label:'Net Revenue',color:'#16a34a'},{val:`₹${pAvg}`,label:'Avg Order',color:'#8b5cf6'},{val:periodOrders.filter(o=>o.type==='dine-in').length,label:'Dine-In',color:'#f97316'},{val:periodOrders.filter(o=>o.type!=='dine-in').length,label:'Pickup',color:'#06b6d4'}].map(c=>(
+            {[{val:pCount,label:'Orders',color:'#3b82f6'},{val:`₹${pGross}`,label:'Gross Rev.',color:'#E65C00'},{val:`₹${pDisc}`,label:'Discounts',color:'#ef4444'},{val:`₹${pTotal}`,label:'Net Revenue',color:'#16a34a'},{val:`₹${pAvg}`,label:'Avg Order',color:'#8b5cf6'},{val:periodOrders.filter(o=>o.type==='dine-in').length,label:'🍽️ Dine-In',color:'#f97316'},{val:periodOrders.filter(o=>o.type==='pickup').length,label:'🏪 Pickup',color:'#06b6d4'},{val:periodOrders.filter(o=>o.type==='delivery').length,label:'🚗 Delivery',color:'#7c3aed'},{val:periodOrders.filter(o=>o.source==='online').length,label:'📦 Online',color:'#2563eb'}].map(c=>(
               <div key={c.label} style={{background:'white',border:'1px solid #f0e4d7',borderRadius:10,padding:'0.8rem',borderLeft:`4px solid ${c.color}`}}>
                 <div style={{fontSize:'1.2rem',fontWeight:900,color:c.color}}>{c.val}</div>
                 <div style={{fontSize:'0.7rem',color:'#999'}}>{c.label}</div>
@@ -907,6 +950,30 @@ export default function AdminPage() {
             </div>
           </div>
 
+          {/* WhatsApp Notification Number */}
+          <div style={card('#25d366')}>
+            <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:'1rem',fontWeight:700,marginBottom:'0.4rem',color:'#1A0800'}}>📱 WhatsApp Notification Number</h3>
+            <p style={{fontSize:'0.78rem',color:'#555',marginBottom:'0.75rem',lineHeight:1.5}}>
+              When a customer places an online order, WhatsApp will open with the order details pre-filled — so the customer can send it directly to this number. Include country code (e.g. 919876543210 for India).
+            </p>
+            <input
+              value={waNum}
+              onChange={e => setWaNum(e.target.value)}
+              placeholder="e.g. 919876543210"
+              type="tel"
+              style={{...inp, marginBottom:'0.5rem'}}
+            />
+            {waNumMsg && <div style={{fontSize:'0.75rem',color:waNumMsg.includes('✅')?'#16a34a':'#ef4444',marginBottom:'0.4rem'}}>{waNumMsg}</div>}
+            <div style={{display:'flex',gap:'0.6rem',alignItems:'center',flexWrap:'wrap'}}>
+              <button onClick={saveWaNumFn} style={{...btn('#25d366'),padding:'0.5rem 1.1rem'}}>💾 Save Number</button>
+              {waNum.replace(/\D/g,'').length >= 10 && (
+                <a href={`https://wa.me/${waNum.replace(/\D/g,'')}`} target="_blank" rel="noopener noreferrer" style={{fontSize:'0.78rem',color:'#25d366',fontWeight:700,textDecoration:'underline'}}>
+                  Test this number →
+                </a>
+              )}
+            </div>
+          </div>
+
           {/* Create Waiter Account */}
           <div style={card('#8b5cf6')}>
             <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:'1rem',fontWeight:700,marginBottom:'0.75rem',color:'#1A0800'}}>➕ Create Waiter Account</h3>
@@ -1043,8 +1110,15 @@ export default function AdminPage() {
               </div>
             </div>
             <div style={{padding:'1rem 1.7rem',background:'#FFFAF5',borderBottom:'1px solid #f0e4d7',display:'grid',gridTemplateColumns:'1fr 1fr',gap:'0.45rem 1.5rem'}}>
-              {[['Customer',selOrder.customerName],['Phone',selOrder.phone||'—'],['Type',selOrder.type],['Location',selOrder.type==='dine-in'?`Table ${selOrder.tableId}`:'Pickup'],['Payment',selOrder.payment||'N/A'],['Staff',selOrder.staffName||'—']].map(([l,v])=>(
-                <div key={l}><div style={{fontSize:'0.65rem',color:'#999',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.05em'}}>{l}</div><div style={{fontSize:'0.86rem',fontWeight:700,color:'#1A0800',textTransform:'capitalize'}}>{v}</div></div>
+              {([
+                ['Customer',   selOrder.customerName],
+                ['Phone',      selOrder.phone || '—'],
+                ['Channel',    selOrder.source === 'online' ? '📦 Online Order' : '🍽️ In-Store'],
+                ['Type',       selOrder.type === 'dine-in' ? '🍽️ Dine-In' : selOrder.type === 'delivery' ? '🚗 Delivery' : '🏪 Pickup'],
+                ['Location',   selOrder.type === 'dine-in' ? `Table ${selOrder.tableId}` : selOrder.deliveryAddress ? selOrder.deliveryAddress : 'Counter Pickup'],
+                ['Payment',    selOrder.payment || 'N/A'],
+              ] as [string,string][]).map(([l,v])=>(
+                <div key={l}><div style={{fontSize:'0.65rem',color:'#999',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.05em'}}>{l}</div><div style={{fontSize:'0.86rem',fontWeight:700,color:'#1A0800'}}>{v}</div></div>
               ))}
               {selOrder.cancelReason && <div style={{gridColumn:'1/-1'}}><div style={{fontSize:'0.65rem',color:'#ef4444',fontWeight:700,textTransform:'uppercase'}}>Cancel Reason</div><div style={{fontSize:'0.86rem',color:'#ef4444',fontWeight:600}}>{selOrder.cancelReason}</div></div>}
               {selOrder.discountReason && <div style={{gridColumn:'1/-1'}}><div style={{fontSize:'0.65rem',color:'#8b5cf6',fontWeight:700,textTransform:'uppercase'}}>Discount Reason</div><div style={{fontSize:'0.86rem',color:'#8b5cf6',fontWeight:600}}>{selOrder.discountReason}</div></div>}
