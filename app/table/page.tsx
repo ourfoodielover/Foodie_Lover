@@ -1,10 +1,11 @@
 'use client';
-import { useState, useEffect, useCallback, Suspense } from 'react';
+import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   getMenu, addOrder, getOrders, getNextOrderNumber,
   getTabs, getOpenTabForCustomer, getActiveTabsForTable,
   createTab, addOrderToTab, requestBill, syncTabTotal,
+  addWaiterCall, getLastWaiterCallTime, addFoodReceiptDispute,
   MenuItem, Order, CustomerTab,
 } from '@/lib/storage';
 
@@ -37,7 +38,19 @@ function ssClear(tableId: string): void {
     sessionStorage.removeItem(`fl_tab_${tableId}_id`);
     sessionStorage.removeItem(`fl_tab_${tableId}_name`);
     sessionStorage.removeItem(`fl_tab_${tableId}_party`);
+    sessionStorage.removeItem(`fl_confirmed_${tableId}`);
   } catch {}
+}
+function getConfirmedOrderIds(tableId: string): Set<string> {
+  try {
+    const raw = ssGet(`fl_confirmed_${tableId}`);
+    return raw ? new Set<string>(JSON.parse(raw)) : new Set<string>();
+  } catch { return new Set<string>(); }
+}
+function addConfirmedOrderId(tableId: string, orderId: string): void {
+  const set = getConfirmedOrderIds(tableId);
+  set.add(orderId);
+  ssSet(`fl_confirmed_${tableId}`, JSON.stringify([...set]));
 }
 
 // ─── Inner component (uses useSearchParams) ────────────────────────────────────
@@ -73,6 +86,14 @@ function TablePageInner() {
   const [billMsg, setBillMsg]             = useState('');
   const [trackingView, setTrackingView]   = useState<'aggregated' | 'individual'>('aggregated');
 
+  // ── Waiter call cooldown ──
+  const [callCooldown, setCallCooldown]   = useState(0); // seconds remaining
+
+  // ── Food receipt confirmation ──
+  const [disputeOrder, setDisputeOrder]   = useState<Order | null>(null);
+  // Use a ref so refresh() callback always sees latest confirmed IDs without re-creating
+  const confirmedRef = useRef<Set<string>>(new Set<string>());
+
   // ─── Init ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     setMenu(getMenu().filter(m => m.available));
@@ -83,17 +104,25 @@ function TablePageInner() {
     const savedParty   = ssGet(`fl_tab_${tableId}_party`);
 
     if (savedTabId && savedName) {
-      // Verify the tab is still active in localStorage
       const allTabs = getTabs();
       const existingTab = allTabs.find(
         t => t.id === savedTabId &&
-             (t.tabStatus === 'open' || t.tabStatus === 'awaiting_payment'),
+             ['open', 'awaiting_payment', 'closed'].includes(t.tabStatus),
       );
       if (existingTab) {
         setTabId(savedTabId);
         setCustomerName(savedName);
         setPartyInput(savedParty || '1');
         setTab(existingTab);
+        // Restore confirmed order IDs
+        confirmedRef.current = getConfirmedOrderIds(tableId);
+        // Restore cooldown
+        const lastCallAt = getLastWaiterCallTime(tableId);
+        if (lastCallAt) {
+          const elapsed = Math.floor((Date.now() - new Date(lastCallAt).getTime()) / 1000);
+          const remaining = Math.max(0, 60 - elapsed);
+          setCallCooldown(remaining);
+        }
         setView('tracking');
         return;
       } else {
@@ -102,6 +131,13 @@ function TablePageInner() {
     }
   }, [tableId]);
 
+  // ─── Cooldown countdown ────────────────────────────────────────────────────
+  useEffect(() => {
+    if (callCooldown <= 0) return;
+    const t = setInterval(() => setCallCooldown(prev => Math.max(0, prev - 1)), 1000);
+    return () => clearInterval(t);
+  }, [callCooldown]);
+
   // ─── Periodic refresh ─────────────────────────────────────────────────────
   const refresh = useCallback(() => {
     if (!tabId) return;
@@ -109,9 +145,23 @@ function TablePageInner() {
     const currentTab = allTabs.find(t => t.id === tabId);
     if (currentTab) {
       setTab(currentTab);
-      syncTabTotal(tabId);
+      if (currentTab.tabStatus === 'open') syncTabTotal(tabId);
     }
-    setOrders(getOrders());
+    const latestOrders = getOrders();
+    setOrders(latestOrders);
+
+    // Check for newly served orders that need food receipt confirmation
+    if (currentTab && currentTab.tabStatus !== 'closed') {
+      const tabOrdrs = currentTab.orderIds
+        .map(oid => latestOrders.find(o => o.id === oid))
+        .filter((o): o is Order => !!o);
+      const servedUnconfirmed = tabOrdrs.find(
+        o => o.status === 'served' && !confirmedRef.current.has(o.id),
+      );
+      if (servedUnconfirmed) {
+        setDisputeOrder(servedUnconfirmed);
+      }
+    }
   }, [tabId]);
 
   useEffect(() => {
@@ -126,10 +176,8 @@ function TablePageInner() {
     const name = nameInput.trim();
     if (!name) { setNameError('Please enter your name'); return; }
     if (name.length < 2) { setNameError('Name must be at least 2 characters'); return; }
-
     const party = Math.max(1, parseInt(partyInput) || 1);
 
-    // Check if there's already an active tab for this name at this table
     const existingTab = getOpenTabForCustomer(tableId, name);
     if (existingTab) {
       setTabId(existingTab.id);
@@ -138,11 +186,11 @@ function TablePageInner() {
       ssSet(`fl_tab_${tableId}_id`,    existingTab.id);
       ssSet(`fl_tab_${tableId}_name`,  name);
       ssSet(`fl_tab_${tableId}_party`, String(party));
+      confirmedRef.current = getConfirmedOrderIds(tableId);
       setView('tracking');
       return;
     }
 
-    // Check if the table is occupied by someone else
     const activeTabs = getActiveTabsForTable(tableId);
     if (activeTabs.length > 0) {
       const occupantName = activeTabs[0].customerName;
@@ -150,7 +198,6 @@ function TablePageInner() {
       return;
     }
 
-    // Create new tab
     const newTab = createTab(tableId, name, party);
     setTabId(newTab.id);
     setCustomerName(name);
@@ -158,6 +205,7 @@ function TablePageInner() {
     ssSet(`fl_tab_${tableId}_id`,    newTab.id);
     ssSet(`fl_tab_${tableId}_name`,  name);
     ssSet(`fl_tab_${tableId}_party`, String(party));
+    confirmedRef.current = new Set<string>();
     setNameError('');
     setView('menu');
   }
@@ -215,6 +263,24 @@ function TablePageInner() {
     }
   }
 
+  // ─── Call Waiter ──────────────────────────────────────────────────────────
+  function handleCallWaiter() {
+    if (!tabId || !tab || callCooldown > 0) return;
+    addWaiterCall(tableId, tabId, customerName);
+    setCallCooldown(60);
+  }
+
+  // ─── Food receipt confirmation ────────────────────────────────────────────
+  function handleFoodConfirm(received: boolean) {
+    if (!disputeOrder || !tabId) return;
+    if (!received) {
+      addFoodReceiptDispute(disputeOrder.id, tabId, tableId, customerName);
+    }
+    confirmedRef.current.add(disputeOrder.id);
+    addConfirmedOrderId(tableId, disputeOrder.id);
+    setDisputeOrder(null);
+  }
+
   // ─── Cart helpers ─────────────────────────────────────────────────────────
   const cartTotal = Object.entries(cart).reduce((s, [id, qty]) => {
     const m = menu.find(x => x.id === id);
@@ -243,7 +309,6 @@ function TablePageInner() {
     o => ['awaiting_waiter', 'pending', 'preparing', 'prepared'].includes(o.status),
   );
 
-  // Aggregated view: group by item name across all orders
   const aggregatedItems: { name: string; qty: number; price: number; status: string }[] = (() => {
     const map: Record<string, { qty: number; price: number; statuses: string[] }> = {};
     activeTabOrders.forEach(order => {
@@ -257,7 +322,6 @@ function TablePageInner() {
       name,
       qty:    v.qty,
       price:  v.price,
-      // Worst status wins for display
       status: v.statuses.includes('awaiting_waiter') ? 'awaiting_waiter'
             : v.statuses.includes('pending')         ? 'pending'
             : v.statuses.includes('preparing')       ? 'preparing'
@@ -267,9 +331,9 @@ function TablePageInner() {
     }));
   })();
 
-  const tabTotal = tab ? (tab.totalAmount || 0) : 0;
+  const tabTotal    = tab ? (tab.totalAmount || 0) : 0;
   const tabDiscount = tab ? (tab.discount || 0) : 0;
-  const billTotal = Math.max(0, tabTotal - tabDiscount);
+  const billTotal   = Math.max(0, tabTotal - tabDiscount);
 
   const STATUS_ICON: Record<string, string> = {
     awaiting_waiter: '⏳', pending: '⏱️', preparing: '🔥',
@@ -511,8 +575,72 @@ function TablePageInner() {
   }
 
   // ─── Tracking view ────────────────────────────────────────────────────────
+
+  // ── Closed tab → Thank You screen ────────────────────────────────────────
+  if (tab?.tabStatus === 'closed') {
+    return (
+      <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg,#064e3b,#065f46)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'Poppins,sans-serif', padding: '2rem' }}>
+        <div style={{ textAlign: 'center', color: 'white', maxWidth: 360 }}>
+          <div style={{ fontSize: '4rem', marginBottom: '0.75rem' }}>🙏</div>
+          <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '2rem', fontWeight: 900, color: '#6ee7b7', marginBottom: '0.4rem' }}>
+            Thank You!
+          </div>
+          <div style={{ fontSize: '1.05rem', fontWeight: 700, marginBottom: '0.3rem' }}>
+            Payment Received ✅
+          </div>
+          <div style={{ fontSize: '0.85rem', color: '#a7f3d0', marginBottom: '1rem', lineHeight: 1.5 }}>
+            Hope you enjoyed your meal at Foodie Lover! We look forward to seeing you again.
+          </div>
+          {tabDiscount > 0 && (
+            <div style={{ background: 'rgba(255,255,255,0.1)', borderRadius: 10, padding: '0.6rem 1rem', marginBottom: '0.75rem', fontSize: '0.82rem', color: '#d1fae5' }}>
+              🏷️ Discount applied: −₹{tabDiscount}
+            </div>
+          )}
+          <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#6ee7b7', background: 'rgba(255,255,255,0.08)', borderRadius: 10, padding: '0.5rem 1rem', display: 'inline-block' }}>
+            Bill Paid: ₹{billTotal} · Table {tableId}
+          </div>
+          <div style={{ marginTop: '1.5rem', fontSize: '1.5rem' }}>⭐⭐⭐⭐⭐</div>
+          <div style={{ fontSize: '0.72rem', color: '#6ee7b7', marginTop: '0.4rem' }}>Scan QR again to start a new order</div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ minHeight: '100vh', background: '#faf8f3', fontFamily: 'Poppins,sans-serif', paddingBottom: '80px' }}>
+
+      {/* Food receipt confirmation modal */}
+      {disputeOrder && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300, padding: '1rem' }}>
+          <div style={{ background: 'white', borderRadius: 20, padding: '1.75rem 1.5rem', width: '100%', maxWidth: 360, textAlign: 'center', boxShadow: '0 24px 60px rgba(0,0,0,0.4)' }}>
+            <div style={{ fontSize: '3rem', marginBottom: '0.6rem' }}>🍽️</div>
+            <div style={{ fontWeight: 800, fontSize: '1.05rem', color: '#1A0800', marginBottom: '0.4rem' }}>
+              Did you receive your food?
+            </div>
+            <div style={{ fontSize: '0.82rem', color: '#888', marginBottom: '0.25rem' }}>
+              Order #{disputeOrder.orderNum || disputeOrder.id.slice(-4)} has been marked as delivered to your table.
+            </div>
+            <div style={{ fontSize: '0.75rem', color: '#bbb', marginBottom: '1.5rem' }}>
+              If you didn&apos;t get it, we&apos;ll alert your waiter immediately.
+            </div>
+            <div style={{ display: 'flex', gap: '0.6rem' }}>
+              <button
+                onClick={() => handleFoodConfirm(false)}
+                style={{ flex: 1, padding: '0.85rem', borderRadius: 12, background: '#fef2f2', border: '2px solid #ef4444', color: '#ef4444', fontWeight: 800, cursor: 'pointer', fontSize: '0.88rem', fontFamily: 'Poppins,sans-serif' }}
+              >
+                ❌ Not received
+              </button>
+              <button
+                onClick={() => handleFoodConfirm(true)}
+                style={{ flex: 1, padding: '0.85rem', borderRadius: 12, background: '#16a34a', border: 'none', color: 'white', fontWeight: 800, cursor: 'pointer', fontSize: '0.88rem', fontFamily: 'Poppins,sans-serif' }}
+              >
+                ✅ Yes, got it!
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div style={{ background: 'linear-gradient(135deg,#1A0800,#3D1C00)', color: 'white', padding: '0.9rem 1rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -678,10 +806,24 @@ function TablePageInner() {
       </div>
 
       {/* Bottom navigation */}
-      {tab?.tabStatus === 'open' && (
+      {tab && tab.tabStatus !== 'closed' && (
         <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, background: 'white', boxShadow: '0 -4px 20px rgba(0,0,0,0.1)', padding: '0.6rem 1rem', display: 'flex', gap: '0.5rem', zIndex: 100 }}>
-          <button onClick={() => setView('menu')} style={{ ...btn('#E65C00'), flex: 1, padding: '0.7rem', borderRadius: 10, fontSize: '0.85rem' }}>
-            🍛 Order More
+          {tab.tabStatus === 'open' && (
+            <button onClick={() => setView('menu')} style={{ ...btn('#E65C00'), flex: 1, padding: '0.7rem', borderRadius: 10, fontSize: '0.85rem' }}>
+              🍛 Order More
+            </button>
+          )}
+          <button
+            onClick={handleCallWaiter}
+            disabled={callCooldown > 0}
+            style={{
+              ...btn(callCooldown > 0 ? '#9ca3af' : '#1A0800'),
+              flex: 1, padding: '0.7rem', borderRadius: 10, fontSize: '0.82rem',
+              cursor: callCooldown > 0 ? 'not-allowed' : 'pointer',
+              opacity: callCooldown > 0 ? 0.8 : 1,
+            }}
+          >
+            {callCooldown > 0 ? `🔔 Wait ${callCooldown}s` : '🔔 Call Waiter'}
           </button>
         </div>
       )}

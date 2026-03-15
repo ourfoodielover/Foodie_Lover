@@ -4,7 +4,8 @@ import { useRouter } from 'next/navigation';
 import {
   getOrders, getTables, getMenu, saveMenu, getPin, savePin,
   updateOrderStatus, cancelOrder, applyDiscount, exportOrdersCSV, getOrdersInPeriod,
-  Order, Table, MenuItem, DEFAULT_MENU,
+  getEndOfDayReport, getWaiterStats, getTableOccupancyStats, getFraudAlerts,
+  Order, Table, MenuItem, DEFAULT_MENU, WaiterStats, TableOccupancyStats,
 } from '@/lib/storage';
 import {
   getSession, clearSession, AuthSession,
@@ -64,6 +65,10 @@ export default function AdminPage() {
   const [newPin,       setNewPin]       = useState('');
   const [newPinMsg,    setNewPinMsg]    = useState('');
 
+  // ── Analytics state ──
+  const [waiterStats,    setWaiterStats]    = useState<WaiterStats[]>([]);
+  const [tableOccupancy, setTableOccupancy] = useState<TableOccupancyStats[]>([]);
+
   // ── Staff management state ──
   const [staffAccounts, setStaffAccounts] = useState<StaffAccount[]>([]);
   const [staffForm,  setStaffForm]  = useState({ name: '', username: '', pin: '' });
@@ -97,6 +102,8 @@ export default function AdminPage() {
     setKitchenPin(getKitchenPin());
     setManagerPin(getManagerPin());
     setSecSetup(getSecuritySetup());
+    setWaiterStats(getWaiterStats());
+    setTableOccupancy(getTableOccupancyStats());
   }, []);
 
   // ── Auth check ──
@@ -394,12 +401,84 @@ export default function AdminPage() {
             </div>
           </div>
 
+          {/* End of Day Report */}
+          {(() => {
+            const eod = getEndOfDayReport();
+            return (
+              <div style={card('#16a34a')}>
+                <h2 style={{fontFamily:"'Playfair Display',serif",fontSize:'1.05rem',fontWeight:700,marginBottom:'0.85rem',color:'#1A0800'}}>📊 End-of-Day Report — Today</h2>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(130px,1fr))',gap:'0.7rem',marginBottom:'0.75rem'}}>
+                  {[
+                    {icon:'🧾',val:eod.totalOrders,label:'Orders Completed',color:'#16a34a'},
+                    {icon:'💰',val:`₹${eod.totalRevenue}`,label:'Total Revenue',color:'#E65C00'},
+                    {icon:'📊',val:`₹${eod.avgOrderValue}`,label:'Avg Order Value',color:'#8b5cf6'},
+                    {icon:'✅',val:eod.completedTabs,label:'Closed Tabs',color:'#3b82f6'},
+                    {icon:'🏷️',val:`₹${eod.discountsTotal}`,label:'Discounts',color:'#f59e0b'},
+                    {icon:'🚫',val:eod.voidedOrders,label:'Voided Orders',color:'#ef4444'},
+                  ].map(s=>(
+                    <div key={s.label} style={{background:'white',border:`1px solid ${s.color}30`,borderRadius:10,padding:'0.75rem',textAlign:'center',borderLeft:`3px solid ${s.color}`}}>
+                      <div style={{fontSize:'1.1rem',marginBottom:'0.15rem'}}>{s.icon}</div>
+                      <div style={{fontSize:'1.1rem',fontWeight:900,color:s.color}}>{s.val}</div>
+                      <div style={{fontSize:'0.62rem',color:'#999'}}>{s.label}</div>
+                    </div>
+                  ))}
+                </div>
+                {eod.topItems.length>0 && (
+                  <div>
+                    <div style={{fontSize:'0.78rem',fontWeight:700,color:'#16a34a',marginBottom:'0.35rem'}}>🏆 Today&apos;s Top Items</div>
+                    <div style={{display:'flex',gap:'0.4rem',flexWrap:'wrap'}}>
+                      {eod.topItems.map((item,i)=>(
+                        <div key={i} style={{background:'#f0fdf4',borderRadius:20,padding:'0.2rem 0.7rem',fontSize:'0.75rem',color:'#064e3b',fontWeight:600}}>
+                          {item.name} <span style={{color:'#E65C00',fontWeight:700}}>×{item.qty}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* Table Occupancy Analytics */}
+          {tableOccupancy.length > 0 && (
+            <div style={card('#3b82f6')}>
+              <h2 style={{fontFamily:"'Playfair Display',serif",fontSize:'1.05rem',fontWeight:700,marginBottom:'0.75rem',color:'#1A0800'}}>🪑 Table Occupancy Analytics</h2>
+              <div style={{overflowX:'auto'}}>
+                <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.82rem'}}>
+                  <thead><tr style={{background:'#eff6ff'}}>
+                    {['Table','Sessions','Avg Time','Revenue','Last Used'].map(h=>(
+                      <th key={h} style={{padding:'0.48rem 0.75rem',textAlign:'left',fontSize:'0.7rem',fontWeight:700,color:'#1d4ed8',textTransform:'uppercase'}}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {tableOccupancy.slice(0,10).map((t,i)=>(
+                      <tr key={t.tableId} style={{borderBottom:'1px solid #dbeafe',background:i%2?'#f0f9ff':'white'}}>
+                        <td style={{padding:'0.48rem 0.75rem',fontWeight:700,color:'#1A0800'}}>{t.tableId}</td>
+                        <td style={{padding:'0.48rem 0.75rem',fontWeight:700,color:'#3b82f6'}}>{t.totalSessions}</td>
+                        <td style={{padding:'0.48rem 0.75rem'}}>{t.avgMinutes} min</td>
+                        <td style={{padding:'0.48rem 0.75rem',fontWeight:700,color:'#16a34a'}}>₹{t.totalRevenue}</td>
+                        <td style={{padding:'0.48rem 0.75rem',color:'#888',fontSize:'0.75rem'}}>{t.lastUsed?new Date(t.lastUsed).toLocaleDateString('en-IN'):'—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           {/* Staff links */}
           <div style={card()}>
             <h2 style={{fontFamily:"'Playfair Display',serif",fontSize:'1.05rem',fontWeight:700,marginBottom:'0.85rem',color:'#1A0800'}}>👥 Staff Pages</h2>
             <div style={{display:'flex',gap:'0.65rem',flexWrap:'wrap'}}>
-              {[{href:'/kitchen',label:'🔥 Kitchen'},{href:'/waiter',label:'🧑‍🍳 Waiter'},{href:'/table?table=1',label:'📱 Table Ordering'},{href:'/',label:'🛍️ Customer Menu'}].map(l=>(
-                <a key={l.href} href={l.href} style={{padding:'0.55rem 1.1rem',background:'linear-gradient(135deg,#E65C00,#F9A826)',color:'white',borderRadius:8,fontWeight:700,textDecoration:'none',fontSize:'0.84rem'}}>{l.label}</a>
+              {[
+                {href:'/kitchen',      label:'🔥 Kitchen',         color:'linear-gradient(135deg,#E65C00,#F9A826)'},
+                {href:'/waiter',       label:'🧑‍🍳 Waiter',          color:'linear-gradient(135deg,#E65C00,#F9A826)'},
+                {href:'/manager',      label:'💳 Manager Counter',  color:'linear-gradient(135deg,#064e3b,#16a34a)'},
+                {href:'/table?table=T01',label:'📱 Table Ordering', color:'linear-gradient(135deg,#E65C00,#F9A826)'},
+                {href:'/',             label:'🛍️ Customer Menu',   color:'linear-gradient(135deg,#E65C00,#F9A826)'},
+                {href:'/qr',           label:'📱 QR Generator',     color:'linear-gradient(135deg,#3b82f6,#1d4ed8)'},
+              ].map(l=>(
+                <a key={l.href} href={l.href} style={{padding:'0.55rem 1.1rem',background:l.color,color:'white',borderRadius:8,fontWeight:700,textDecoration:'none',fontSize:'0.84rem'}}>{l.label}</a>
               ))}
             </div>
           </div>
@@ -672,6 +751,70 @@ export default function AdminPage() {
                 </div>
             }
           </div>
+
+          {/* Staff Accountability */}
+          <div style={card('#06b6d4')}>
+            <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:'0.98rem',fontWeight:700,marginBottom:'0.75rem',color:'#1A0800'}}>👤 Staff Accountability — Today</h3>
+            {!waiterStats.length
+              ? <div style={{color:'#999',fontSize:'0.85rem'}}>No waiter activity recorded today.</div>
+              : <div style={{overflowX:'auto'}}>
+                  <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.82rem'}}>
+                    <thead><tr style={{background:'#ecfeff'}}>
+                      {['Waiter','Accepted','Cancelled','Served','Cancel Rate'].map(h=>(
+                        <th key={h} style={{padding:'0.48rem 0.75rem',textAlign:'left',fontSize:'0.7rem',fontWeight:700,color:'#0e7490',textTransform:'uppercase'}}>{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>
+                      {waiterStats.map((s,i)=>{
+                        const isFlagged = s.cancellationRate > 20;
+                        return (
+                          <tr key={s.name} style={{borderBottom:'1px solid #cffafe',background:isFlagged?'#fef2f2':i%2?'#f0fdfe':'white'}}>
+                            <td style={{padding:'0.48rem 0.75rem',fontWeight:700,color:'#1A0800'}}>{s.name}{isFlagged&&<span style={{marginLeft:'0.3rem',color:'#ef4444',fontSize:'0.7rem'}}>⚠️ High</span>}</td>
+                            <td style={{padding:'0.48rem 0.75rem',fontWeight:700,color:'#16a34a'}}>{s.ordersAccepted}</td>
+                            <td style={{padding:'0.48rem 0.75rem',fontWeight:700,color:s.ordersCancelled>0?'#ef4444':'#9ca3af'}}>{s.ordersCancelled}</td>
+                            <td style={{padding:'0.48rem 0.75rem',fontWeight:700,color:'#06b6d4'}}>{s.ordersServed}</td>
+                            <td style={{padding:'0.48rem 0.75rem'}}>
+                              <span style={{fontWeight:700,color:s.cancellationRate>20?'#ef4444':s.cancellationRate>10?'#f59e0b':'#16a34a'}}>
+                                {s.cancellationRate}%
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+            }
+          </div>
+
+          {/* Fraud Alert Log */}
+          {(() => {
+            const fraudAlerts = getFraudAlerts().slice(0, 20);
+            if (!fraudAlerts.length) return null;
+            return (
+              <div style={card('#f97316')}>
+                <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:'0.98rem',fontWeight:700,marginBottom:'0.75rem',color:'#1A0800'}}>🚨 Fraud Alert Log</h3>
+                <div style={{overflowX:'auto'}}>
+                  <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.8rem'}}>
+                    <thead><tr style={{background:'#fff7ed'}}>
+                      {['Type','Detail','By','Amount','Date'].map(h=><th key={h} style={{padding:'0.48rem 0.7rem',textAlign:'left',fontSize:'0.7rem',fontWeight:700,color:'#9a3412',textTransform:'uppercase'}}>{h}</th>)}
+                    </tr></thead>
+                    <tbody>
+                      {fraudAlerts.map(a=>(
+                        <tr key={a.id} style={{borderBottom:'1px solid #fed7aa'}}>
+                          <td style={{padding:'0.48rem 0.7rem'}}><span style={{fontSize:'0.7rem',fontWeight:700,padding:'0.12rem 0.45rem',borderRadius:10,background:'#fff7ed',color:'#ea580c'}}>{a.type.replace(/_/g,' ')}</span></td>
+                          <td style={{padding:'0.48rem 0.7rem',color:'#555',maxWidth:'200px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{a.detail}</td>
+                          <td style={{padding:'0.48rem 0.7rem',fontWeight:600}}>{a.by}</td>
+                          <td style={{padding:'0.48rem 0.7rem',color:'#ef4444',fontWeight:700}}>{a.amount?`₹${a.amount}`:'—'}</td>
+                          <td style={{padding:'0.48rem 0.7rem',color:'#888',fontSize:'0.75rem'}}>{new Date(a.at).toLocaleString('en-IN',{dateStyle:'short',timeStyle:'short'})}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })()}
         </>}
 
         {/* ═══════════ STAFF ═══════════ */}

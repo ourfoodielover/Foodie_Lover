@@ -4,8 +4,9 @@ import { useRouter } from 'next/navigation';
 import { getSession, clearSession, AuthSession } from '@/lib/auth';
 import {
   getTabs, getTabOrders, getOrders, closeTab, applyTabDiscount, getPin,
-  getOrdersInPeriod,
-  CustomerTab, Order,
+  getOrdersInPeriod, getEndOfDayReport,
+  createSplitBill, markSplitEntryPaid, isSplitFullyPaid, getSplitBillForTab,
+  CustomerTab, Order, SplitBill,
 } from '@/lib/storage';
 
 const PAY_LABELS: Record<string, string> = {
@@ -43,6 +44,16 @@ export default function ManagerPage() {
   const [showDiscForm, setShowDiscForm]       = useState(false);
   const [tabBillMsg, setTabBillMsg]           = useState('');
   const [tabCloseConfirm, setTabCloseConfirm] = useState(false);
+
+  // Split billing
+  const [splitBill, setSplitBill]             = useState<SplitBill | null>(null);
+  const [showSplitModal, setShowSplitModal]   = useState(false);
+  const [splitCount, setSplitCount]           = useState('2');
+  const [splitPayEntry, setSplitPayEntry]     = useState<string | null>(null);
+  const [splitPayMethod, setSplitPayMethod]   = useState('cod');
+
+  // End-of-day report
+  const [showEOD, setShowEOD]                 = useState(false);
 
   // ── Auth ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -96,19 +107,15 @@ export default function ManagerPage() {
   // ── Close tab action ──────────────────────────────────────────────────────
   function handleCloseTab() {
     if (!selTab) return;
-
-    // If not yet confirmed, check for in-progress orders first
     if (!tabCloseConfirm) {
       const inProgress = getTabOrders(selTab.id).filter(o =>
         ['awaiting_waiter', 'pending', 'preparing', 'prepared'].includes(o.status),
       );
       if (inProgress.length > 0) {
-        setTabCloseConfirm(true);  // Show warning, require second click
+        setTabCloseConfirm(true);
         return;
       }
     }
-
-    // Proceed with close
     setTabCloseConfirm(false);
     const discount = selTab.discount || 0;
     const ok = closeTab(selTab.id, tabPayMethod, discount, selTab.discountReason, session?.name || 'Manager');
@@ -118,9 +125,35 @@ export default function ManagerPage() {
         setTabBillMsg('');
         setSelTab(null);
         setTabCloseConfirm(false);
+        setSplitBill(null);
+        setShowSplitModal(false);
       }, 1800);
       refresh();
     }
+  }
+
+  // ── Split bill actions ────────────────────────────────────────────────────
+  function handleCreateSplit() {
+    if (!selTab) return;
+    const count = Math.max(2, Math.min(10, parseInt(splitCount) || 2));
+    const total = Math.max(0, (selTab.totalAmount || 0) - (selTab.discount || 0));
+    const split = createSplitBill(selTab.id, 'equal', count, total);
+    setSplitBill(split);
+    setShowSplitModal(false);
+  }
+
+  function handleMarkSplitPaid(personLabel: string) {
+    if (!selTab) return;
+    markSplitEntryPaid(selTab.id, personLabel, splitPayMethod);
+    // Reload split
+    const updated = getSplitBillForTab(selTab.id);
+    setSplitBill(updated);
+    setSplitPayEntry(null);
+  }
+
+  function loadSplitForTab(tabId: string) {
+    const existing = getSplitBillForTab(tabId);
+    setSplitBill(existing);
   }
 
   // ── Derived data ──────────────────────────────────────────────────────────
@@ -136,14 +169,15 @@ export default function ManagerPage() {
     tabFilter === 'open'     ? openTabs     :
                                closedTabs;
 
-  // Tab orders for selected tab
-  const tabOrders = selTab ? getTabOrders(selTab.id) : [];
+  const tabOrders    = selTab ? getTabOrders(selTab.id) : [];
   const tabBillTotal = selTab ? Math.max(0, (selTab.totalAmount || 0) - (selTab.discount || 0)) : 0;
 
-  // In-progress orders for warning
   const inProgressOrders = selTab
     ? tabOrders.filter(o => ['awaiting_waiter', 'pending', 'preparing', 'prepared'].includes(o.status))
     : [];
+
+  // EOD report
+  const eodReport = getEndOfDayReport();
 
   // ── Styles ────────────────────────────────────────────────────────────────
   const btn = (bg = '#E65C00', c = 'white'): React.CSSProperties => ({
@@ -180,12 +214,15 @@ export default function ManagerPage() {
             <div style={{ fontSize: '0.7rem', color: '#6ee7b7' }}>Billing & Payment Portal</div>
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           {awaitingTabs.length > 0 && (
             <div style={{ background: '#f59e0b', color: 'white', padding: '0.25rem 0.75rem', borderRadius: 20, fontSize: '0.75rem', fontWeight: 800 }}>
               💰 {awaitingTabs.length} Awaiting Payment
             </div>
           )}
+          <button onClick={() => setShowEOD(!showEOD)} style={{ ...btn('#065f46', '#6ee7b7'), border: '1px solid #6ee7b7', fontSize: '0.72rem' }}>
+            📊 EOD Report
+          </button>
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: '0.78rem', fontWeight: 700 }}>{clock.date}</div>
             <div style={{ fontSize: '0.7rem', color: '#6ee7b7' }}>{clock.time}</div>
@@ -196,10 +233,50 @@ export default function ManagerPage() {
         </div>
       </div>
 
+      {/* EOD Report Panel */}
+      {showEOD && (
+        <div style={{ background: '#064e3b', color: 'white', padding: '1.25rem 1.5rem', borderBottom: '3px solid #059669' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+            <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1rem', fontWeight: 900, color: '#6ee7b7' }}>
+              📊 End-of-Day Report — {eodReport.date}
+            </div>
+            <button onClick={() => setShowEOD(false)} style={{ background: 'none', border: 'none', color: '#6ee7b7', fontSize: '1.25rem', cursor: 'pointer' }}>×</button>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(130px,1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
+            {[
+              { icon: '🧾', val: eodReport.totalOrders,  label: 'Orders Completed', color: '#6ee7b7' },
+              { icon: '💰', val: `₹${eodReport.totalRevenue}`, label: 'Total Revenue', color: '#fbbf24' },
+              { icon: '📊', val: `₹${eodReport.avgOrderValue}`, label: 'Avg Order Value', color: '#a78bfa' },
+              { icon: '✅', val: eodReport.completedTabs, label: 'Closed Tabs', color: '#34d399' },
+              { icon: '🏷️', val: `₹${eodReport.discountsTotal}`, label: 'Discounts Given', color: '#f87171' },
+              { icon: '🚫', val: eodReport.voidedOrders,  label: 'Voided Orders', color: '#fb923c' },
+            ].map(s => (
+              <div key={s.label} style={{ background: 'rgba(255,255,255,0.08)', borderRadius: 10, padding: '0.75rem', textAlign: 'center' }}>
+                <div style={{ fontSize: '1.2rem', marginBottom: '0.2rem' }}>{s.icon}</div>
+                <div style={{ fontSize: '1.1rem', fontWeight: 900, color: s.color }}>{s.val}</div>
+                <div style={{ fontSize: '0.62rem', color: '#9ca3af' }}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+          {eodReport.topItems.length > 0 && (
+            <div>
+              <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#6ee7b7', marginBottom: '0.4rem' }}>🏆 Top Items Today</div>
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                {eodReport.topItems.map((item, i) => (
+                  <div key={i} style={{ background: 'rgba(255,255,255,0.1)', borderRadius: 20, padding: '0.2rem 0.7rem', fontSize: '0.75rem', color: 'white' }}>
+                    {item.name} <span style={{ color: '#fbbf24', fontWeight: 700 }}>×{item.qty}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Stats bar */}
       <div style={{ background: '#065f46', color: 'white', padding: '0.6rem 1.5rem', display: 'flex', gap: '2rem', overflowX: 'auto' }}>
         {[
-          { icon: '💰', val: `₹${todayRevenue}`,   label: "Net Revenue"      },
+          { icon: '💰', val: `₹${todayRevenue}`,   label: 'Net Revenue'      },
           { icon: '🧾', val: awaitingTabs.length,   label: 'Awaiting Payment' },
           { icon: '🟢', val: openTabs.length,       label: 'Open Tabs'        },
           { icon: '✅', val: closedTabs.length,     label: 'Closed Today'     },
@@ -248,12 +325,13 @@ export default function ManagerPage() {
               onClick={() => {
                 setSelTab(tab);
                 setShowDiscForm(false);
-                setTabDiscAmt('');
-                setTabDiscNote('');
-                setPinInput('');
-                setPinMsg('');
+                setTabDiscAmt(''); setTabDiscNote('');
+                setPinInput(''); setPinMsg('');
                 setTabBillMsg('');
                 setTabCloseConfirm(false);
+                setShowSplitModal(false);
+                setSplitPayEntry(null);
+                loadSplitForTab(tab.id);
               }}
               style={{
                 background: 'white', borderRadius: 12, overflow: 'hidden',
@@ -294,7 +372,7 @@ export default function ManagerPage() {
       {selTab && (
         <div
           style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 200 }}
-          onClick={() => { setSelTab(null); setTabCloseConfirm(false); }}
+          onClick={() => { setSelTab(null); setTabCloseConfirm(false); setSplitBill(null); setShowSplitModal(false); }}
         >
           <div
             onClick={e => e.stopPropagation()}
@@ -311,7 +389,7 @@ export default function ManagerPage() {
                   {selTab.tabStatus === 'awaiting_payment' ? '💳 Bill Requested' : selTab.tabStatus === 'open' ? '🟢 Open Tab' : '✅ Closed'}
                 </div>
               </div>
-              <button onClick={() => { setSelTab(null); setTabCloseConfirm(false); }} style={{ background: 'none', border: 'none', color: 'white', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
+              <button onClick={() => { setSelTab(null); setTabCloseConfirm(false); setSplitBill(null); setShowSplitModal(false); }} style={{ background: 'none', border: 'none', color: 'white', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto', padding: '1.25rem 1.5rem' }}>
@@ -356,6 +434,122 @@ export default function ManagerPage() {
                   <span>₹{tabBillTotal}</span>
                 </div>
               </div>
+
+              {/* ── Split Billing Section ── */}
+              {selTab.tabStatus !== 'closed' && (
+                <div style={{ marginBottom: '1rem' }}>
+                  {!splitBill ? (
+                    !showSplitModal ? (
+                      <button
+                        onClick={() => setShowSplitModal(true)}
+                        style={{ ...btn('#f0fdf4', '#16a34a'), fontSize: '0.78rem', width: '100%', border: '1px solid #86efac' }}
+                      >
+                        ✂️ Split Bill
+                      </button>
+                    ) : (
+                      <div style={{ background: '#f0fdf4', borderRadius: 10, border: '1px solid #86efac', padding: '1rem', marginBottom: '0.5rem' }}>
+                        <div style={{ fontWeight: 700, color: '#064e3b', fontSize: '0.85rem', marginBottom: '0.5rem' }}>✂️ Split Equally Between</div>
+                        <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.5rem' }}>
+                          {[2, 3, 4, 5, 6].map(n => (
+                            <button
+                              key={n}
+                              onClick={() => setSplitCount(String(n))}
+                              style={{
+                                flex: 1, padding: '0.4rem', borderRadius: 8, fontWeight: 700, cursor: 'pointer',
+                                border: `2px solid ${splitCount === String(n) ? '#16a34a' : '#d1fae5'}`,
+                                background: splitCount === String(n) ? '#16a34a' : 'white',
+                                color: splitCount === String(n) ? 'white' : '#065f46',
+                                fontFamily: 'Poppins,sans-serif', fontSize: '0.85rem',
+                              }}
+                            >{n}</button>
+                          ))}
+                        </div>
+                        <div style={{ fontSize: '0.78rem', color: '#16a34a', fontWeight: 600, marginBottom: '0.5rem' }}>
+                          ≈ ₹{Math.ceil(tabBillTotal / (parseInt(splitCount) || 2))} per person
+                        </div>
+                        <div style={{ display: 'flex', gap: '0.4rem' }}>
+                          <button onClick={handleCreateSplit} style={{ ...btn('#16a34a'), flex: 2, fontSize: '0.78rem' }}>
+                            Split Now
+                          </button>
+                          <button onClick={() => setShowSplitModal(false)} style={{ ...btn('#9ca3af'), flex: 1, fontSize: '0.78rem' }}>
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  ) : (
+                    /* Split bill UI */
+                    <div style={{ background: '#f0fdf4', borderRadius: 10, border: '1px solid #86efac', padding: '1rem', marginBottom: '0.5rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                        <div style={{ fontWeight: 700, color: '#064e3b', fontSize: '0.85rem' }}>✂️ Split Bill ({splitBill.entries.length} persons)</div>
+                        <button onClick={() => setSplitBill(null)} style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: '0.75rem' }}>Reset</button>
+                      </div>
+                      {splitBill.entries.map((entry, i) => (
+                        <div key={i} style={{ marginBottom: '0.5rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', background: entry.paid ? '#dcfce7' : 'white', borderRadius: 8, border: `1px solid ${entry.paid ? '#86efac' : '#d1d5db'}` }}>
+                            <div>
+                              <div style={{ fontWeight: 700, fontSize: '0.82rem', color: entry.paid ? '#16a34a' : '#1A0800' }}>
+                                {entry.paid ? '✅' : '⬜'} {entry.personLabel}
+                              </div>
+                              {entry.paid && entry.paymentMethod && (
+                                <div style={{ fontSize: '0.68rem', color: '#16a34a' }}>
+                                  Paid via {PAY_LABELS[entry.paymentMethod] || entry.paymentMethod}
+                                </div>
+                              )}
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                              <span style={{ fontWeight: 800, color: '#064e3b', fontSize: '0.9rem' }}>₹{entry.amount}</span>
+                              {!entry.paid && (
+                                <button
+                                  onClick={() => setSplitPayEntry(entry.personLabel)}
+                                  style={{ ...btn('#16a34a'), fontSize: '0.72rem', padding: '0.3rem 0.6rem' }}
+                                >
+                                  Mark Paid
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          {/* Pay method selection for this entry */}
+                          {splitPayEntry === entry.personLabel && (
+                            <div style={{ background: '#fffbeb', borderRadius: 8, padding: '0.6rem', marginTop: '0.25rem', border: '1px solid #fde68a' }}>
+                              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#555', marginBottom: '0.3rem' }}>Payment Method</div>
+                              <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', marginBottom: '0.4rem' }}>
+                                {[{k:'cod',l:'💵 Cash'},{k:'gpay',l:'📱 GPay'},{k:'card',l:'💳 Card'},{k:'upi',l:'📲 UPI'}].map(p => (
+                                  <button
+                                    key={p.k}
+                                    onClick={() => setSplitPayMethod(p.k)}
+                                    style={{
+                                      padding: '0.25rem 0.6rem', borderRadius: 6,
+                                      border: `1.5px solid ${splitPayMethod === p.k ? '#16a34a' : '#d1d5db'}`,
+                                      background: splitPayMethod === p.k ? '#f0fdf4' : 'white',
+                                      color: splitPayMethod === p.k ? '#16a34a' : '#666',
+                                      fontWeight: 600, cursor: 'pointer', fontSize: '0.72rem',
+                                      fontFamily: 'Poppins,sans-serif',
+                                    }}
+                                  >{p.l}</button>
+                                ))}
+                              </div>
+                              <div style={{ display: 'flex', gap: '0.3rem' }}>
+                                <button onClick={() => handleMarkSplitPaid(entry.personLabel)} style={{ ...btn('#16a34a'), flex: 2, fontSize: '0.72rem' }}>
+                                  ✅ Confirm ₹{entry.amount} Paid
+                                </button>
+                                <button onClick={() => setSplitPayEntry(null)} style={{ ...btn('#9ca3af'), flex: 1, fontSize: '0.72rem' }}>
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                      {isSplitFullyPaid(selTab.id) && (
+                        <div style={{ background: '#dcfce7', border: '1px solid #86efac', borderRadius: 8, padding: '0.5rem', textAlign: 'center', fontWeight: 700, color: '#16a34a', fontSize: '0.82rem', marginTop: '0.25rem' }}>
+                          🎉 All portions paid! You can now close the tab.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Payment method */}
               {selTab.tabStatus !== 'closed' && (
@@ -423,7 +617,7 @@ export default function ManagerPage() {
                 </div>
               )}
 
-              {/* In-progress warning (shown after first click when there are active orders) */}
+              {/* In-progress warning */}
               {tabCloseConfirm && inProgressOrders.length > 0 && (
                 <div style={{ background: '#fff7ed', border: '2px solid #f97316', borderRadius: 10, padding: '0.85rem 1rem', marginBottom: '1rem' }}>
                   <div style={{ fontWeight: 800, color: '#9a3412', fontSize: '0.88rem', marginBottom: '0.4rem' }}>
