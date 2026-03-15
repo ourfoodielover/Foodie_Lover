@@ -19,10 +19,11 @@ export type OrderType = 'dine-in' | 'pickup';
 export type TabStatus = 'open' | 'awaiting_payment' | 'closed';
 
 export interface OrderItem {
-  name:     string;
-  qty:      number;
-  price:    number;
-  subtotal: number;
+  name:        string;
+  qty:         number;
+  price:       number;
+  subtotal:    number;
+  itemStatus?: ItemStatus;
 }
 
 export interface TimelineEntry {
@@ -96,6 +97,15 @@ export interface TableOccupancy {
   status:    TabStatus;
 }
 
+// One record per (deviceId × tableId) — persists across browser restarts
+export interface DeviceRecord {
+  deviceId:     string;   // unique per physical device, stored in localStorage
+  tableId:      string;
+  tabId:        string;
+  customerName: string;
+  joinedAt:     string;
+}
+
 export interface EndOfDayReport {
   date:           string;
   totalOrders:    number;
@@ -127,6 +137,10 @@ const KEYS = {
   tabs:        'fl_customer_tabs',
   orderNum:    'fl_order_num_counter',
   fraudAlerts: 'fl_fraud_alerts',
+  waiterCalls: 'fl_waiter_calls',
+  disputes:    'fl_food_disputes',
+  splitBills:  'fl_split_bills',
+  devices:     'fl_device_records',   // device-based session tracking
 };
 
 // ─── Storage helpers ──────────────────────────────────────────────────────────
@@ -643,4 +657,322 @@ export function getEndOfDayReport(date?: Date): EndOfDayReport {
     voidedOrders,
     discountsTotal,
   };
+}
+
+// ─── Item-Level Status ────────────────────────────────────────────────────────
+export type ItemStatus = 'queued' | 'preparing' | 'prepared' | 'served';
+
+export interface WaiterCall {
+  id:              string;
+  tableId:         string;
+  tabId:           string;
+  customerName:    string;
+  at:              string;
+  acknowledged:    boolean;
+  acknowledgedAt?: string;
+  acknowledgedBy?: string;
+}
+
+export interface FoodReceiptDispute {
+  id:           string;
+  orderId:      string;
+  tabId:        string;
+  tableId:      string;
+  customerName: string;
+  at:           string;
+  resolved:     boolean;
+  resolvedBy?:  string;
+  resolvedAt?:  string;
+}
+
+export interface SplitBillEntry {
+  personLabel:    string;
+  amount:         number;
+  paid:           boolean;
+  paymentMethod?: string;
+  paidAt?:        string;
+}
+
+export interface SplitBill {
+  id:          string;
+  tabId:       string;
+  splitType:   'equal' | 'custom';
+  totalAmount: number;
+  entries:     SplitBillEntry[];
+  createdAt:   string;
+}
+
+export interface WaiterStats {
+  name:             string;
+  ordersAccepted:   number;
+  ordersCancelled:  number;
+  ordersServed:     number;
+  cancellationRate: number;
+}
+
+export interface TableOccupancyStats {
+  tableId:       string;
+  totalSessions: number;
+  avgMinutes:    number;
+  totalRevenue:  number;
+  lastUsed?:     string;
+}
+
+// ─── Item-Level Status ────────────────────────────────────────────────────────
+export function updateItemStatus(
+  orderId:   string,
+  itemIndex: number,
+  status:    ItemStatus,
+  by:        string = 'Kitchen',
+): boolean {
+  const orders = getOrders();
+  const idx = orders.findIndex(o => o.id === orderId);
+  if (idx === -1) return false;
+  const items = [...(orders[idx].items || [])];
+  if (itemIndex < 0 || itemIndex >= items.length) return false;
+  items[itemIndex] = { ...items[itemIndex], itemStatus: status };
+  orders[idx] = { ...orders[idx], items };
+  saveOrders(orders);
+  return true;
+}
+
+// ─── Waiter Calls ─────────────────────────────────────────────────────────────
+export const getWaiterCalls       = (): WaiterCall[] => ls_get<WaiterCall[]>(KEYS.waiterCalls, []);
+export const saveWaiterCalls      = (c: WaiterCall[]) => ls_set(KEYS.waiterCalls, c);
+export const getPendingWaiterCalls = (): WaiterCall[] => getWaiterCalls().filter(c => !c.acknowledged);
+
+export function addWaiterCall(tableId: string, tabId: string, customerName: string): WaiterCall {
+  const call: WaiterCall = {
+    id: `WC-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+    tableId, tabId, customerName,
+    at: new Date().toISOString(),
+    acknowledged: false,
+  };
+  const calls = getWaiterCalls();
+  calls.push(call);
+  if (calls.length > 100) calls.splice(0, calls.length - 100);
+  saveWaiterCalls(calls);
+  return call;
+}
+
+export function acknowledgeWaiterCall(id: string, by: string = 'Waiter'): boolean {
+  const calls = getWaiterCalls();
+  const idx = calls.findIndex(c => c.id === id);
+  if (idx === -1) return false;
+  calls[idx] = { ...calls[idx], acknowledged: true, acknowledgedAt: new Date().toISOString(), acknowledgedBy: by };
+  saveWaiterCalls(calls);
+  return true;
+}
+
+export function getLastWaiterCallTime(tableId: string): string | null {
+  const calls = getWaiterCalls();
+  const recent = calls.filter(c => c.tableId === tableId)
+    .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+  if (!recent.length) return null;
+  if (Date.now() - new Date(recent[0].at).getTime() > 5 * 60 * 1000) return null;
+  return recent[0].at;
+}
+
+// ─── Food Receipt Disputes ────────────────────────────────────────────────────
+export const getDisputeAlerts   = (): FoodReceiptDispute[] => ls_get<FoodReceiptDispute[]>(KEYS.disputes, []);
+export const saveDisputeAlerts  = (d: FoodReceiptDispute[]) => ls_set(KEYS.disputes, d);
+export const getPendingDisputes = (): FoodReceiptDispute[] => getDisputeAlerts().filter(d => !d.resolved);
+
+export function addFoodReceiptDispute(
+  orderId: string, tabId: string, tableId: string, customerName: string,
+): FoodReceiptDispute {
+  const dispute: FoodReceiptDispute = {
+    id: `FD-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+    orderId, tabId, tableId, customerName,
+    at: new Date().toISOString(),
+    resolved: false,
+  };
+  const disputes = getDisputeAlerts();
+  disputes.push(dispute);
+  if (disputes.length > 200) disputes.splice(0, disputes.length - 200);
+  saveDisputeAlerts(disputes);
+  return dispute;
+}
+
+export function resolveDispute(id: string, by: string = 'Waiter'): boolean {
+  const disputes = getDisputeAlerts();
+  const idx = disputes.findIndex(d => d.id === id);
+  if (idx === -1) return false;
+  disputes[idx] = { ...disputes[idx], resolved: true, resolvedBy: by, resolvedAt: new Date().toISOString() };
+  saveDisputeAlerts(disputes);
+  return true;
+}
+
+// ─── Split Billing ────────────────────────────────────────────────────────────
+export const getSplitBills  = (): SplitBill[] => ls_get<SplitBill[]>(KEYS.splitBills, []);
+export const saveSplitBills = (s: SplitBill[]) => ls_set(KEYS.splitBills, s);
+
+export function getSplitBillForTab(tabId: string): SplitBill | null {
+  return getSplitBills().find(s => s.tabId === tabId) ?? null;
+}
+
+export function createSplitBill(
+  tabId: string, splitType: 'equal' | 'custom', count: number, totalAmount: number,
+): SplitBill {
+  const existing = getSplitBills().filter(s => s.tabId !== tabId);
+  const perPerson = Math.ceil(totalAmount / count);
+  const entries: SplitBillEntry[] = Array.from({ length: count }, (_, i) => ({
+    personLabel: `Person ${i + 1}`,
+    amount: i === count - 1 ? totalAmount - perPerson * (count - 1) : perPerson,
+    paid: false,
+  }));
+  const split: SplitBill = {
+    id: `SB-${Date.now()}`, tabId, splitType, totalAmount, entries,
+    createdAt: new Date().toISOString(),
+  };
+  existing.push(split);
+  saveSplitBills(existing);
+  return split;
+}
+
+export function markSplitEntryPaid(tabId: string, personLabel: string, paymentMethod: string): boolean {
+  const splits = getSplitBills();
+  const idx = splits.findIndex(s => s.tabId === tabId);
+  if (idx === -1) return false;
+  const eIdx = splits[idx].entries.findIndex(e => e.personLabel === personLabel);
+  if (eIdx === -1) return false;
+  splits[idx].entries[eIdx] = { ...splits[idx].entries[eIdx], paid: true, paymentMethod, paidAt: new Date().toISOString() };
+  saveSplitBills(splits);
+  return true;
+}
+
+export function isSplitFullyPaid(tabId: string): boolean {
+  const split = getSplitBillForTab(tabId);
+  return split ? split.entries.every(e => e.paid) : false;
+}
+
+// ─── Staff Accountability ─────────────────────────────────────────────────────
+export function getWaiterStats(): WaiterStats[] {
+  const orders = getOrders();
+  const todayStr = new Date().toDateString();
+  const todayOrders = orders.filter(o => new Date(o.timestamp).toDateString() === todayStr);
+  const statMap: Record<string, { accepted: number; cancelled: number; served: number }> = {};
+  todayOrders.forEach(o => {
+    (o.timeline || []).forEach(t => {
+      if (!t.by || ['System','Admin','Manager','Kitchen'].includes(t.by)) return;
+      if (!statMap[t.by]) statMap[t.by] = { accepted: 0, cancelled: 0, served: 0 };
+      if (t.status === 'pending')   statMap[t.by].accepted++;
+      if (t.status === 'cancelled') statMap[t.by].cancelled++;
+      if (t.status === 'served')    statMap[t.by].served++;
+    });
+  });
+  return Object.entries(statMap).map(([name, s]) => ({
+    name,
+    ordersAccepted:   s.accepted,
+    ordersCancelled:  s.cancelled,
+    ordersServed:     s.served,
+    cancellationRate: s.accepted > 0 ? Math.round((s.cancelled / s.accepted) * 100) : 0,
+  })).sort((a, b) => b.ordersCancelled - a.ordersCancelled);
+}
+
+// ─── Table Occupancy Analytics ────────────────────────────────────────────────
+export function getTableOccupancyStats(): TableOccupancyStats[] {
+  const allTabs = getTabs().filter(t => t.tabStatus === 'closed' && t.closedAt);
+  const map: Record<string, { sessions: number; totalMins: number; revenue: number; lastUsed: string }> = {};
+  allTabs.forEach(tab => {
+    if (!map[tab.tableId]) map[tab.tableId] = { sessions: 0, totalMins: 0, revenue: 0, lastUsed: '' };
+    const mins = Math.floor((new Date(tab.closedAt!).getTime() - new Date(tab.createdAt).getTime()) / 60000);
+    map[tab.tableId].sessions++;
+    map[tab.tableId].totalMins += mins;
+    map[tab.tableId].revenue += Math.max(0, tab.totalAmount - tab.discount);
+    if (!map[tab.tableId].lastUsed || tab.closedAt! > map[tab.tableId].lastUsed)
+      map[tab.tableId].lastUsed = tab.closedAt!;
+  });
+  return Object.entries(map).map(([tableId, s]) => ({
+    tableId,
+    totalSessions: s.sessions,
+    avgMinutes: s.sessions > 0 ? Math.round(s.totalMins / s.sessions) : 0,
+    totalRevenue: s.revenue,
+    lastUsed: s.lastUsed,
+  })).sort((a, b) => b.totalSessions - a.totalSessions);
+}
+
+// ─── Device-Based Session Detection ──────────────────────────────────────────
+// Each physical device gets a permanent unique ID stored in localStorage.
+// This lets customers auto-reconnect to their active table session without
+// entering their name again.
+
+/** Get the device_id from localStorage, creating one if it doesn't exist yet. */
+export function getOrCreateDeviceId(): string {
+  if (typeof window === 'undefined') return '';
+  let id = localStorage.getItem('fl_device_id');
+  if (!id) {
+    id = `DEV-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+    localStorage.setItem('fl_device_id', id);
+  }
+  return id;
+}
+
+/** Read all device records from localStorage. */
+export function getDeviceRecords(): DeviceRecord[] {
+  return ls_get<DeviceRecord[]>(KEYS.devices, []);
+}
+
+/** Persist device records. */
+export function saveDeviceRecords(records: DeviceRecord[]): void {
+  ls_set(KEYS.devices, records);
+}
+
+/**
+ * Register (or update) a device ↔ table ↔ tab link.
+ * Old records for the same (deviceId × tableId) are replaced.
+ * Records older than 24 h are pruned to prevent unbounded growth.
+ */
+export function registerDevice(
+  deviceId:     string,
+  tableId:      string,
+  tabId:        string,
+  customerName: string,
+): DeviceRecord {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  const pruned = getDeviceRecords().filter(
+    r => new Date(r.joinedAt).getTime() > cutoff &&
+         !(r.deviceId === deviceId && r.tableId === tableId),
+  );
+  const record: DeviceRecord = {
+    deviceId, tableId, tabId, customerName,
+    joinedAt: new Date().toISOString(),
+  };
+  pruned.push(record);
+  saveDeviceRecords(pruned);
+  return record;
+}
+
+/**
+ * Check whether a device has an active (open / awaiting_payment) session at a table.
+ * Returns the matching tab + record, or null if none.
+ */
+export function findActiveDeviceSession(
+  deviceId: string,
+  tableId:  string,
+): { tab: CustomerTab; record: DeviceRecord } | null {
+  const records = getDeviceRecords();
+  const record  = records.find(r => r.deviceId === deviceId && r.tableId === tableId);
+  if (!record) return null;
+  const tab = getTabs().find(
+    t => t.id === record.tabId && ['open', 'awaiting_payment'].includes(t.tabStatus),
+  );
+  if (!tab) return null;
+  return { tab, record };
+}
+
+/**
+ * Remove a device's session record for a specific table
+ * (called after tab is closed / thank-you screen).
+ */
+export function removeDeviceRecord(deviceId: string, tableId: string): void {
+  const records = getDeviceRecords().filter(
+    r => !(r.deviceId === deviceId && r.tableId === tableId),
+  );
+  saveDeviceRecords(records);
+}
+
+/** Return all device records linked to a specific tab (i.e. all customers at the table). */
+export function getDevicesForTab(tabId: string): DeviceRecord[] {
+  return getDeviceRecords().filter(r => r.tabId === tabId);
 }
