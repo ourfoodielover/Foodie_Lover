@@ -26,14 +26,17 @@ module.exports = mod;
 "[project]/lib/storage.ts [app-ssr] (ecmascript)", ((__turbopack_context__) => {
 "use strict";
 
+// ─── Foodie Lover — Storage Layer ─────────────────────────────────────────────
+// All persistence via localStorage (no backend). v2.0 — CustomerTab system.
+// Exports every type and function used across pages.
 // ─── Types ────────────────────────────────────────────────────────────────────
 __turbopack_context__.s([
     "DEFAULT_MENU",
     ()=>DEFAULT_MENU,
-    "VALID_TRANSITIONS",
-    ()=>VALID_TRANSITIONS,
-    "addItemsToOrder",
-    ()=>addItemsToOrder,
+    "acknowledgeWaiterCall",
+    ()=>acknowledgeWaiterCall,
+    "addFoodReceiptDispute",
+    ()=>addFoodReceiptDispute,
     "addOrder",
     ()=>addOrder,
     "addOrderToTab",
@@ -44,1113 +47,1218 @@ __turbopack_context__.s([
     ()=>applyDiscount,
     "applyTabDiscount",
     ()=>applyTabDiscount,
+    "buildWhatsappOrderUrl",
+    ()=>buildWhatsappOrderUrl,
     "cancelOrder",
     ()=>cancelOrder,
+    "clearFraudAlerts",
+    ()=>clearFraudAlerts,
     "closeTab",
     ()=>closeTab,
+    "createSplitBill",
+    ()=>createSplitBill,
     "createTab",
     ()=>createTab,
+    "customerConfirmDelivery",
+    ()=>customerConfirmDelivery,
+    "emitBillRequestedEvent",
+    ()=>emitBillRequestedEvent,
     "exportOrdersCSV",
     ()=>exportOrdersCSV,
+    "findActiveDeviceSession",
+    ()=>findActiveDeviceSession,
+    "generateTrackingToken",
+    ()=>generateTrackingToken,
     "getActiveTabsForTable",
     ()=>getActiveTabsForTable,
+    "getAllOrderEvents",
+    ()=>getAllOrderEvents,
+    "getDeliveryQueue",
+    ()=>getDeliveryQueue,
+    "getDeviceRecords",
+    ()=>getDeviceRecords,
+    "getDevicesForTab",
+    ()=>getDevicesForTab,
+    "getDisputeAlerts",
+    ()=>getDisputeAlerts,
     "getEndOfDayReport",
     ()=>getEndOfDayReport,
+    "getEventsForOrder",
+    ()=>getEventsForOrder,
     "getFraudAlerts",
     ()=>getFraudAlerts,
+    "getLastWaiterCallTime",
+    ()=>getLastWaiterCallTime,
+    "getLatestEvent",
+    ()=>getLatestEvent,
     "getMenu",
     ()=>getMenu,
     "getNextOrderNumber",
     ()=>getNextOrderNumber,
+    "getOnlineOrderStats",
+    ()=>getOnlineOrderStats,
     "getOpenTabForCustomer",
     ()=>getOpenTabForCustomer,
+    "getOrCreateDeviceId",
+    ()=>getOrCreateDeviceId,
     "getOrders",
     ()=>getOrders,
     "getOrdersInPeriod",
     ()=>getOrdersInPeriod,
+    "getPendingDisputes",
+    ()=>getPendingDisputes,
+    "getPendingWaiterCalls",
+    ()=>getPendingWaiterCalls,
     "getPin",
     ()=>getPin,
-    "getPriorityOrders",
-    ()=>getPriorityOrders,
-    "getStaffSessions",
-    ()=>getStaffSessions,
+    "getSplitBillForTab",
+    ()=>getSplitBillForTab,
+    "getSplitBills",
+    ()=>getSplitBills,
     "getTab",
     ()=>getTab,
     "getTabOrders",
     ()=>getTabOrders,
     "getTableOccupancy",
     ()=>getTableOccupancy,
+    "getTableOccupancyStats",
+    ()=>getTableOccupancyStats,
     "getTables",
     ()=>getTables,
     "getTabs",
     ()=>getTabs,
+    "getTrackingUrl",
+    ()=>getTrackingUrl,
     "getWaiterCalls",
     ()=>getWaiterCalls,
-    "isValidTransition",
-    ()=>isValidTransition,
+    "getWaiterStats",
+    ()=>getWaiterStats,
+    "getWhatsappNumber",
+    ()=>getWhatsappNumber,
+    "isSplitFullyPaid",
+    ()=>isSplitFullyPaid,
+    "markOrderDelivered",
+    ()=>markOrderDelivered,
+    "markOrderPickedUp",
+    ()=>markOrderPickedUp,
+    "markSplitEntryPaid",
+    ()=>markSplitEntryPaid,
+    "registerDevice",
+    ()=>registerDevice,
+    "removeDeviceRecord",
+    ()=>removeDeviceRecord,
     "requestBill",
     ()=>requestBill,
-    "resolveWaiterCall",
-    ()=>resolveWaiterCall,
+    "resolveDispute",
+    ()=>resolveDispute,
+    "saveDeviceRecords",
+    ()=>saveDeviceRecords,
+    "saveDisputeAlerts",
+    ()=>saveDisputeAlerts,
     "saveMenu",
     ()=>saveMenu,
     "saveOrders",
     ()=>saveOrders,
     "savePin",
     ()=>savePin,
-    "savePriorityOrders",
-    ()=>savePriorityOrders,
-    "saveStaffSessions",
-    ()=>saveStaffSessions,
+    "saveSplitBills",
+    ()=>saveSplitBills,
     "saveTables",
     ()=>saveTables,
     "saveTabs",
     ()=>saveTabs,
     "saveWaiterCalls",
     ()=>saveWaiterCalls,
+    "saveWhatsappNumber",
+    ()=>saveWhatsappNumber,
     "syncTabTotal",
     ()=>syncTabTotal,
     "syncTableStatus",
     ()=>syncTableStatus,
+    "updateItemStatus",
+    ()=>updateItemStatus,
     "updateOrderStatus",
     ()=>updateOrderStatus,
+    "verifyTrackingToken",
+    ()=>verifyTrackingToken,
     "voidOrder",
     ()=>voidOrder
 ]);
-// ─── Keys ─────────────────────────────────────────────────────────────────────
+// ─── localStorage keys ────────────────────────────────────────────────────────
 const KEYS = {
     orders: 'fl_orders',
     tables: 'fl_tables',
     menu: 'fl_menu',
-    pin: 'fl_owner_pin',
-    staff: 'fl_staff_sessions',
-    calls: 'fl_waiter_calls',
-    priority: 'fl_priority_orders',
-    orderCounter: 'fl_order_counter',
-    tabs: 'fl_tabs'
+    pin: 'fl_admin_pin',
+    tabs: 'fl_customer_tabs',
+    orderNum: 'fl_order_num_counter',
+    fraudAlerts: 'fl_fraud_alerts',
+    waiterCalls: 'fl_waiter_calls',
+    disputes: 'fl_food_disputes',
+    splitBills: 'fl_split_bills',
+    devices: 'fl_device_records',
+    whatsapp: 'fl_whatsapp_number',
+    events: 'fl_order_events'
 };
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function get(key, fallback) {
+// ─── Storage helpers ──────────────────────────────────────────────────────────
+function ls_get(key, fallback) {
     if ("TURBOPACK compile-time truthy", 1) return fallback;
     //TURBOPACK unreachable
     ;
 }
-function set(key, value) {
+function ls_set(key, val) {
     if ("TURBOPACK compile-time truthy", 1) return;
     //TURBOPACK unreachable
     ;
 }
-const VALID_TRANSITIONS = {
-    awaiting_waiter: [
-        'pending',
-        'cancelled'
-    ],
-    pending: [
-        'preparing',
-        'cancelled'
-    ],
-    preparing: [
-        'prepared',
-        'cancelled'
-    ],
-    prepared: [
-        'served',
-        'void'
-    ],
-    served: [
-        'completed',
-        'void'
-    ],
-    completed: [],
-    void: [],
-    cancelled: []
-};
-function isValidTransition(from, to) {
-    const allowed = VALID_TRANSITIONS[from];
-    return allowed ? allowed.includes(to) : false;
-}
-const getOrders = ()=>get(KEYS.orders, []);
-const saveOrders = (o)=>set(KEYS.orders, o);
+const DEFAULT_MENU = [
+    {
+        id: 'M01',
+        category: 'Biryani',
+        name: 'Chicken Dum Biryani',
+        desc: 'Slow-cooked aromatic rice with tender chicken',
+        price: 280,
+        img: '🍗',
+        badge: 'bestseller',
+        available: true
+    },
+    {
+        id: 'M02',
+        category: 'Biryani',
+        name: 'Mutton Biryani',
+        desc: 'Rich biryani with tender mutton pieces',
+        price: 320,
+        img: '🥩',
+        badge: 'famous',
+        available: true
+    },
+    {
+        id: 'M03',
+        category: 'Biryani',
+        name: 'Veg Biryani',
+        desc: 'Fragrant basmati with fresh vegetables',
+        price: 200,
+        img: '🥦',
+        badge: 'popular',
+        available: true
+    },
+    {
+        id: 'M04',
+        category: 'Biryani',
+        name: 'Egg Biryani',
+        desc: 'Classic biryani with boiled eggs',
+        price: 220,
+        img: '🥚',
+        badge: '',
+        available: true
+    },
+    {
+        id: 'M05',
+        category: 'Starters',
+        name: 'Chicken 65',
+        desc: 'Crispy spiced fried chicken',
+        price: 180,
+        img: '🍗',
+        badge: 'bestseller',
+        available: true
+    },
+    {
+        id: 'M06',
+        category: 'Starters',
+        name: 'Gobi Manchurian',
+        desc: 'Crispy cauliflower in tangy sauce',
+        price: 150,
+        img: '🥦',
+        badge: 'popular',
+        available: true
+    },
+    {
+        id: 'M07',
+        category: 'Starters',
+        name: 'Fish Fry',
+        desc: 'Coastal spiced fried fish',
+        price: 220,
+        img: '🐟',
+        badge: 'famous',
+        available: true
+    },
+    {
+        id: 'M08',
+        category: 'Starters',
+        name: 'Paneer Tikka',
+        desc: 'Grilled cottage cheese with bell peppers',
+        price: 200,
+        img: '🧀',
+        badge: 'chef',
+        available: true
+    },
+    {
+        id: 'M09',
+        category: 'Mains',
+        name: 'Butter Chicken',
+        desc: 'Creamy tomato-based chicken curry',
+        price: 250,
+        img: '🍛',
+        badge: 'bestseller',
+        available: true
+    },
+    {
+        id: 'M10',
+        category: 'Mains',
+        name: 'Dal Tadka',
+        desc: 'Yellow lentils with spiced tempering',
+        price: 120,
+        img: '🍲',
+        badge: '',
+        available: true
+    },
+    {
+        id: 'M11',
+        category: 'Mains',
+        name: 'Palak Paneer',
+        desc: 'Cottage cheese in creamy spinach gravy',
+        price: 180,
+        img: '🍃',
+        badge: 'popular',
+        available: true
+    },
+    {
+        id: 'M12',
+        category: 'Mains',
+        name: 'Prawn Masala',
+        desc: 'Fresh prawns in spicy coconut gravy',
+        price: 300,
+        img: '🍤',
+        badge: 'chef',
+        available: true
+    },
+    {
+        id: 'M13',
+        category: 'Breads',
+        name: 'Butter Naan',
+        desc: 'Soft leavened bread with butter',
+        price: 45,
+        img: '🫓',
+        badge: '',
+        available: true
+    },
+    {
+        id: 'M14',
+        category: 'Breads',
+        name: 'Garlic Naan',
+        desc: 'Naan topped with garlic and herbs',
+        price: 55,
+        img: '🫓',
+        badge: 'popular',
+        available: true
+    },
+    {
+        id: 'M15',
+        category: 'Breads',
+        name: 'Rumali Roti',
+        desc: 'Thin handkerchief bread',
+        price: 35,
+        img: '🫓',
+        badge: '',
+        available: true
+    },
+    {
+        id: 'M16',
+        category: 'Desserts',
+        name: 'Gulab Jamun',
+        desc: 'Soft milk-solid dumplings in rose syrup',
+        price: 80,
+        img: '🍮',
+        badge: 'bestseller',
+        available: true
+    },
+    {
+        id: 'M17',
+        category: 'Desserts',
+        name: 'Phirni',
+        desc: 'Creamy rice pudding with saffron',
+        price: 90,
+        img: '🍮',
+        badge: 'chef',
+        available: true
+    },
+    {
+        id: 'M18',
+        category: 'Drinks',
+        name: 'Masala Chai',
+        desc: 'Spiced milk tea',
+        price: 40,
+        img: '☕',
+        badge: '',
+        available: true
+    },
+    {
+        id: 'M19',
+        category: 'Drinks',
+        name: 'Sweet Lassi',
+        desc: 'Chilled yogurt drink',
+        price: 70,
+        img: '🥛',
+        badge: 'popular',
+        available: true
+    },
+    {
+        id: 'M20',
+        category: 'Drinks',
+        name: 'Fresh Lime Soda',
+        desc: 'Refreshing lemon soda',
+        price: 60,
+        img: '🍋',
+        badge: '',
+        available: true
+    }
+];
+const DEFAULT_TABLES = Array.from({
+    length: 20
+}, (_, i)=>({
+        id: `T${String(i + 1).padStart(2, '0')}`,
+        status: 'available',
+        capacity: i < 4 ? 2 : i < 14 ? 4 : 6
+    }));
+const getPin = ()=>ls_get(KEYS.pin, '1234');
+const savePin = (p)=>ls_set(KEYS.pin, p);
 function getNextOrderNumber() {
-    const current = get(KEYS.orderCounter, 1000);
-    const next = current + 1;
-    set(KEYS.orderCounter, next);
-    return next;
+    const n = ls_get(KEYS.orderNum, 0) + 1;
+    ls_set(KEYS.orderNum, n);
+    return n;
 }
+const getOrders = ()=>ls_get(KEYS.orders, []);
+const saveOrders = (o)=>ls_set(KEYS.orders, o);
 function addOrder(order) {
+    // Generate tracking token if missing (used by /track page)
+    if (!order.trackingToken) {
+        order = {
+            ...order,
+            trackingToken: generateTrackingToken()
+        };
+    }
     const orders = getOrders();
-    // Guard: block duplicate IDs (rapid double-submit protection)
-    if (orders.some((o)=>o.id === order.id)) return;
-    // Auto-assign a sequential human-readable order number if not already set
-    if (!order.orderNum) {
-        order.orderNum = getNextOrderNumber();
-    }
-    // Ensure timeline is always initialised (use the order's actual starting status)
-    if (!order.timeline || !order.timeline.length) {
-        order.timeline = [
-            {
-                status: order.status,
-                timestamp: order.timestamp
-            }
-        ];
-    }
     orders.push(order);
     saveOrders(orders);
-    // Auto-mark table as occupied when a dine-in order is placed
-    if (order.type === 'dine-in' && order.tableId) {
-        syncTableStatus(order.tableId);
-    }
+    // Emit OrderPlaced event
+    _addOrderEvent(order.id, 'OrderPlaced', order.customerName || 'Customer', order.type === 'delivery' ? `Delivery to: ${order.deliveryAddress}` : order.type === 'pickup' ? 'Pickup order' : `Table ${order.tableId}`);
+    return order;
 }
-function updateOrderStatus(orderId, status, by, force = false) {
+/** Map OrderStatus → OrderEventType for automatic event emission */ const STATUS_TO_EVENT = {
+    pending: 'KitchenAccepted',
+    preparing: 'Preparing',
+    prepared: 'Prepared',
+    served: 'Served',
+    out_for_delivery: 'OutForDelivery',
+    delivered: 'Delivered',
+    completed: 'Closed',
+    cancelled: 'Cancelled'
+};
+function updateOrderStatus(id, status, by = 'System', force = false) {
     const orders = getOrders();
-    const idx = orders.findIndex((o)=>o.id === orderId);
+    const idx = orders.findIndex((o)=>o.id === id);
     if (idx === -1) return false;
-    const current = orders[idx].status;
-    // Prevent any changes on already-cancelled or completed orders unless forced
-    if (!force && !isValidTransition(current, status)) return false;
-    orders[idx].status = status;
-    if (!orders[idx].timeline) orders[idx].timeline = [];
-    orders[idx].timeline.push({
-        status,
-        timestamp: new Date().toISOString(),
-        by
-    });
-    saveOrders(orders);
-    // Sync table status when a dine-in order completes or is served
-    if (orders[idx].type === 'dine-in' && orders[idx].tableId) {
-        syncTableStatus(orders[idx].tableId);
-    }
-    return true;
-}
-function cancelOrder(orderId, reason, by) {
-    const orders = getOrders();
-    const idx = orders.findIndex((o)=>o.id === orderId);
-    if (idx === -1) return false;
-    // Allow cancellation from: unconfirmed, pending, or being prepared
-    const cancellable = [
-        'awaiting_waiter',
-        'pending',
-        'preparing'
-    ];
-    if (!cancellable.includes(orders[idx].status)) return false;
-    orders[idx].status = 'cancelled';
-    orders[idx].cancelReason = reason;
-    orders[idx].cancelledAt = new Date().toISOString();
-    if (!orders[idx].timeline) orders[idx].timeline = [];
-    orders[idx].timeline.push({
-        status: 'cancelled',
-        timestamp: new Date().toISOString(),
-        by,
-        note: reason
-    });
-    saveOrders(orders);
-    // Free up the table if no other active orders remain for it
-    if (orders[idx].type === 'dine-in' && orders[idx].tableId) {
-        syncTableStatus(orders[idx].tableId);
-    }
-    return true;
-}
-function voidOrder(orderId, reason, by) {
-    const orders = getOrders();
-    const idx = orders.findIndex((o)=>o.id === orderId);
-    if (idx === -1) return false;
-    const voidable = [
-        'prepared',
-        'served'
-    ];
-    if (!voidable.includes(orders[idx].status)) return false;
-    orders[idx].status = 'void';
-    orders[idx].voidReason = reason;
-    orders[idx].voidedAt = new Date().toISOString();
-    if (!orders[idx].timeline) orders[idx].timeline = [];
-    orders[idx].timeline.push({
-        status: 'void',
-        timestamp: new Date().toISOString(),
-        by,
-        note: `VOID — ${reason}`
-    });
-    saveOrders(orders);
-    // Free table if no other active orders remain
-    if (orders[idx].type === 'dine-in' && orders[idx].tableId) {
-        syncTableStatus(orders[idx].tableId);
-    }
-    return true;
-}
-function addItemsToOrder(orderId, newItems, by) {
-    const orders = getOrders();
-    const idx = orders.findIndex((o)=>o.id === orderId);
-    if (idx === -1) return false;
-    const terminal = [
-        'completed',
-        'void',
-        'cancelled'
-    ];
-    if (terminal.includes(orders[idx].status)) return false;
-    // Merge items — bump qty for existing, push for new
-    newItems.forEach((newItem)=>{
-        const ei = orders[idx].items.findIndex((i)=>i.id === newItem.id);
-        if (ei >= 0) {
-            orders[idx].items[ei].qty += newItem.qty;
-            orders[idx].items[ei].subtotal = orders[idx].items[ei].price * orders[idx].items[ei].qty;
-        } else {
-            orders[idx].items.push({
-                ...newItem
-            });
-        }
-    });
-    // Recalculate order totals
-    const subtotal = orders[idx].items.reduce((s, i)=>s + i.subtotal, 0);
-    orders[idx].subtotal = subtotal;
-    orders[idx].total = subtotal - (orders[idx].discount || 0);
-    // Record edit history
-    if (!orders[idx].editHistory) orders[idx].editHistory = [];
-    const addedSummary = newItems.map((i)=>`${i.name} ×${i.qty}`).join(', ');
-    orders[idx].editHistory.push({
-        timestamp: new Date().toISOString(),
-        change: `Added items: ${addedSummary}`,
-        by
-    });
-    // If already prepared/served, return to kitchen for the new items
-    const needsKitchen = [
-        'prepared',
-        'served'
-    ];
-    if (needsKitchen.includes(orders[idx].status)) {
-        orders[idx].status = 'preparing';
-        orders[idx].timeline.push({
-            status: 'preparing',
-            timestamp: new Date().toISOString(),
-            by,
-            note: `🆕 Extra items ordered — back to kitchen: ${addedSummary}`
-        });
-    } else {
-        orders[idx].timeline.push({
-            status: orders[idx].status,
-            timestamp: new Date().toISOString(),
-            by,
-            note: `🆕 Items added: ${addedSummary}`
-        });
-    }
-    saveOrders(orders);
-    // Keep table occupied
-    if (orders[idx].type === 'dine-in' && orders[idx].tableId) {
-        syncTableStatus(orders[idx].tableId);
-    }
-    return true;
-}
-function applyDiscount(orderId, discount, reason, by) {
-    const orders = getOrders();
-    const idx = orders.findIndex((o)=>o.id === orderId);
-    if (idx === -1) return false;
-    const sub = orders[idx].subtotal || orders[idx].total;
-    // Clamp discount to [0, subtotal] — prevents negative totals
-    const safeDiscount = Math.min(Math.max(0, Math.round(discount)), sub);
-    orders[idx].discount = safeDiscount;
-    orders[idx].discountReason = reason;
-    orders[idx].total = sub - safeDiscount;
-    if (!orders[idx].editHistory) orders[idx].editHistory = [];
-    orders[idx].editHistory.push({
-        timestamp: new Date().toISOString(),
-        change: `Discount ₹${safeDiscount} applied: ${reason}`,
-        by
-    });
-    saveOrders(orders);
-    return true;
-}
-const getPriorityOrders = ()=>get(KEYS.priority, {});
-function savePriorityOrders(map) {
-    // Prune completed/cancelled orders from the priority map
-    const orders = getOrders();
-    const activeIds = new Set(orders.filter((o)=>[
-            'awaiting_waiter',
-            'pending',
-            'preparing',
-            'prepared'
-        ].includes(o.status)).map((o)=>o.id));
-    // Note: void/cancelled/completed are intentionally excluded from priority tracking
-    const pruned = {};
-    for (const [id, val] of Object.entries(map)){
-        if (activeIds.has(id) && val) pruned[id] = true;
-    }
-    set(KEYS.priority, pruned);
-}
-function getTables() {
-    const saved = get(KEYS.tables, null);
-    if (saved) return saved;
-    const defaults = Array.from({
-        length: 15
-    }, (_, i)=>({
-            id: i + 1,
-            chairs: 4,
-            status: 'available',
-            occupants: []
-        }));
-    set(KEYS.tables, defaults);
-    return defaults;
-}
-const saveTables = (t)=>set(KEYS.tables, t);
-function syncTableStatus(tableId) {
-    const tables = getTables();
-    const idx = tables.findIndex((t)=>t.id === tableId);
-    if (idx === -1) return;
-    // A table is occupied if it has any open or awaiting_payment tabs
-    const activeTabs = getTabs().filter((t)=>t.tableId === tableId && [
-            'open',
-            'awaiting_payment'
-        ].includes(t.tabStatus));
-    // Also check legacy orders not linked to tabs (backward compat)
-    const orders = getOrders();
-    const activeOrders = orders.filter((o)=>o.tableId === tableId && [
+    const order = orders[idx];
+    // Role-based status flow enforcement (unless force=true)
+    if (!force) {
+        const flow = [
             'awaiting_waiter',
             'pending',
             'preparing',
             'prepared',
-            'served'
-        ].includes(o.status));
-    const occupied = activeTabs.length > 0 || activeOrders.length > 0;
-    if (tables[idx].status !== 'reserved') {
-        tables[idx].status = occupied ? 'occupied' : 'available';
-        if (occupied) {
-            tables[idx].occupants = activeTabs.map((t)=>({
-                    name: t.customerName
-                }));
-            if (!tables[idx].sessionStart) tables[idx].sessionStart = new Date().toISOString();
-        } else {
-            tables[idx].occupants = [];
-            tables[idx].sessionStart = undefined;
+            'served',
+            'completed'
+        ];
+        const currIdx = flow.indexOf(order.status);
+        const nextIdx = flow.indexOf(status);
+        if (currIdx === -1 || nextIdx === -1 || nextIdx !== currIdx + 1) {
+            return false;
         }
     }
-    saveTables(tables);
+    orders[idx] = {
+        ...order,
+        status,
+        timeline: [
+            ...order.timeline || [],
+            {
+                status,
+                by,
+                at: new Date().toISOString()
+            }
+        ]
+    };
+    saveOrders(orders);
+    // Co-emit matching OrderEvent
+    const evtType = STATUS_TO_EVENT[status];
+    if (evtType) _addOrderEvent(id, evtType, by);
+    return true;
 }
-function getTableOccupancy() {
-    const tables = getTables();
-    const tabs = getTabs();
+function cancelOrder(id, reason, by = 'System') {
     const orders = getOrders();
-    const ACTIVE_TAB = [
-        'open',
-        'awaiting_payment'
-    ];
-    return tables.map((t)=>{
-        const activeTabs = tabs.filter((tb)=>tb.tableId === t.id && ACTIVE_TAB.includes(tb.tabStatus));
-        const chairsOccupied = activeTabs.reduce((s, tb)=>s + (tb.partySize ?? 1), 0);
-        const guests = activeTabs.map((tb)=>{
-            const tabOrders = orders.filter((o)=>tb.orderIds.includes(o.id) && ![
-                    'void',
-                    'cancelled'
-                ].includes(o.status));
-            return {
-                name: tb.customerName,
-                partySize: tb.partySize ?? 1,
-                status: tb.tabStatus,
-                orderTotal: tb.totalAmount
-            };
+    const idx = orders.findIndex((o)=>o.id === id);
+    if (idx === -1) return false;
+    orders[idx] = {
+        ...orders[idx],
+        status: 'cancelled',
+        cancelReason: reason,
+        timeline: [
+            ...orders[idx].timeline || [],
+            {
+                status: 'cancelled',
+                by,
+                at: new Date().toISOString(),
+                note: reason
+            }
+        ]
+    };
+    saveOrders(orders);
+    _addOrderEvent(id, 'Cancelled', by, reason);
+    return true;
+}
+function voidOrder(id, reason, by = 'Manager') {
+    const orders = getOrders();
+    const idx = orders.findIndex((o)=>o.id === id);
+    if (idx === -1) return false;
+    orders[idx] = {
+        ...orders[idx],
+        status: 'void',
+        cancelReason: reason,
+        timeline: [
+            ...orders[idx].timeline || [],
+            {
+                status: 'void',
+                by,
+                at: new Date().toISOString(),
+                note: reason
+            }
+        ]
+    };
+    saveOrders(orders);
+    if ((orders[idx].total || 0) > 100) {
+        addFraudAlert({
+            type: 'void_order',
+            orderId: id,
+            detail: `Order #${orders[idx].orderNum || id.slice(-4)} voided by ${by} — ₹${orders[idx].total}`,
+            by,
+            amount: orders[idx].total
         });
-        return {
-            tableId: t.id,
-            tableName: `Table ${t.id}`,
-            capacity: t.chairs,
-            chairsOccupied,
-            partiesCount: activeTabs.length,
-            guests,
-            tableStatus: t.status,
-            sessionStart: t.sessionStart
-        };
+    }
+    return true;
+}
+function applyDiscount(id, amount, reason, by = 'Manager') {
+    const orders = getOrders();
+    const idx = orders.findIndex((o)=>o.id === id);
+    if (idx === -1) return false;
+    const order = orders[idx];
+    const subtotal = order.subtotal || order.total;
+    const pct = amount / subtotal;
+    if (pct > 0.5) {
+        addFraudAlert({
+            type: 'high_discount',
+            orderId: id,
+            detail: `${Math.round(pct * 100)}% discount (₹${amount}) applied by ${by}`,
+            by,
+            amount
+        });
+    }
+    orders[idx] = {
+        ...order,
+        discount: amount,
+        discountReason: reason,
+        total: Math.max(0, subtotal - amount),
+        timeline: [
+            ...order.timeline || [],
+            {
+                status: 'discount',
+                by,
+                at: new Date().toISOString(),
+                note: `₹${amount} — ${reason}`
+            }
+        ]
+    };
+    saveOrders(orders);
+    return true;
+}
+function getOrdersInPeriod(period) {
+    const orders = getOrders().filter((o)=>o.status === 'completed');
+    const now = new Date();
+    if (period === 'all') return orders;
+    return orders.filter((o)=>{
+        const d = new Date(o.timestamp);
+        if (period === 'today') return d.toDateString() === now.toDateString();
+        if (period === 'week') {
+            const weekAgo = new Date(now);
+            weekAgo.setDate(now.getDate() - 7);
+            return d >= weekAgo;
+        }
+        if (period === 'month') {
+            return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+        }
+        return true;
     });
 }
-function getTabs() {
-    return get(KEYS.tabs, []);
+function exportOrdersCSV() {
+    const orders = getOrders().filter((o)=>o.status === 'completed');
+    const header = 'Order ID,Order#,Customer,Table,Type,Items,Subtotal,Discount,Total,Payment,Timestamp';
+    const rows = orders.map((o)=>{
+        const items = (o.items || []).map((i)=>`${i.name}x${i.qty}`).join('|');
+        return [
+            o.id,
+            o.orderNum || '',
+            o.customerName,
+            o.tableId || '',
+            o.type,
+            `"${items}"`,
+            o.subtotal,
+            o.discount || 0,
+            o.total,
+            o.payment,
+            o.timestamp
+        ].join(',');
+    });
+    return [
+        header,
+        ...rows
+    ].join('\n');
 }
-const saveTabs = (tabs)=>set(KEYS.tabs, tabs);
-function getTab(tabId) {
-    return getTabs().find((t)=>t.id === tabId);
+const getTables = ()=>ls_get(KEYS.tables, DEFAULT_TABLES);
+const saveTables = (t)=>ls_set(KEYS.tables, t);
+function syncTableStatus(tableId) {
+    const activeTabs = getActiveTabsForTable(tableId);
+    const tables = getTables();
+    const idx = tables.findIndex((t)=>t.id === tableId);
+    if (idx === -1) return;
+    tables[idx] = {
+        ...tables[idx],
+        status: activeTabs.length > 0 ? 'occupied' : 'available'
+    };
+    saveTables(tables);
+}
+function getTableOccupancy(tableId) {
+    const activeTabs = getActiveTabsForTable(tableId);
+    if (activeTabs.length === 0) return null;
+    const tab = activeTabs[0];
+    return {
+        tableId: tab.tableId,
+        tabId: tab.id,
+        name: tab.customerName,
+        partySize: tab.partySize,
+        since: tab.createdAt,
+        status: tab.tabStatus
+    };
+}
+const getMenu = ()=>ls_get(KEYS.menu, DEFAULT_MENU);
+const saveMenu = (m)=>ls_set(KEYS.menu, m);
+const getTabs = ()=>ls_get(KEYS.tabs, []);
+const saveTabs = (t)=>ls_set(KEYS.tabs, t);
+function getTab(id) {
+    return getTabs().find((t)=>t.id === id) ?? null;
 }
 function getOpenTabForCustomer(tableId, customerName) {
-    return getTabs().find((t)=>t.tableId === tableId && t.customerName.toLowerCase() === customerName.toLowerCase() && [
-            'open',
-            'awaiting_payment'
-        ].includes(t.tabStatus));
+    const name = customerName.trim().toLowerCase();
+    return getTabs().find((t)=>t.tableId === tableId && t.customerName.trim().toLowerCase() === name && (t.tabStatus === 'open' || t.tabStatus === 'awaiting_payment')) ?? null;
 }
 function getActiveTabsForTable(tableId) {
-    return getTabs().filter((t)=>t.tableId === tableId && [
-            'open',
-            'awaiting_payment'
-        ].includes(t.tabStatus));
+    return getTabs().filter((t)=>t.tableId === tableId && (t.tabStatus === 'open' || t.tabStatus === 'awaiting_payment'));
 }
 function syncTabTotal(tabId) {
     const tabs = getTabs();
     const idx = tabs.findIndex((t)=>t.id === tabId);
     if (idx === -1) return;
     const orders = getOrders();
-    const gross = orders.filter((o)=>tabs[idx].orderIds.includes(o.id) && ![
-            'void',
-            'cancelled'
-        ].includes(o.status)).reduce((s, o)=>s + o.total, 0);
-    tabs[idx].totalAmount = Math.max(0, gross - (tabs[idx].discount || 0));
+    const total = tabs[idx].orderIds.reduce((sum, oid)=>{
+        const order = orders.find((o)=>o.id === oid);
+        if (!order || [
+            'cancelled',
+            'void'
+        ].includes(order.status)) return sum;
+        return sum + (order.total || 0);
+    }, 0);
+    tabs[idx] = {
+        ...tabs[idx],
+        totalAmount: total
+    };
     saveTabs(tabs);
 }
 function createTab(tableId, customerName, partySize) {
     const tab = {
         id: `TAB-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
         tableId,
-        customerName,
+        customerName: customerName.trim(),
         partySize,
-        tabStatus: 'open',
         orderIds: [],
+        tabStatus: 'open',
         totalAmount: 0,
+        discount: 0,
+        discountReason: '',
+        paymentMethod: 'cod',
         createdAt: new Date().toISOString()
     };
     const tabs = getTabs();
     tabs.push(tab);
     saveTabs(tabs);
-    syncTableStatus(tableId);
+    // Mark table occupied
+    const tables = getTables();
+    const tIdx = tables.findIndex((t)=>t.id === tableId);
+    if (tIdx !== -1) {
+        tables[tIdx] = {
+            ...tables[tIdx],
+            status: 'occupied'
+        };
+        saveTables(tables);
+    }
     return tab;
 }
 function addOrderToTab(tabId, orderId) {
     const tabs = getTabs();
     const idx = tabs.findIndex((t)=>t.id === tabId);
     if (idx === -1) return false;
-    if (!tabs[idx].orderIds.includes(orderId)) tabs[idx].orderIds.push(orderId);
-    saveTabs(tabs);
-    syncTabTotal(tabId);
+    if (tabs[idx].tabStatus !== 'open') return false;
+    if (!tabs[idx].orderIds.includes(orderId)) {
+        tabs[idx] = {
+            ...tabs[idx],
+            orderIds: [
+                ...tabs[idx].orderIds,
+                orderId
+            ]
+        };
+        saveTabs(tabs);
+        syncTabTotal(tabId);
+    }
     return true;
 }
 function requestBill(tabId) {
     const tabs = getTabs();
     const idx = tabs.findIndex((t)=>t.id === tabId);
-    if (idx === -1 || tabs[idx].tabStatus !== 'open') return false;
-    // Snapshot final total before locking
-    const orders = getOrders();
-    const gross = orders.filter((o)=>tabs[idx].orderIds.includes(o.id) && ![
-            'void',
-            'cancelled'
-        ].includes(o.status)).reduce((s, o)=>s + o.total, 0);
-    tabs[idx].totalAmount = Math.max(0, gross - (tabs[idx].discount || 0));
-    tabs[idx].tabStatus = 'awaiting_payment';
-    tabs[idx].requestedAt = new Date().toISOString();
-    saveTabs(tabs);
-    return true;
-}
-function applyTabDiscount(tabId, amount, reason) {
-    const tabs = getTabs();
-    const idx = tabs.findIndex((t)=>t.id === tabId);
-    if (idx === -1 || tabs[idx].tabStatus === 'closed') return false;
-    tabs[idx].discount = Math.max(0, amount);
-    tabs[idx].discountReason = reason;
+    if (idx === -1) return false;
+    if (tabs[idx].tabStatus !== 'open') return false;
+    tabs[idx] = {
+        ...tabs[idx],
+        tabStatus: 'awaiting_payment'
+    };
     saveTabs(tabs);
     syncTabTotal(tabId);
     return true;
 }
-function closeTab(tabId, payment, discount, discountReason) {
+function applyTabDiscount(tabId, amount, reason, by = 'Manager') {
     const tabs = getTabs();
     const idx = tabs.findIndex((t)=>t.id === tabId);
-    if (idx === -1 || tabs[idx].tabStatus !== 'awaiting_payment') return false;
-    if (discount && discount > 0) {
-        tabs[idx].discount = discount;
-        tabs[idx].discountReason = discountReason;
-    }
-    // Final total calculation
-    const orders = getOrders();
-    const gross = orders.filter((o)=>tabs[idx].orderIds.includes(o.id) && ![
-            'void',
-            'cancelled'
-        ].includes(o.status)).reduce((s, o)=>s + o.total, 0);
-    tabs[idx].totalAmount = Math.max(0, gross - (tabs[idx].discount || 0));
-    tabs[idx].tabStatus = 'closed';
-    tabs[idx].payment = payment;
-    tabs[idx].closedAt = new Date().toISOString();
+    if (idx === -1) return false;
+    tabs[idx] = {
+        ...tabs[idx],
+        discount: amount,
+        discountReason: reason
+    };
     saveTabs(tabs);
-    // Mark all non-terminal orders in the tab as 'completed'
-    const allOrders = getOrders();
+    if (amount / (tabs[idx].totalAmount || 1) > 0.5) {
+        addFraudAlert({
+            type: 'high_discount',
+            tabId,
+            detail: `${Math.round(amount / (tabs[idx].totalAmount || 1) * 100)}% tab discount (₹${amount}) applied by ${by}`,
+            by,
+            amount
+        });
+    }
+    return true;
+}
+function closeTab(tabId, paymentMethod, discount, discountReason, by = 'Manager') {
+    const tabs = getTabs();
+    const idx = tabs.findIndex((t)=>t.id === tabId);
+    if (idx === -1) return false;
+    syncTabTotal(tabId);
+    const refreshed = getTabs();
+    const tab = refreshed[idx];
+    const finalDiscount = discount ?? tab.discount;
+    const finalDiscReason = discountReason ?? tab.discountReason;
+    refreshed[idx] = {
+        ...tab,
+        tabStatus: 'closed',
+        discount: finalDiscount,
+        discountReason: finalDiscReason,
+        paymentMethod,
+        closedAt: new Date().toISOString()
+    };
+    saveTabs(refreshed);
+    // Mark all tab orders as completed
+    const orders = getOrders();
     let changed = false;
-    tabs[idx].orderIds.forEach((oid)=>{
-        const oi = allOrders.findIndex((o)=>o.id === oid);
-        if (oi === -1) return;
-        const closeable = [
-            'awaiting_waiter',
-            'pending',
-            'preparing',
-            'prepared',
-            'served'
-        ];
-        if (closeable.includes(allOrders[oi].status)) {
-            allOrders[oi].status = 'completed';
-            allOrders[oi].payment = payment;
-            allOrders[oi].timeline.push({
+    tab.orderIds.forEach((oid)=>{
+        const oIdx = orders.findIndex((o)=>o.id === oid);
+        if (oIdx !== -1 && ![
+            'cancelled',
+            'void',
+            'completed'
+        ].includes(orders[oIdx].status)) {
+            orders[oIdx] = {
+                ...orders[oIdx],
                 status: 'completed',
-                timestamp: new Date().toISOString(),
-                by: 'Manager',
-                note: `Tab closed · ${payment}`
-            });
+                payment: paymentMethod,
+                timeline: [
+                    ...orders[oIdx].timeline || [],
+                    {
+                        status: 'completed',
+                        by,
+                        at: new Date().toISOString(),
+                        note: `Tab closed — ${paymentMethod}`
+                    }
+                ]
+            };
             changed = true;
         }
     });
-    if (changed) saveOrders(allOrders);
-    syncTableStatus(tabs[idx].tableId);
+    if (changed) saveOrders(orders);
+    // Release table if no more active tabs
+    syncTableStatus(tab.tableId);
     return true;
 }
 function getTabOrders(tabId) {
     const tab = getTab(tabId);
     if (!tab) return [];
     const orders = getOrders();
-    return orders.filter((o)=>tab.orderIds.includes(o.id));
+    return tab.orderIds.map((oid)=>orders.find((o)=>o.id === oid)).filter((o)=>o !== undefined);
 }
-const DEFAULT_MENU = [
-    {
-        id: 1,
-        category: 'Biryani',
-        name: 'Hyderabadi Chicken Dum Biryani',
-        desc: 'Slow-cooked tender chicken layered with fragrant basmati rice & saffron',
-        price: 280,
-        img: 'https://images.unsplash.com/photo-1563379091339-03b21ab4a4f8?w=400&auto=format&fit=crop&q=80',
-        badge: 'bestseller',
-        available: true
-    },
-    {
-        id: 2,
-        category: 'Biryani',
-        name: 'Hyderabadi Mutton Dum Biryani',
-        desc: 'Tender mutton pieces slow-cooked with aromatic whole spices',
-        price: 350,
-        img: 'https://images.unsplash.com/photo-1589302168068-964664d93dc0?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 3,
-        category: 'Biryani',
-        name: 'Veg Hyderabadi Biryani',
-        desc: 'Fresh garden vegetables cooked in authentic Hyderabadi dum style',
-        price: 200,
-        img: 'https://images.unsplash.com/photo-1596797038530-2c107229654b?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 4,
-        category: 'Biryani',
-        name: 'Paneer Dum Biryani',
-        desc: 'Soft cottage cheese cubes layered with spiced aromatic basmati',
-        price: 240,
-        img: 'https://images.unsplash.com/photo-1631452180519-c014fe946bc7?w=400&auto=format&fit=crop&q=80',
-        badge: 'popular',
-        available: true
-    },
-    {
-        id: 5,
-        category: 'Biryani',
-        name: 'Egg Biryani',
-        desc: 'Perfectly boiled eggs cooked with Hyderabadi spices and basmati',
-        price: 220,
-        img: 'https://images.unsplash.com/photo-1546833998-877b37c2e5c6?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 6,
-        category: 'Biryani',
-        name: 'Special Double Dum Biryani',
-        desc: 'Our signature extra-large portion with double the flavors & dry fruits',
-        price: 420,
-        img: 'https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=400&auto=format&fit=crop&q=80',
-        badge: 'chef',
-        available: true
-    },
-    {
-        id: 7,
-        category: 'Starters',
-        name: 'Chicken 65',
-        desc: 'Crispy deep-fried chicken with fiery red marinade & curry leaves',
-        price: 220,
-        img: 'https://images.unsplash.com/photo-1599487488170-d11ec9c172f0?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 8,
-        category: 'Starters',
-        name: 'Mutton Seekh Kebab',
-        desc: 'Minced mutton blended with spices & grilled over coal',
-        price: 280,
-        img: 'https://images.unsplash.com/photo-1512058454905-6b84c2b38f50?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 9,
-        category: 'Starters',
-        name: 'Paneer Tikka',
-        desc: 'Marinated cottage cheese cubes grilled in tandoor',
-        price: 200,
-        img: 'https://images.unsplash.com/photo-1567188040759-fb8a883dc6d8?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 10,
-        category: 'Starters',
-        name: 'Veg Shammi Kebab',
-        desc: 'Soft & spicy mixed vegetable patties pan-fried golden',
-        price: 160,
-        img: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 11,
-        category: 'Mains',
-        name: 'Chicken Curry',
-        desc: 'Rich and spicy Hyderabadi style chicken curry in thick gravy',
-        price: 260,
-        img: 'https://images.unsplash.com/photo-1585937421612-70a008356fbe?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 12,
-        category: 'Mains',
-        name: 'Mutton Rogan Josh',
-        desc: 'Slow-cooked tender mutton in aromatic Kashmiri spice gravy',
-        price: 320,
-        img: 'https://images.unsplash.com/photo-1565557623262-b51c2513a641?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 13,
-        category: 'Mains',
-        name: 'Dal Makhani',
-        desc: 'Slow-cooked black lentils simmered with cream & butter overnight',
-        price: 180,
-        img: 'https://images.unsplash.com/photo-1546833998-877b37c2e5c6?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 14,
-        category: 'Mains',
-        name: 'Paneer Butter Masala',
-        desc: 'Soft paneer cubes in rich creamy tomato-cashew gravy',
-        price: 220,
-        img: 'https://images.unsplash.com/photo-1631452180519-c014fe946bc7?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 15,
-        category: 'Mains',
-        name: 'Raita',
-        desc: 'Chilled yogurt with cucumber, onion, tomato & roasted cumin',
-        price: 60,
-        img: 'https://images.unsplash.com/photo-1563805042-7684c019e1cb?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 16,
-        category: 'Breads',
-        name: 'Butter Naan',
-        desc: 'Soft leavened bread baked in tandoor brushed with fresh butter',
-        price: 40,
-        img: 'https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 17,
-        category: 'Breads',
-        name: 'Garlic Naan',
-        desc: 'Naan generously topped with garlic, butter & fresh coriander',
-        price: 50,
-        img: 'https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 18,
-        category: 'Breads',
-        name: 'Tandoori Roti',
-        desc: 'Whole wheat bread baked fresh in clay tandoor',
-        price: 30,
-        img: 'https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 19,
-        category: 'Desserts',
-        name: 'Double Ka Meetha',
-        desc: 'Iconic Hyderabadi bread pudding with cream, dry fruits & saffron',
-        price: 120,
-        img: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=400&auto=format&fit=crop&q=80',
-        badge: 'famous',
-        available: true
-    },
-    {
-        id: 20,
-        category: 'Desserts',
-        name: 'Qubani Ka Meetha',
-        desc: 'Traditional Hyderabadi apricot dessert topped with fresh cream',
-        price: 100,
-        img: 'https://images.unsplash.com/photo-1565557623262-b51c2513a641?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 21,
-        category: 'Desserts',
-        name: 'Kheer',
-        desc: 'Creamy rich rice pudding infused with saffron, cardamom & nuts',
-        price: 80,
-        img: 'https://images.unsplash.com/photo-1563805042-7684c019e1cb?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 22,
-        category: 'Drinks',
-        name: 'Sweet Lassi',
-        desc: "Chilled sweet yogurt drink - Punjab's most beloved classic",
-        price: 80,
-        img: 'https://images.unsplash.com/photo-1563805042-7684c019e1cb?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 23,
-        category: 'Drinks',
-        name: 'Salted Lassi',
-        desc: 'Refreshing salted yogurt drink with roasted cumin',
-        price: 80,
-        img: 'https://images.unsplash.com/photo-1563805042-7684c019e1cb?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 24,
-        category: 'Drinks',
-        name: 'Masala Chai',
-        desc: 'Aromatic spiced tea brewed with ginger, cardamom & cinnamon',
-        price: 40,
-        img: 'https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 25,
-        category: 'Drinks',
-        name: 'Cold Drink',
-        desc: 'Pepsi / Coke / Sprite / Thumbs Up (chilled)',
-        price: 50,
-        img: 'https://images.unsplash.com/photo-1561758033-d89a9ad46330?w=400&auto=format&fit=crop&q=80',
-        available: true
-    },
-    {
-        id: 26,
-        category: 'Drinks',
-        name: 'Mineral Water',
-        desc: '500ml chilled mineral water bottle',
-        price: 20,
-        img: 'https://images.unsplash.com/photo-1560023907-5f339617ea30?w=400&auto=format&fit=crop&q=80',
-        available: true
-    }
-];
-function getMenu() {
-    const saved = get(KEYS.menu, null);
-    if (saved) return saved;
-    set(KEYS.menu, DEFAULT_MENU);
-    return DEFAULT_MENU;
-}
-const saveMenu = (items)=>set(KEYS.menu, items);
-const getPin = ()=>get(KEYS.pin, '1234');
-const savePin = (p)=>set(KEYS.pin, p);
-const getStaffSessions = ()=>get(KEYS.staff, []);
-const saveStaffSessions = (s)=>set(KEYS.staff, s);
-const getWaiterCalls = ()=>get(KEYS.calls, []);
-const saveWaiterCalls = (c)=>set(KEYS.calls, c);
-function addWaiterCall(tableId, message, customerName) {
-    const calls = getWaiterCalls();
-    calls.push({
-        id: `CALL-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        tableId,
-        customerName,
-        message,
-        timestamp: new Date().toISOString(),
-        resolved: false
+// ─── Fraud Alerts ─────────────────────────────────────────────────────────────
+function addFraudAlert(data) {
+    const alerts = ls_get(KEYS.fraudAlerts, []);
+    alerts.push({
+        ...data,
+        id: `FA-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+        at: new Date().toISOString()
     });
-    saveWaiterCalls(calls);
+    if (alerts.length > 200) alerts.splice(0, alerts.length - 200);
+    ls_set(KEYS.fraudAlerts, alerts);
 }
-function resolveWaiterCall(callId, by) {
-    const calls = getWaiterCalls();
-    const idx = calls.findIndex((c)=>c.id === callId);
-    if (idx === -1) return;
-    calls[idx].resolved = true;
-    calls[idx].resolvedAt = new Date().toISOString();
-    calls[idx].resolvedBy = by;
-    saveWaiterCalls(calls);
+function getFraudAlerts() {
+    return ls_get(KEYS.fraudAlerts, []).slice().reverse();
 }
-function getOrdersInPeriod(period) {
-    const all = getOrders();
-    const now = new Date();
-    return all.filter((o)=>{
-        // Exclude cancelled, voided, and unconfirmed orders from revenue/analytics
-        if (o.status === 'cancelled' || o.status === 'void' || o.status === 'awaiting_waiter') return false;
-        const d = new Date(o.timestamp);
-        if (period === 'today') return d.toDateString() === now.toDateString();
-        if (period === 'week') {
-            const s = new Date(now);
-            s.setDate(now.getDate() - now.getDay());
-            s.setHours(0, 0, 0, 0);
-            return d >= s;
-        }
-        if (period === 'month') return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
-        return true;
-    });
-}
-function exportOrdersCSV() {
-    const orders = getOrders();
-    if (!orders.length) {
-        alert('No orders to export.');
-        return;
-    }
-    const DAY = [
-        'Sunday',
-        'Monday',
-        'Tuesday',
-        'Wednesday',
-        'Thursday',
-        'Friday',
-        'Saturday'
-    ];
-    const MONTH = [
-        'January',
-        'February',
-        'March',
-        'April',
-        'May',
-        'June',
-        'July',
-        'August',
-        'September',
-        'October',
-        'November',
-        'December'
-    ];
-    const PAY = {
-        paytm: 'Paytm',
-        phonepe: 'PhonePe',
-        gpay: 'Google Pay',
-        cod: 'Cash'
-    };
-    const headers = [
-        'Order ID',
-        'Date',
-        'Time',
-        'Day',
-        'Week No.',
-        'Month',
-        'Year',
-        'Customer',
-        'Phone',
-        'Type',
-        'Table/Pickup',
-        'Staff',
-        'Item Name',
-        'Item Qty',
-        'Unit Price (₹)',
-        'Line Total (₹)',
-        'Subtotal (₹)',
-        'Discount (₹)',
-        'Discount Reason',
-        'Total (₹)',
-        'Payment',
-        'Status',
-        'Cancel Reason'
-    ];
-    const rows = [];
-    orders.forEach((order)=>{
-        const d = new Date(order.timestamp);
-        const date = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
-        const time = d.toLocaleTimeString('en-IN', {
-            hour: '2-digit',
-            minute: '2-digit'
-        });
-        const loc = order.type === 'dine-in' ? `Table ${order.tableId}` : 'Pickup';
-        const pay = PAY[order.payment] ?? order.payment ?? '';
-        const items = order.items ?? [];
-        if (!items.length) {
-            rows.push([
-                order.id,
-                date,
-                time,
-                DAY[d.getDay()],
-                Math.ceil(d.getDate() / 7),
-                MONTH[d.getMonth()],
-                d.getFullYear(),
-                order.customerName,
-                order.phone ?? '',
-                order.type,
-                loc,
-                order.staffName ?? '',
-                '',
-                '',
-                '',
-                '',
-                order.subtotal,
-                order.discount ?? 0,
-                order.discountReason ?? '',
-                order.total,
-                pay,
-                order.status,
-                order.cancelReason ?? ''
-            ]);
-        } else {
-            items.forEach((item, i)=>{
-                const line = item.subtotal ?? item.price * item.qty;
-                rows.push([
-                    i === 0 ? order.id : '',
-                    i === 0 ? date : '',
-                    i === 0 ? time : '',
-                    i === 0 ? DAY[d.getDay()] : '',
-                    i === 0 ? Math.ceil(d.getDate() / 7) : '',
-                    i === 0 ? MONTH[d.getMonth()] : '',
-                    i === 0 ? d.getFullYear() : '',
-                    i === 0 ? order.customerName : '',
-                    i === 0 ? order.phone ?? '' : '',
-                    i === 0 ? order.type : '',
-                    i === 0 ? loc : '',
-                    i === 0 ? order.staffName ?? '' : '',
-                    item.name,
-                    item.qty,
-                    item.price,
-                    line,
-                    i === 0 ? order.subtotal : '',
-                    i === 0 ? order.discount ?? 0 : '',
-                    i === 0 ? order.discountReason ?? '' : '',
-                    i === 0 ? order.total : '',
-                    i === 0 ? pay : '',
-                    i === 0 ? order.status : '',
-                    i === 0 ? order.cancelReason ?? '' : ''
-                ]);
-            });
-        }
-    });
-    const esc = (v)=>{
-        const s = String(v ?? '');
-        return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
-    };
-    const csv = [
-        headers,
-        ...rows
-    ].map((r)=>r.map(esc).join(',')).join('\n');
-    const blob = new Blob([
-        '\uFEFF' + csv
-    ], {
-        type: 'text/csv;charset=utf-8;'
-    });
-    const url = URL.createObjectURL(blob);
-    const now = new Date();
-    const fname = `FoodieLover_${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}.csv`;
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fname;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+function clearFraudAlerts() {
+    ls_set(KEYS.fraudAlerts, []);
 }
 function getEndOfDayReport(date) {
     const d = date || new Date();
-    const dayStr = d.toDateString();
-    const all = getOrders().filter((o)=>new Date(o.timestamp).toDateString() === dayStr);
-    const completed = all.filter((o)=>o.status === 'completed');
-    const cancelled = all.filter((o)=>o.status === 'cancelled');
-    const voided = all.filter((o)=>o.status === 'void');
-    const awaiting = all.filter((o)=>o.status === 'awaiting_waiter');
-    const gross = completed.reduce((s, o)=>s + (o.subtotal || o.total), 0);
-    const disc = completed.reduce((s, o)=>s + (o.discount || 0), 0);
-    const net = completed.reduce((s, o)=>s + o.total, 0);
-    // Payment breakdown
-    const payBreak = {};
-    completed.forEach((o)=>{
-        const pay = o.payment || 'cod';
-        if (!payBreak[pay]) payBreak[pay] = {
-            count: 0,
-            amount: 0
-        };
-        payBreak[pay].count++;
-        payBreak[pay].amount += o.total;
-    });
-    // Peak hour (by order count)
-    const hourCounts = {};
-    all.forEach((o)=>{
-        const h = new Date(o.timestamp).getHours();
-        hourCounts[h] = (hourCounts[h] || 0) + 1;
-    });
-    const peakEntry = Object.entries(hourCounts).sort((a, b)=>Number(b[1]) - Number(a[1]))[0];
-    const peakHour = peakEntry ? `${String(Number(peakEntry[0])).padStart(2, '0')}:00 – ${String(Number(peakEntry[0])).padStart(2, '0')}:59` : 'N/A';
-    // Top items (from completed orders only)
+    const dayOrders = getOrders().filter((o)=>new Date(o.timestamp).toDateString() === d.toDateString());
+    const completedOrders = dayOrders.filter((o)=>o.status === 'completed');
+    const voidedOrders = dayOrders.filter((o)=>o.status === 'void').length;
+    const totalRevenue = completedOrders.reduce((s, o)=>s + (o.total || 0), 0);
+    const discountsTotal = completedOrders.reduce((s, o)=>s + (o.discount || 0), 0);
     const itemMap = {};
-    completed.forEach((o)=>{
-        o.items.forEach((item)=>{
-            itemMap[item.name] = (itemMap[item.name] || 0) + item.qty;
-        });
-    });
-    const topItems = Object.entries(itemMap).sort((a, b)=>b[1] - a[1]).slice(0, 6).map(([name, qty])=>({
+    completedOrders.forEach((o)=>(o.items || []).forEach((i)=>{
+            itemMap[i.name] = (itemMap[i.name] || 0) + i.qty;
+        }));
+    const topItems = Object.entries(itemMap).sort((a, b)=>b[1] - a[1]).slice(0, 5).map(([name, qty])=>({
             name,
             qty
         }));
+    const completedTabs = getTabs().filter((t)=>t.tabStatus === 'closed' && t.closedAt && new Date(t.closedAt).toDateString() === d.toDateString()).length;
     return {
-        date: d.toLocaleDateString('en-IN', {
-            day: '2-digit',
-            month: 'short',
-            year: 'numeric'
-        }),
-        totalOrders: all.length,
-        completedOrders: completed.length,
-        cancelledOrders: cancelled.length,
-        voidedOrders: voided.length,
-        awaitingOrders: awaiting.length,
-        grossRevenue: gross,
-        discounts: disc,
-        netRevenue: net,
-        paymentBreakdown: payBreak,
-        avgBillValue: completed.length ? Math.round(net / completed.length) : 0,
-        peakHour,
-        topItems
+        date: d.toDateString(),
+        totalOrders: completedOrders.length,
+        totalRevenue,
+        avgOrderValue: completedOrders.length ? Math.round(totalRevenue / completedOrders.length) : 0,
+        topItems,
+        completedTabs,
+        voidedOrders,
+        discountsTotal
     };
 }
-function getFraudAlerts() {
-    const today = new Date().toDateString();
-    const orders = getOrders().filter((o)=>new Date(o.timestamp).toDateString() === today);
-    const alerts = [];
-    // Waiter/staff with many cancellations today
-    const cancelByStaff = {};
-    orders.filter((o)=>o.status === 'cancelled').forEach((o)=>{
-        const who = o.staffName || 'Unknown';
-        cancelByStaff[who] = (cancelByStaff[who] || 0) + 1;
-    });
-    Object.entries(cancelByStaff).forEach(([staff, count])=>{
-        if (count >= 3) {
-            alerts.push({
-                type: 'high_cancellations',
-                severity: count >= 5 ? 'critical' : 'warning',
-                message: `${staff} has ${count} cancellation${count > 1 ? 's' : ''} today`,
-                staff,
-                count
-            });
-        }
-    });
-    // High number of discounts today
-    const discountOrders = orders.filter((o)=>(o.discount || 0) > 0);
-    if (discountOrders.length >= 5) {
-        const totalDisc = discountOrders.reduce((s, o)=>s + (o.discount || 0), 0);
-        alerts.push({
-            type: 'high_discounts',
-            severity: discountOrders.length >= 10 ? 'critical' : 'warning',
-            message: `${discountOrders.length} discounts today totalling ₹${totalDisc}`,
-            count: discountOrders.length
+function updateItemStatus(orderId, itemIndex, status, by = 'Kitchen') {
+    const orders = getOrders();
+    const idx = orders.findIndex((o)=>o.id === orderId);
+    if (idx === -1) return false;
+    const items = [
+        ...orders[idx].items || []
+    ];
+    if (itemIndex < 0 || itemIndex >= items.length) return false;
+    items[itemIndex] = {
+        ...items[itemIndex],
+        itemStatus: status
+    };
+    orders[idx] = {
+        ...orders[idx],
+        items
+    };
+    saveOrders(orders);
+    return true;
+}
+const getWaiterCalls = ()=>ls_get(KEYS.waiterCalls, []);
+const saveWaiterCalls = (c)=>ls_set(KEYS.waiterCalls, c);
+const getPendingWaiterCalls = ()=>getWaiterCalls().filter((c)=>!c.acknowledged);
+function addWaiterCall(tableId, tabId, customerName) {
+    const call = {
+        id: `WC-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+        tableId,
+        tabId,
+        customerName,
+        at: new Date().toISOString(),
+        acknowledged: false
+    };
+    const calls = getWaiterCalls();
+    calls.push(call);
+    if (calls.length > 100) calls.splice(0, calls.length - 100);
+    saveWaiterCalls(calls);
+    return call;
+}
+function acknowledgeWaiterCall(id, by = 'Waiter') {
+    const calls = getWaiterCalls();
+    const idx = calls.findIndex((c)=>c.id === id);
+    if (idx === -1) return false;
+    calls[idx] = {
+        ...calls[idx],
+        acknowledged: true,
+        acknowledgedAt: new Date().toISOString(),
+        acknowledgedBy: by
+    };
+    saveWaiterCalls(calls);
+    return true;
+}
+function getLastWaiterCallTime(tableId) {
+    const calls = getWaiterCalls();
+    const recent = calls.filter((c)=>c.tableId === tableId).sort((a, b)=>new Date(b.at).getTime() - new Date(a.at).getTime());
+    if (!recent.length) return null;
+    if (Date.now() - new Date(recent[0].at).getTime() > 5 * 60 * 1000) return null;
+    return recent[0].at;
+}
+const getDisputeAlerts = ()=>ls_get(KEYS.disputes, []);
+const saveDisputeAlerts = (d)=>ls_set(KEYS.disputes, d);
+const getPendingDisputes = ()=>getDisputeAlerts().filter((d)=>!d.resolved);
+function addFoodReceiptDispute(orderId, tabId, tableId, customerName) {
+    const dispute = {
+        id: `FD-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+        orderId,
+        tabId,
+        tableId,
+        customerName,
+        at: new Date().toISOString(),
+        resolved: false
+    };
+    const disputes = getDisputeAlerts();
+    disputes.push(dispute);
+    if (disputes.length > 200) disputes.splice(0, disputes.length - 200);
+    saveDisputeAlerts(disputes);
+    return dispute;
+}
+function resolveDispute(id, by = 'Waiter') {
+    const disputes = getDisputeAlerts();
+    const idx = disputes.findIndex((d)=>d.id === id);
+    if (idx === -1) return false;
+    disputes[idx] = {
+        ...disputes[idx],
+        resolved: true,
+        resolvedBy: by,
+        resolvedAt: new Date().toISOString()
+    };
+    saveDisputeAlerts(disputes);
+    return true;
+}
+const getSplitBills = ()=>ls_get(KEYS.splitBills, []);
+const saveSplitBills = (s)=>ls_set(KEYS.splitBills, s);
+function getSplitBillForTab(tabId) {
+    return getSplitBills().find((s)=>s.tabId === tabId) ?? null;
+}
+function createSplitBill(tabId, splitType, count, totalAmount) {
+    const existing = getSplitBills().filter((s)=>s.tabId !== tabId);
+    const perPerson = Math.ceil(totalAmount / count);
+    const entries = Array.from({
+        length: count
+    }, (_, i)=>({
+            personLabel: `Person ${i + 1}`,
+            amount: i === count - 1 ? totalAmount - perPerson * (count - 1) : perPerson,
+            paid: false
+        }));
+    const split = {
+        id: `SB-${Date.now()}`,
+        tabId,
+        splitType,
+        totalAmount,
+        entries,
+        createdAt: new Date().toISOString()
+    };
+    existing.push(split);
+    saveSplitBills(existing);
+    return split;
+}
+function markSplitEntryPaid(tabId, personLabel, paymentMethod) {
+    const splits = getSplitBills();
+    const idx = splits.findIndex((s)=>s.tabId === tabId);
+    if (idx === -1) return false;
+    const eIdx = splits[idx].entries.findIndex((e)=>e.personLabel === personLabel);
+    if (eIdx === -1) return false;
+    splits[idx].entries[eIdx] = {
+        ...splits[idx].entries[eIdx],
+        paid: true,
+        paymentMethod,
+        paidAt: new Date().toISOString()
+    };
+    saveSplitBills(splits);
+    return true;
+}
+function isSplitFullyPaid(tabId) {
+    const split = getSplitBillForTab(tabId);
+    return split ? split.entries.every((e)=>e.paid) : false;
+}
+function getWaiterStats() {
+    const orders = getOrders();
+    const todayStr = new Date().toDateString();
+    const todayOrders = orders.filter((o)=>new Date(o.timestamp).toDateString() === todayStr);
+    const statMap = {};
+    todayOrders.forEach((o)=>{
+        (o.timeline || []).forEach((t)=>{
+            if (!t.by || [
+                'System',
+                'Admin',
+                'Manager',
+                'Kitchen'
+            ].includes(t.by)) return;
+            if (!statMap[t.by]) statMap[t.by] = {
+                accepted: 0,
+                cancelled: 0,
+                served: 0
+            };
+            if (t.status === 'pending') statMap[t.by].accepted++;
+            if (t.status === 'cancelled') statMap[t.by].cancelled++;
+            if (t.status === 'served') statMap[t.by].served++;
         });
-    }
-    // Large individual discounts (>₹100)
-    orders.filter((o)=>(o.discount || 0) > 100).forEach((o)=>{
-        alerts.push({
-            type: 'large_single_discount',
-            severity: 'warning',
-            message: `Large discount ₹${o.discount} on order ${o.orderNum ? `#${o.orderNum}` : o.id}`,
-            details: o.discountReason || 'No reason given'
-        });
     });
-    // Any voided orders today
-    const voidOrders = orders.filter((o)=>o.status === 'void');
-    if (voidOrders.length > 0) {
-        alerts.push({
-            type: 'voided_orders',
-            severity: voidOrders.length >= 2 ? 'critical' : 'warning',
-            message: `${voidOrders.length} order${voidOrders.length > 1 ? 's' : ''} voided today — verify with manager`,
-            count: voidOrders.length
-        });
-    }
-    return alerts;
+    return Object.entries(statMap).map(([name, s])=>({
+            name,
+            ordersAccepted: s.accepted,
+            ordersCancelled: s.cancelled,
+            ordersServed: s.served,
+            cancellationRate: s.accepted > 0 ? Math.round(s.cancelled / s.accepted * 100) : 0
+        })).sort((a, b)=>b.ordersCancelled - a.ordersCancelled);
+}
+function getTableOccupancyStats() {
+    const allTabs = getTabs().filter((t)=>t.tabStatus === 'closed' && t.closedAt);
+    const map = {};
+    allTabs.forEach((tab)=>{
+        if (!map[tab.tableId]) map[tab.tableId] = {
+            sessions: 0,
+            totalMins: 0,
+            revenue: 0,
+            lastUsed: ''
+        };
+        const mins = Math.floor((new Date(tab.closedAt).getTime() - new Date(tab.createdAt).getTime()) / 60000);
+        map[tab.tableId].sessions++;
+        map[tab.tableId].totalMins += mins;
+        map[tab.tableId].revenue += Math.max(0, tab.totalAmount - tab.discount);
+        if (!map[tab.tableId].lastUsed || tab.closedAt > map[tab.tableId].lastUsed) map[tab.tableId].lastUsed = tab.closedAt;
+    });
+    return Object.entries(map).map(([tableId, s])=>({
+            tableId,
+            totalSessions: s.sessions,
+            avgMinutes: s.sessions > 0 ? Math.round(s.totalMins / s.sessions) : 0,
+            totalRevenue: s.revenue,
+            lastUsed: s.lastUsed
+        })).sort((a, b)=>b.totalSessions - a.totalSessions);
+}
+function getOrCreateDeviceId() {
+    if ("TURBOPACK compile-time truthy", 1) return '';
+    //TURBOPACK unreachable
+    ;
+    let id;
+}
+function getDeviceRecords() {
+    return ls_get(KEYS.devices, []);
+}
+function saveDeviceRecords(records) {
+    ls_set(KEYS.devices, records);
+}
+function registerDevice(deviceId, tableId, tabId, customerName) {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const pruned = getDeviceRecords().filter((r)=>new Date(r.joinedAt).getTime() > cutoff && !(r.deviceId === deviceId && r.tableId === tableId));
+    const record = {
+        deviceId,
+        tableId,
+        tabId,
+        customerName,
+        joinedAt: new Date().toISOString()
+    };
+    pruned.push(record);
+    saveDeviceRecords(pruned);
+    return record;
+}
+function findActiveDeviceSession(deviceId, tableId) {
+    const records = getDeviceRecords();
+    const record = records.find((r)=>r.deviceId === deviceId && r.tableId === tableId);
+    if (!record) return null;
+    const tab = getTabs().find((t)=>t.id === record.tabId && [
+            'open',
+            'awaiting_payment'
+        ].includes(t.tabStatus));
+    if (!tab) return null;
+    return {
+        tab,
+        record
+    };
+}
+function removeDeviceRecord(deviceId, tableId) {
+    const records = getDeviceRecords().filter((r)=>!(r.deviceId === deviceId && r.tableId === tableId));
+    saveDeviceRecords(records);
+}
+function getDevicesForTab(tabId) {
+    return getDeviceRecords().filter((r)=>r.tabId === tabId);
+}
+function getWhatsappNumber() {
+    return ls_get(KEYS.whatsapp, '');
+}
+function saveWhatsappNumber(num) {
+    ls_set(KEYS.whatsapp, num.replace(/\D/g, '')); // store digits only
+}
+function getOnlineOrderStats() {
+    const orders = getOrders();
+    const todayStr = new Date().toDateString();
+    const online = orders.filter((o)=>o.source === 'online');
+    const todayOnline = online.filter((o)=>new Date(o.timestamp).toDateString() === todayStr);
+    return {
+        todayTotal: todayOnline.length,
+        todayPickup: todayOnline.filter((o)=>o.type === 'pickup').length,
+        todayDelivery: todayOnline.filter((o)=>o.type === 'delivery').length,
+        todayRevenue: todayOnline.filter((o)=>o.status !== 'cancelled').reduce((s, o)=>s + (o.total || 0), 0),
+        pendingOnline: online.filter((o)=>![
+                'completed',
+                'cancelled',
+                'void'
+            ].includes(o.status)).length,
+        allTimeTotal: online.length,
+        allTimePickup: online.filter((o)=>o.type === 'pickup').length,
+        allTimeDelivery: online.filter((o)=>o.type === 'delivery').length
+    };
+}
+function buildWhatsappOrderUrl(order, restaurantNumber) {
+    const lines = [
+        `🍽️ *New Online Order — Foodie Lover*`,
+        `📋 Order ID: ${order.id}`,
+        `👤 Name: ${order.customerName}`,
+        `📱 Phone: ${order.phone || '—'}`,
+        `📦 Type: ${order.type === 'delivery' ? '🚗 Delivery' : '🏪 Pickup'}`,
+        order.deliveryAddress ? `📍 Address: ${order.deliveryAddress}` : '',
+        `💳 Payment: ${order.payment?.toUpperCase() || 'COD'}`,
+        ``,
+        `*Items:*`,
+        ...(order.items || []).map((i)=>`  • ${i.name} × ${i.qty}  ₹${i.subtotal}`),
+        ``,
+        `💰 *Total: ₹${order.total}*`,
+        `🕐 Time: ${new Date(order.timestamp).toLocaleTimeString('en-IN')}`
+    ].filter((l)=>l !== null);
+    const msg = encodeURIComponent(lines.join('\n'));
+    const num = restaurantNumber.replace(/\D/g, '');
+    return num ? `https://wa.me/${num}?text=${msg}` : `https://wa.me/?text=${msg}`;
+}
+// ─── Private helper (called internally — not exported to keep event writes consistent) ──
+function _addOrderEvent(orderId, eventType, actor, note) {
+    const ev = {
+        eventId: `EV-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+        orderId,
+        eventType,
+        actor,
+        note,
+        createdAt: new Date().toISOString()
+    };
+    const events = ls_get(KEYS.events, []);
+    events.push(ev);
+    ls_set(KEYS.events, events);
+    return ev;
+}
+function getAllOrderEvents() {
+    return ls_get(KEYS.events, []);
+}
+function getEventsForOrder(orderId) {
+    return getAllOrderEvents().filter((e)=>e.orderId === orderId).sort((a, b)=>new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+}
+function getLatestEvent(orderId) {
+    const events = getEventsForOrder(orderId);
+    return events.length ? events[events.length - 1] : null;
+}
+function generateTrackingToken() {
+    return Math.random().toString(36).slice(2, 6).toUpperCase() + Math.random().toString(36).slice(2, 6).toUpperCase();
+}
+function verifyTrackingToken(orderId, token) {
+    const order = getOrders().find((o)=>o.id === orderId);
+    if (!order) return null;
+    if (order.trackingToken !== token) return null;
+    return order;
+}
+function getDeliveryQueue() {
+    return getOrders().filter((o)=>o.type === 'delivery' && [
+            'prepared',
+            'out_for_delivery',
+            'delivered'
+        ].includes(o.status)).sort((a, b)=>new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+}
+function markOrderPickedUp(orderId, deliveryPerson) {
+    const orders = getOrders();
+    const idx = orders.findIndex((o)=>o.id === orderId);
+    if (idx === -1 || orders[idx].status !== 'prepared') return false;
+    orders[idx] = {
+        ...orders[idx],
+        status: 'out_for_delivery',
+        deliveryPerson,
+        timeline: [
+            ...orders[idx].timeline || [],
+            {
+                status: 'out_for_delivery',
+                by: deliveryPerson,
+                at: new Date().toISOString(),
+                note: 'Picked up for delivery'
+            }
+        ]
+    };
+    saveOrders(orders);
+    _addOrderEvent(orderId, 'OrderPickedUp', deliveryPerson, 'Picked up from kitchen');
+    _addOrderEvent(orderId, 'OutForDelivery', deliveryPerson, 'On the way to customer');
+    return true;
+}
+function markOrderDelivered(orderId, deliveryPerson) {
+    const orders = getOrders();
+    const idx = orders.findIndex((o)=>o.id === orderId);
+    if (idx === -1 || orders[idx].status !== 'out_for_delivery') return false;
+    orders[idx] = {
+        ...orders[idx],
+        status: 'delivered',
+        timeline: [
+            ...orders[idx].timeline || [],
+            {
+                status: 'delivered',
+                by: deliveryPerson,
+                at: new Date().toISOString()
+            }
+        ]
+    };
+    saveOrders(orders);
+    _addOrderEvent(orderId, 'Delivered', deliveryPerson, 'Delivered to customer address');
+    return true;
+}
+function customerConfirmDelivery(orderId, token) {
+    const order = verifyTrackingToken(orderId, token);
+    if (!order || order.status !== 'delivered') return false;
+    const orders = getOrders();
+    const idx = orders.findIndex((o)=>o.id === orderId);
+    if (idx === -1) return false;
+    orders[idx] = {
+        ...orders[idx],
+        status: 'completed',
+        timeline: [
+            ...orders[idx].timeline || [],
+            {
+                status: 'completed',
+                by: order.customerName,
+                at: new Date().toISOString(),
+                note: 'Confirmed by customer'
+            }
+        ]
+    };
+    saveOrders(orders);
+    _addOrderEvent(orderId, 'CustomerConfirmed', order.customerName, 'Customer confirmed delivery');
+    _addOrderEvent(orderId, 'Closed', order.customerName);
+    return true;
+}
+function emitBillRequestedEvent(tabId, actor) {
+    // BillRequested is a tab-level event, we store it under the tab's first orderId or a synthetic ID
+    _addOrderEvent(`TAB-${tabId}`, 'BillRequested', actor);
+}
+function getTrackingUrl(order) {
+    if (!order.trackingToken) return '';
+    return `/track?id=${encodeURIComponent(order.id)}&token=${encodeURIComponent(order.trackingToken)}`;
 }
 }),
 "[project]/lib/auth.ts [app-ssr] (ecmascript)", ((__turbopack_context__) => {
@@ -1180,6 +1288,8 @@ __turbopack_context__.s([
     ()=>getStaffAccounts,
     "loginAdmin",
     ()=>loginAdmin,
+    "loginDelivery",
+    ()=>loginDelivery,
     "loginKitchen",
     ()=>loginKitchen,
     "loginManager",
@@ -1210,7 +1320,8 @@ const SESSION_KEY = {
     admin: 'fl_session_admin',
     kitchen: 'fl_session_kitchen',
     waiter: 'fl_session_waiter',
-    manager: 'fl_session_manager'
+    manager: 'fl_session_manager',
+    delivery: 'fl_session_delivery'
 };
 const KEYS = {
     kitchenPin: 'fl_kitchen_pin',
@@ -1342,6 +1453,18 @@ function loginManager(pin) {
     saveSession(s);
     return s;
 }
+function loginDelivery(name) {
+    const n = name.trim() || 'Delivery';
+    const s = {
+        role: 'delivery',
+        name: n,
+        username: n.toLowerCase().replace(/\s+/g, '_'),
+        loginAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString()
+    };
+    saveSession(s);
+    return s;
+}
 const SECURITY_QUESTIONS = [
     "What is the name of your first pet?",
     "What was the name of your first school?",
@@ -1392,81 +1515,26 @@ var __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$auth$2e$ts__$5b$app$2
 ;
 ;
 ;
-// Kitchen only works with these three statuses — served/completed are waiter's domain
-const ACTIVE = [
-    'pending',
-    'preparing',
-    'prepared'
-];
-// Kitchen advance flow: kitchen must NOT push past "prepared" — serving is the waiter's job
-const KITCHEN_FLOW = [
-    'pending',
-    'preparing',
-    'prepared'
-];
 const STATUS_COLOR = {
     pending: '#f59e0b',
     preparing: '#3b82f6',
-    prepared: '#16a34a'
+    prepared: '#8b5cf6'
 };
-const STATUS_BG = {
-    pending: '#fef3c7',
-    preparing: '#dbeafe',
-    prepared: '#dcfce7'
+const STATUS_LABEL = {
+    pending: 'Queued',
+    preparing: 'Preparing',
+    prepared: 'Ready'
 };
-function elapsed(timestamp) {
-    const ms = Date.now() - new Date(timestamp).getTime();
-    const m = Math.floor(ms / 60000);
-    const s = Math.floor(ms % 60000 / 1000);
-    return {
-        m,
-        s,
-        total: ms
-    };
-}
-function ElapsedTimer({ timestamp, urgent, critical }) {
-    const [, setTick] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useState"])(0);
-    (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useEffect"])(()=>{
-        const t = setInterval(()=>setTick((v)=>v + 1), 1000);
-        return ()=>clearInterval(t);
-    }, []);
-    const { m, s } = elapsed(timestamp);
-    const color = critical ? '#ef4444' : urgent ? '#f97316' : '#9ca3af';
-    return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
-        style: {
-            fontSize: '0.72rem',
-            fontWeight: critical || urgent ? 800 : 400,
-            color,
-            fontFamily: 'monospace'
-        },
-        children: [
-            String(m).padStart(2, '0'),
-            ":",
-            String(s).padStart(2, '0'),
-            critical ? ' 🚨' : urgent ? ' ⚠️' : ''
-        ]
-    }, void 0, true, {
-        fileName: "[project]/app/kitchen/page.tsx",
-        lineNumber: 46,
-        columnNumber: 5
-    }, this);
-}
 function KitchenPage() {
     const router = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$navigation$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useRouter"])();
     const [session, setSession] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useState"])(null);
     const [authChecked, setAuthChecked] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useState"])(false);
     const [orders, setOrders] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useState"])([]);
     const [tabs, setTabs] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useState"])([]);
-    const [priority, setPriority] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useState"])({});
+    const [clock, setClock] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useState"])('');
+    const [tick, setTick] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useState"])(0); // increments every second for live timers
     const [filter, setFilter] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useState"])('all');
-    const [threshold, setThreshold] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useState"])(15);
-    const [critThresh, setCritThresh] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useState"])(25);
-    const [showConfig, setShowConfig] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useState"])(false);
-    const [time, setTime] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useState"])('');
-    const [, forceUpdate] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useState"])(0);
-    // Tracks IDs currently being processed to prevent double-clicks
-    const processingRef = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useRef"])(new Set());
-    // ── Auth check ───────────────────────────────────────────────────────────────
+    // ── Auth ──────────────────────────────────────────────────────────────────
     (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useEffect"])(()=>{
         const s = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$auth$2e$ts__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["getSession"])('kitchen');
         if (!s) {
@@ -1478,97 +1546,83 @@ function KitchenPage() {
     }, [
         router
     ]);
-    // ── Data refresh ────────────────────────────────────────────────────────────
+    // ── Data refresh ──────────────────────────────────────────────────────────
     const refresh = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useCallback"])(()=>{
         setOrders((0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["getOrders"])());
         setTabs((0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["getTabs"])());
     }, []);
-    // Load priority from localStorage on mount
     (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useEffect"])(()=>{
-        setPriority((0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["getPriorityOrders"])());
-    }, []);
-    (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useEffect"])(()=>{
+        if (!authChecked) return;
         refresh();
         const t1 = setInterval(refresh, 3000);
-        const t2 = setInterval(()=>setTime(new Date().toLocaleTimeString()), 1000);
-        const t3 = setInterval(()=>forceUpdate((v)=>v + 1), 1000);
+        const t2 = setInterval(()=>{
+            setClock(new Date().toLocaleTimeString());
+            setTick((n)=>n + 1); // forces re-render for live MM:SS timers
+        }, 1000);
         return ()=>{
             clearInterval(t1);
             clearInterval(t2);
-            clearInterval(t3);
         };
     }, [
-        refresh
+        refresh,
+        authChecked
     ]);
-    // Close config modal on Escape
-    (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["useEffect"])(()=>{
-        if (!showConfig) return;
-        function handleKey(e) {
-            if (e.key === 'Escape') setShowConfig(false);
-        }
-        window.addEventListener('keydown', handleKey);
-        return ()=>window.removeEventListener('keydown', handleKey);
-    }, [
-        showConfig
-    ]);
-    // ── Advance order status (kitchen role — max target is 'prepared') ──────────
-    function advance(id, cur) {
-        if (processingRef.current.has(id)) return; // prevent double-click
-        const curIdx = KITCHEN_FLOW.indexOf(cur);
-        // Guard: unknown current status — do nothing
-        if (curIdx === -1) return;
-        // Guard: already at the last kitchen step (prepared) — do nothing
-        if (curIdx >= KITCHEN_FLOW.length - 1) return;
-        const next = KITCHEN_FLOW[curIdx + 1];
-        processingRef.current.add(id);
-        const ok = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["updateOrderStatus"])(id, next);
-        if (ok) refresh();
-        // Brief lock to absorb any rapid re-click
-        setTimeout(()=>{
-            processingRef.current.delete(id);
-        }, 500);
-    }
-    // ── Priority toggle (persists to localStorage) ───────────────────────────────
-    function togglePriority(id) {
-        setPriority((prev)=>{
-            const next = {
-                ...prev,
-                [id]: !prev[id]
-            };
-            (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["savePriorityOrders"])(next);
-            return next;
-        });
-    }
-    // ── Derived data ─────────────────────────────────────────────────────────────
-    const active = orders.filter((o)=>ACTIVE.includes(o.status)).sort((a, b)=>{
-        const ap = priority[a.id] ? 1 : 0;
-        const bp = priority[b.id] ? 1 : 0;
-        if (bp !== ap) return bp - ap; // priority orders first
-        return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(); // oldest first
-    });
-    const shown = filter === 'all' ? active : active.filter((o)=>o.status === filter);
-    const pendingCount = active.filter((o)=>o.status === 'pending').length;
-    const preparingCount = active.filter((o)=>o.status === 'preparing').length;
-    const preparedCount = active.filter((o)=>o.status === 'prepared').length;
-    const urgentCount = active.filter((o)=>elapsed(o.timestamp).m >= threshold).length;
-    // ── Logout ──────────────────────────────────────────────────────────────────
+    void tick; // referenced to prevent lint warnings about unused state
     function logout() {
         (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$auth$2e$ts__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["clearSession"])('kitchen');
         router.replace('/kitchen/login');
     }
-    // ── Auth guard ───────────────────────────────────────────────────────────────
+    // ── Actions ───────────────────────────────────────────────────────────────
+    function advanceOrder(order) {
+        const next = order.status === 'pending' ? 'preparing' : order.status === 'preparing' ? 'prepared' : null;
+        if (!next) return;
+        (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["updateOrderStatus"])(order.id, next, session?.name || 'Kitchen');
+        refresh();
+    }
+    function advanceItem(orderId, itemIndex) {
+        const order = orders.find((o)=>o.id === orderId);
+        if (!order) return;
+        const item = order.items?.[itemIndex];
+        if (!item) return;
+        const currentStatus = item.itemStatus || 'queued';
+        const nextStatus = currentStatus === 'queued' ? 'preparing' : currentStatus === 'preparing' ? 'prepared' : 'prepared';
+        (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["updateItemStatus"])(orderId, itemIndex, nextStatus, session?.name || 'Kitchen');
+        refresh();
+    }
+    // ── Derived ───────────────────────────────────────────────────────────────
+    const kitchenOrders = orders.filter((o)=>[
+            'pending',
+            'preparing',
+            'prepared'
+        ].includes(o.status)).sort((a, b)=>new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    const shown = filter === 'all' ? kitchenOrders : filter === 'queued' ? kitchenOrders.filter((o)=>o.status === 'pending') : filter === 'cooking' ? kitchenOrders.filter((o)=>o.status === 'preparing') : kitchenOrders.filter((o)=>o.status === 'prepared');
+    const queuedCount = kitchenOrders.filter((o)=>o.status === 'pending').length;
+    const cookingCount = kitchenOrders.filter((o)=>o.status === 'preparing').length;
+    const readyCount = kitchenOrders.filter((o)=>o.status === 'prepared').length;
+    // ── Styles ────────────────────────────────────────────────────────────────
+    const btn = (bg = '#E65C00', c = 'white')=>({
+            background: bg,
+            color: c,
+            border: 'none',
+            borderRadius: 8,
+            fontWeight: 700,
+            cursor: 'pointer',
+            fontFamily: 'Poppins,sans-serif',
+            padding: '0.45rem 1rem',
+            fontSize: '0.8rem'
+        });
     if (!authChecked) {
         return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
             style: {
                 minHeight: '100vh',
-                background: '#0d0d0d',
+                background: '#111',
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: 'center',
-                color: 'white'
+                justifyContent: 'center'
             },
             children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                 style: {
+                    color: '#888',
                     textAlign: 'center'
                 },
                 children: [
@@ -1577,84 +1631,35 @@ function KitchenPage() {
                             fontSize: '2rem',
                             marginBottom: '0.5rem'
                         },
-                        children: "🔥"
+                        children: "👨‍🍳"
                     }, void 0, false, {
                         fileName: "[project]/app/kitchen/page.tsx",
-                        lineNumber: 165,
+                        lineNumber: 108,
                         columnNumber: 11
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                         children: "Loading Kitchen Display…"
                     }, void 0, false, {
                         fileName: "[project]/app/kitchen/page.tsx",
-                        lineNumber: 166,
+                        lineNumber: 109,
                         columnNumber: 11
                     }, this)
                 ]
             }, void 0, true, {
                 fileName: "[project]/app/kitchen/page.tsx",
-                lineNumber: 164,
+                lineNumber: 107,
                 columnNumber: 9
             }, this)
         }, void 0, false, {
             fileName: "[project]/app/kitchen/page.tsx",
-            lineNumber: 163,
+            lineNumber: 106,
             columnNumber: 7
         }, this);
     }
-    // ── Styles ──────────────────────────────────────────────────────────────────
-    const btnStyle = (bg, color = 'white', extra)=>({
-            background: bg,
-            color,
-            border: 'none',
-            borderRadius: '8px',
-            fontWeight: 700,
-            cursor: 'pointer',
-            fontSize: '0.82rem',
-            fontFamily: 'Poppins,sans-serif',
-            padding: '0.45rem 0.9rem',
-            ...extra
-        });
-    const filterTab = (key, label, count, activeColor)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
-            onClick: ()=>setFilter(key),
-            style: {
-                padding: '0.35rem 0.85rem',
-                borderRadius: '20px',
-                cursor: 'pointer',
-                fontFamily: 'Poppins,sans-serif',
-                fontWeight: 700,
-                fontSize: '0.78rem',
-                whiteSpace: 'nowrap',
-                background: filter === key ? activeColor : '#2a2a2a',
-                color: filter === key ? 'white' : '#999',
-                border: `2px solid ${filter === key ? activeColor : '#333'}`
-            },
-            children: [
-                label,
-                count > 0 && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
-                    style: {
-                        background: 'rgba(255,255,255,0.2)',
-                        borderRadius: '10px',
-                        padding: '0 6px',
-                        marginLeft: 4
-                    },
-                    children: count
-                }, void 0, false, {
-                    fileName: "[project]/app/kitchen/page.tsx",
-                    lineNumber: 190,
-                    columnNumber: 9
-                }, this)
-            ]
-        }, key, true, {
-            fileName: "[project]/app/kitchen/page.tsx",
-            lineNumber: 181,
-            columnNumber: 5
-        }, this);
-    // ── Render ──────────────────────────────────────────────────────────────────
     return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
         style: {
             minHeight: '100vh',
-            background: '#0d0d0d',
+            background: '#111',
             color: 'white',
             fontFamily: 'Poppins,sans-serif'
         },
@@ -1662,31 +1667,31 @@ function KitchenPage() {
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                 style: {
                     background: '#1a1a1a',
-                    padding: '0.9rem 1.5rem',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    borderBottom: '2px solid #2a2a2a',
+                    borderBottom: '2px solid #333',
+                    padding: '0.8rem 1.25rem',
                     position: 'sticky',
                     top: 0,
-                    zIndex: 50
+                    zIndex: 50,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center'
                 },
                 children: [
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                         style: {
                             display: 'flex',
                             alignItems: 'center',
-                            gap: '0.75rem'
+                            gap: '0.65rem'
                         },
                         children: [
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
                                 style: {
-                                    fontSize: '1.5rem'
+                                    fontSize: '1.6rem'
                                 },
-                                children: "🔥"
+                                children: "👨‍🍳"
                             }, void 0, false, {
                                 fileName: "[project]/app/kitchen/page.tsx",
-                                lineNumber: 204,
+                                lineNumber: 121,
                                 columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1694,68 +1699,61 @@ function KitchenPage() {
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                         style: {
                                             fontFamily: "'Playfair Display',serif",
-                                            fontSize: '1.2rem',
-                                            fontWeight: 900
+                                            fontSize: '1.15rem',
+                                            fontWeight: 900,
+                                            color: '#F9A826'
                                         },
                                         children: "Kitchen Display"
                                     }, void 0, false, {
                                         fileName: "[project]/app/kitchen/page.tsx",
-                                        lineNumber: 206,
+                                        lineNumber: 123,
                                         columnNumber: 13
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                         style: {
-                                            fontSize: '0.7rem',
+                                            fontSize: '0.65rem',
                                             color: '#666'
                                         },
-                                        children: [
-                                            session?.name ? `👤 ${session.name}  ·  ` : '',
-                                            time
-                                        ]
-                                    }, void 0, true, {
+                                        children: clock
+                                    }, void 0, false, {
                                         fileName: "[project]/app/kitchen/page.tsx",
-                                        lineNumber: 207,
+                                        lineNumber: 124,
                                         columnNumber: 13
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/kitchen/page.tsx",
-                                lineNumber: 205,
+                                lineNumber: 122,
                                 columnNumber: 11
                             }, this)
                         ]
                     }, void 0, true, {
                         fileName: "[project]/app/kitchen/page.tsx",
-                        lineNumber: 203,
+                        lineNumber: 120,
                         columnNumber: 9
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                         style: {
                             display: 'flex',
-                            gap: '1.5rem',
+                            gap: '0.75rem',
                             alignItems: 'center'
                         },
                         children: [
                             [
                                 {
-                                    count: pendingCount,
-                                    label: 'Pending',
-                                    color: '#f59e0b'
+                                    count: queuedCount,
+                                    color: '#f59e0b',
+                                    label: 'Queued'
                                 },
                                 {
-                                    count: preparingCount,
-                                    label: 'Preparing',
-                                    color: '#3b82f6'
+                                    count: cookingCount,
+                                    color: '#3b82f6',
+                                    label: 'Cooking'
                                 },
                                 {
-                                    count: preparedCount,
-                                    label: 'Ready',
-                                    color: '#16a34a'
-                                },
-                                {
-                                    count: urgentCount,
-                                    label: 'Urgent',
-                                    color: '#ef4444'
+                                    count: readyCount,
+                                    color: '#8b5cf6',
+                                    label: 'Ready'
                                 }
                             ].map((s)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                     style: {
@@ -1764,452 +1762,179 @@ function KitchenPage() {
                                     children: [
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                             style: {
-                                                fontSize: '1.4rem',
+                                                fontSize: '1rem',
                                                 fontWeight: 900,
-                                                color: s.color,
-                                                lineHeight: 1
+                                                color: s.color
                                             },
                                             children: s.count
                                         }, void 0, false, {
                                             fileName: "[project]/app/kitchen/page.tsx",
-                                            lineNumber: 219,
+                                            lineNumber: 135,
                                             columnNumber: 15
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                             style: {
-                                                fontSize: '0.62rem',
-                                                color: '#666',
-                                                marginTop: 2
+                                                fontSize: '0.6rem',
+                                                color: '#666'
                                             },
                                             children: s.label
                                         }, void 0, false, {
                                             fileName: "[project]/app/kitchen/page.tsx",
-                                            lineNumber: 220,
+                                            lineNumber: 136,
                                             columnNumber: 15
                                         }, this)
                                     ]
                                 }, s.label, true, {
                                     fileName: "[project]/app/kitchen/page.tsx",
-                                    lineNumber: 218,
+                                    lineNumber: 134,
                                     columnNumber: 13
                                 }, this)),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
-                                onClick: ()=>setShowConfig(true),
-                                style: {
-                                    background: '#2a2a2a',
-                                    border: '1px solid #444',
-                                    color: '#aaa',
-                                    padding: '0.4rem 0.75rem',
-                                    borderRadius: '8px',
-                                    cursor: 'pointer',
-                                    fontSize: '0.78rem',
-                                    fontFamily: 'Poppins,sans-serif'
-                                },
-                                children: "⚙️ Alerts"
-                            }, void 0, false, {
-                                fileName: "[project]/app/kitchen/page.tsx",
-                                lineNumber: 224,
-                                columnNumber: 11
-                            }, this),
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
                                 onClick: logout,
                                 style: {
-                                    background: '#2a2a2a',
-                                    border: '1px solid #ef444430',
-                                    color: '#ef4444',
-                                    padding: '0.4rem 0.75rem',
-                                    borderRadius: '8px',
-                                    cursor: 'pointer',
-                                    fontSize: '0.78rem',
-                                    fontFamily: 'Poppins,sans-serif'
+                                    ...btn('#ffffff15', '#aaa'),
+                                    border: '1px solid #333',
+                                    fontSize: '0.72rem'
                                 },
                                 children: "🚪 Logout"
                             }, void 0, false, {
                                 fileName: "[project]/app/kitchen/page.tsx",
-                                lineNumber: 230,
+                                lineNumber: 139,
                                 columnNumber: 11
                             }, this)
                         ]
                     }, void 0, true, {
                         fileName: "[project]/app/kitchen/page.tsx",
-                        lineNumber: 211,
+                        lineNumber: 127,
                         columnNumber: 9
                     }, this)
                 ]
             }, void 0, true, {
                 fileName: "[project]/app/kitchen/page.tsx",
-                lineNumber: 202,
+                lineNumber: 119,
                 columnNumber: 7
-            }, this),
-            showConfig && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                style: {
-                    position: 'fixed',
-                    inset: 0,
-                    background: 'rgba(0,0,0,0.75)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    zIndex: 200
-                },
-                onClick: ()=>setShowConfig(false),
-                children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                    onClick: (e)=>e.stopPropagation(),
-                    style: {
-                        background: '#1e1e1e',
-                        borderRadius: '16px',
-                        padding: '2rem',
-                        width: '320px',
-                        border: '1px solid #333'
-                    },
-                    children: [
-                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("h3", {
-                            style: {
-                                fontFamily: "'Playfair Display',serif",
-                                marginBottom: '1.25rem',
-                                color: 'white'
-                            },
-                            children: "⚙️ Alert Thresholds"
-                        }, void 0, false, {
-                            fileName: "[project]/app/kitchen/page.tsx",
-                            lineNumber: 246,
-                            columnNumber: 13
-                        }, this),
-                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("label", {
-                            style: {
-                                display: 'block',
-                                fontSize: '0.82rem',
-                                color: '#aaa',
-                                marginBottom: '0.35rem'
-                            },
-                            children: "⚠️ Urgent after (minutes)"
-                        }, void 0, false, {
-                            fileName: "[project]/app/kitchen/page.tsx",
-                            lineNumber: 247,
-                            columnNumber: 13
-                        }, this),
-                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
-                            type: "number",
-                            value: threshold,
-                            onChange: (e)=>setThreshold(Math.max(1, Math.min(60, Number(e.target.value)))),
-                            min: 1,
-                            max: 60,
-                            style: {
-                                width: '100%',
-                                padding: '0.5rem',
-                                background: '#2a2a2a',
-                                border: '1px solid #444',
-                                borderRadius: '8px',
-                                color: 'white',
-                                fontFamily: 'Poppins,sans-serif',
-                                marginBottom: '1rem'
-                            }
-                        }, void 0, false, {
-                            fileName: "[project]/app/kitchen/page.tsx",
-                            lineNumber: 248,
-                            columnNumber: 13
-                        }, this),
-                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("label", {
-                            style: {
-                                display: 'block',
-                                fontSize: '0.82rem',
-                                color: '#aaa',
-                                marginBottom: '0.35rem'
-                            },
-                            children: "🚨 Critical after (minutes)"
-                        }, void 0, false, {
-                            fileName: "[project]/app/kitchen/page.tsx",
-                            lineNumber: 255,
-                            columnNumber: 13
-                        }, this),
-                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
-                            type: "number",
-                            value: critThresh,
-                            onChange: (e)=>setCritThresh(Math.max(1, Math.min(120, Number(e.target.value)))),
-                            min: 1,
-                            max: 120,
-                            style: {
-                                width: '100%',
-                                padding: '0.5rem',
-                                background: '#2a2a2a',
-                                border: '1px solid #444',
-                                borderRadius: '8px',
-                                color: 'white',
-                                fontFamily: 'Poppins,sans-serif',
-                                marginBottom: '1.25rem'
-                            }
-                        }, void 0, false, {
-                            fileName: "[project]/app/kitchen/page.tsx",
-                            lineNumber: 256,
-                            columnNumber: 13
-                        }, this),
-                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
-                            onClick: ()=>setShowConfig(false),
-                            style: btnStyle('#E65C00', 'white', {
-                                width: '100%',
-                                padding: '0.65rem'
-                            }),
-                            children: "Save & Close"
-                        }, void 0, false, {
-                            fileName: "[project]/app/kitchen/page.tsx",
-                            lineNumber: 263,
-                            columnNumber: 13
-                        }, this)
-                    ]
-                }, void 0, true, {
-                    fileName: "[project]/app/kitchen/page.tsx",
-                    lineNumber: 245,
-                    columnNumber: 11
-                }, this)
-            }, void 0, false, {
-                fileName: "[project]/app/kitchen/page.tsx",
-                lineNumber: 241,
-                columnNumber: 9
             }, this),
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                 style: {
-                    padding: '0.75rem 1.5rem',
+                    padding: '0.6rem 1.25rem',
                     display: 'flex',
-                    gap: '0.5rem',
-                    overflowX: 'auto',
-                    borderBottom: '1px solid #1e1e1e'
+                    gap: '0.4rem',
+                    background: '#1a1a1a',
+                    borderBottom: '1px solid #2a2a2a',
+                    overflowX: 'auto'
                 },
                 children: [
-                    filterTab('all', '🍽️ All Active', active.length, '#E65C00'),
-                    filterTab('pending', '⏳ Pending', pendingCount, '#f59e0b'),
-                    filterTab('preparing', '👨‍🍳 Preparing', preparingCount, '#3b82f6'),
-                    filterTab('prepared', '✅ Ready', preparedCount, '#16a34a')
-                ]
-            }, void 0, true, {
+                    {
+                        key: 'all',
+                        label: `🍳 All (${kitchenOrders.length})`
+                    },
+                    {
+                        key: 'queued',
+                        label: `⏱ Queued (${queuedCount})`
+                    },
+                    {
+                        key: 'cooking',
+                        label: `🔥 Cooking (${cookingCount})`
+                    },
+                    {
+                        key: 'ready',
+                        label: `✅ Ready (${readyCount})`
+                    }
+                ].map((f)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                        onClick: ()=>setFilter(f.key),
+                        style: {
+                            padding: '0.28rem 0.8rem',
+                            borderRadius: 20,
+                            whiteSpace: 'nowrap',
+                            fontFamily: 'Poppins,sans-serif',
+                            fontWeight: 600,
+                            fontSize: '0.75rem',
+                            cursor: 'pointer',
+                            border: `2px solid ${filter === f.key ? '#F9A826' : '#333'}`,
+                            background: filter === f.key ? '#F9A826' : '#222',
+                            color: filter === f.key ? '#1A0800' : '#999'
+                        },
+                        children: f.label
+                    }, f.key, false, {
+                        fileName: "[project]/app/kitchen/page.tsx",
+                        lineNumber: 153,
+                        columnNumber: 11
+                    }, this))
+            }, void 0, false, {
                 fileName: "[project]/app/kitchen/page.tsx",
-                lineNumber: 271,
+                lineNumber: 146,
                 columnNumber: 7
             }, this),
-            !shown.length ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+            !shown.length && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                 style: {
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    height: '60vh',
+                    textAlign: 'center',
+                    padding: '4rem 1rem',
                     color: '#444'
                 },
                 children: [
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                         style: {
-                            fontSize: '4rem',
-                            marginBottom: '1rem'
+                            fontSize: '3rem',
+                            marginBottom: '0.5rem'
                         },
-                        children: "✅"
+                        children: "🎉"
                     }, void 0, false, {
                         fileName: "[project]/app/kitchen/page.tsx",
-                        lineNumber: 280,
+                        lineNumber: 172,
                         columnNumber: 11
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                         style: {
-                            fontSize: '1.2rem',
                             fontWeight: 700
                         },
-                        children: "All caught up! No active orders."
+                        children: "All clear! No orders in kitchen."
                     }, void 0, false, {
                         fileName: "[project]/app/kitchen/page.tsx",
-                        lineNumber: 281,
+                        lineNumber: 173,
                         columnNumber: 11
                     }, this)
                 ]
             }, void 0, true, {
                 fileName: "[project]/app/kitchen/page.tsx",
-                lineNumber: 279,
+                lineNumber: 171,
                 columnNumber: 9
-            }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+            }, this),
+            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                 style: {
-                    padding: '1.25rem 1.5rem',
+                    padding: '1rem',
                     display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fill,minmax(300px,1fr))',
-                    gap: '1rem'
+                    gridTemplateColumns: 'repeat(auto-fill,minmax(280px,1fr))',
+                    gap: '0.85rem'
                 },
                 children: shown.map((order)=>{
-                    const { m } = elapsed(order.timestamp);
-                    const urgent = m >= threshold;
-                    const critical = m >= critThresh;
-                    const isPriority = !!priority[order.id];
-                    const isProcessing = processingRef.current.has(order.id);
-                    // Show a "Bill Requested" indicator when the customer's tab is awaiting_payment
-                    // — kitchen should rush these orders so the customer can pay and leave
+                    const totalSecs = Math.floor((Date.now() - new Date(order.timestamp).getTime()) / 1000);
+                    const mins = Math.floor(totalSecs / 60);
+                    const secs = totalSecs % 60;
+                    const timerLabel = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+                    const isUrgent = mins > 25;
+                    const isHighPriority = mins > 15 && !isUrgent;
+                    const isDelivery = order.type === 'delivery';
+                    // Check if this order's tab has requested the bill
                     const billRequested = tabs.some((t)=>t.orderIds.includes(order.id) && t.tabStatus === 'awaiting_payment');
-                    let borderColor = STATUS_COLOR[order.status] || '#333';
-                    if (critical) borderColor = '#ef4444';
-                    else if (urgent) borderColor = '#f97316';
-                    if (isPriority) borderColor = '#a855f7';
-                    // Is this order at the last kitchen step (prepared)?
-                    const isFinalKitchenStep = order.status === 'prepared';
+                    // Check total item quantity
+                    const totalItems = (order.items || []).reduce((sum, item)=>sum + item.qty, 0);
+                    const isLargeOrder = totalItems > 4;
+                    const nextAction = order.status === 'pending' ? {
+                        label: '🔥 Start Cooking',
+                        bg: '#3b82f6'
+                    } : order.status === 'preparing' ? {
+                        label: '✅ Mark Ready',
+                        bg: '#8b5cf6'
+                    } : null;
                     return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                         style: {
-                            background: '#1a1a1a',
-                            borderRadius: '12px',
-                            border: `2px solid ${borderColor}`,
+                            background: '#1e1e1e',
+                            borderRadius: 14,
                             overflow: 'hidden',
-                            boxShadow: isPriority ? `0 0 12px ${borderColor}55` : critical ? `0 0 10px #ef444455` : 'none'
+                            border: `2px solid ${isUrgent ? '#ef4444' : STATUS_COLOR[order.status] || '#333'}`,
+                            boxShadow: isUrgent ? '0 0 16px rgba(239,68,68,0.3)' : '0 2px 8px rgba(0,0,0,0.3)'
                         },
                         children: [
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                style: {
-                                    background: STATUS_BG[order.status] || '#222',
-                                    padding: '0.75rem 1rem',
-                                    display: 'flex',
-                                    justifyContent: 'space-between',
-                                    alignItems: 'center'
-                                },
-                                children: [
-                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                        children: [
-                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                                style: {
-                                                    fontWeight: 900,
-                                                    color: critical ? '#ef4444' : '#111',
-                                                    fontSize: '1.4rem',
-                                                    lineHeight: 1,
-                                                    letterSpacing: '-0.5px'
-                                                },
-                                                children: order.orderNum ? `#${order.orderNum}` : order.id
-                                            }, void 0, false, {
-                                                fileName: "[project]/app/kitchen/page.tsx",
-                                                lineNumber: 321,
-                                                columnNumber: 21
-                                            }, this),
-                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                                style: {
-                                                    fontSize: '0.73rem',
-                                                    color: '#555',
-                                                    marginTop: '0.15rem'
-                                                },
-                                                children: [
-                                                    order.type === 'dine-in' ? `🪑 Table ${order.tableId}` : '🛍️ Pickup',
-                                                    " • ",
-                                                    order.customerName
-                                                ]
-                                            }, void 0, true, {
-                                                fileName: "[project]/app/kitchen/page.tsx",
-                                                lineNumber: 324,
-                                                columnNumber: 21
-                                            }, this)
-                                        ]
-                                    }, void 0, true, {
-                                        fileName: "[project]/app/kitchen/page.tsx",
-                                        lineNumber: 319,
-                                        columnNumber: 19
-                                    }, this),
-                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                        style: {
-                                            textAlign: 'right',
-                                            display: 'flex',
-                                            flexDirection: 'column',
-                                            alignItems: 'flex-end',
-                                            gap: '0.3rem'
-                                        },
-                                        children: [
-                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
-                                                style: {
-                                                    fontSize: '0.68rem',
-                                                    fontWeight: 800,
-                                                    color: STATUS_COLOR[order.status],
-                                                    background: 'white',
-                                                    padding: '0.12rem 0.5rem',
-                                                    borderRadius: '10px',
-                                                    textTransform: 'uppercase'
-                                                },
-                                                children: order.status
-                                            }, void 0, false, {
-                                                fileName: "[project]/app/kitchen/page.tsx",
-                                                lineNumber: 329,
-                                                columnNumber: 21
-                                            }, this),
-                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                                style: {
-                                                    background: critical ? '#ef4444' : urgent ? '#f97316' : '#374151',
-                                                    color: 'white',
-                                                    borderRadius: '8px',
-                                                    padding: '0.15rem 0.5rem',
-                                                    fontSize: '0.78rem',
-                                                    fontWeight: 800,
-                                                    fontFamily: 'monospace'
-                                                },
-                                                children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])(ElapsedTimer, {
-                                                    timestamp: order.timestamp,
-                                                    urgent: urgent,
-                                                    critical: critical
-                                                }, void 0, false, {
-                                                    fileName: "[project]/app/kitchen/page.tsx",
-                                                    lineNumber: 338,
-                                                    columnNumber: 23
-                                                }, this)
-                                            }, void 0, false, {
-                                                fileName: "[project]/app/kitchen/page.tsx",
-                                                lineNumber: 333,
-                                                columnNumber: 21
-                                            }, this),
-                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
-                                                style: {
-                                                    fontSize: '0.65rem',
-                                                    color: '#777'
-                                                },
-                                                children: [
-                                                    (order.items || []).reduce((s, i)=>s + i.qty, 0),
-                                                    " item",
-                                                    (order.items || []).reduce((s, i)=>s + i.qty, 0) !== 1 ? 's' : ''
-                                                ]
-                                            }, void 0, true, {
-                                                fileName: "[project]/app/kitchen/page.tsx",
-                                                lineNumber: 340,
-                                                columnNumber: 21
-                                            }, this)
-                                        ]
-                                    }, void 0, true, {
-                                        fileName: "[project]/app/kitchen/page.tsx",
-                                        lineNumber: 328,
-                                        columnNumber: 19
-                                    }, this)
-                                ]
-                            }, void 0, true, {
-                                fileName: "[project]/app/kitchen/page.tsx",
-                                lineNumber: 318,
-                                columnNumber: 17
-                            }, this),
-                            (isPriority || critical) && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                style: {
-                                    background: isPriority ? '#7c3aed' : '#ef4444',
-                                    color: 'white',
-                                    padding: '0.25rem 1rem',
-                                    fontSize: '0.72rem',
-                                    fontWeight: 800,
-                                    textAlign: 'center',
-                                    letterSpacing: '0.5px'
-                                },
-                                children: critical ? '🚨 CRITICAL — DELAYED ORDER' : '⭐ PRIORITY ORDER'
-                            }, void 0, false, {
-                                fileName: "[project]/app/kitchen/page.tsx",
-                                lineNumber: 348,
-                                columnNumber: 19
-                            }, this),
-                            urgent && !critical && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                style: {
-                                    background: '#f97316',
-                                    color: 'white',
-                                    padding: '0.22rem 1rem',
-                                    fontSize: '0.72rem',
-                                    fontWeight: 700,
-                                    textAlign: 'center'
-                                },
-                                children: [
-                                    "⚠️ Urgent — over ",
-                                    threshold,
-                                    " minutes"
-                                ]
-                            }, void 0, true, {
-                                fileName: "[project]/app/kitchen/page.tsx",
-                                lineNumber: 353,
-                                columnNumber: 19
-                            }, this),
                             billRequested && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                 style: {
                                     background: '#f59e0b',
@@ -2218,150 +1943,412 @@ function KitchenPage() {
                                     fontSize: '0.72rem',
                                     fontWeight: 800,
                                     textAlign: 'center',
-                                    letterSpacing: '0.3px'
+                                    letterSpacing: '0.03em'
                                 },
-                                children: "💳 BILL REQUESTED — Rush this order!"
+                                children: "💳 BILL REQUESTED — Rush!"
                             }, void 0, false, {
                                 fileName: "[project]/app/kitchen/page.tsx",
-                                lineNumber: 359,
-                                columnNumber: 19
+                                lineNumber: 215,
+                                columnNumber: 17
                             }, this),
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                            isUrgent && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                 style: {
-                                    padding: '0.7rem 1rem'
+                                    background: '#ef4444',
+                                    color: 'white',
+                                    padding: '0.2rem 0.75rem',
+                                    fontSize: '0.7rem',
+                                    fontWeight: 800,
+                                    textAlign: 'center'
                                 },
-                                children: (order.items || []).map((item, i)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                        style: {
-                                            display: 'flex',
-                                            justifyContent: 'space-between',
-                                            padding: '0.35rem 0',
-                                            borderBottom: '1px solid #2a2a2a',
-                                            fontSize: '0.95rem'
-                                        },
-                                        children: [
-                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
-                                                style: {
-                                                    color: '#e5e7eb',
-                                                    fontWeight: 500
-                                                },
-                                                children: item.name
-                                            }, void 0, false, {
-                                                fileName: "[project]/app/kitchen/page.tsx",
-                                                lineNumber: 368,
-                                                columnNumber: 23
-                                            }, this),
-                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
-                                                style: {
-                                                    fontWeight: 900,
-                                                    color: '#F9A826',
-                                                    fontSize: '1.05rem'
-                                                },
-                                                children: [
-                                                    "×",
-                                                    item.qty
-                                                ]
-                                            }, void 0, true, {
-                                                fileName: "[project]/app/kitchen/page.tsx",
-                                                lineNumber: 369,
-                                                columnNumber: 23
-                                            }, this)
-                                        ]
-                                    }, i, true, {
-                                        fileName: "[project]/app/kitchen/page.tsx",
-                                        lineNumber: 367,
-                                        columnNumber: 21
-                                    }, this))
+                                children: [
+                                    "🔥 URGENT — ",
+                                    mins,
+                                    "m waiting"
+                                ]
+                            }, void 0, true, {
+                                fileName: "[project]/app/kitchen/page.tsx",
+                                lineNumber: 226,
+                                columnNumber: 17
+                            }, this),
+                            isHighPriority && !isUrgent && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                style: {
+                                    background: '#f59e0b',
+                                    color: 'white',
+                                    padding: '0.2rem 0.75rem',
+                                    fontSize: '0.7rem',
+                                    fontWeight: 800,
+                                    textAlign: 'center'
+                                },
+                                children: [
+                                    "⚠️ 15+ MIN — ",
+                                    mins,
+                                    "m waiting"
+                                ]
+                            }, void 0, true, {
+                                fileName: "[project]/app/kitchen/page.tsx",
+                                lineNumber: 234,
+                                columnNumber: 17
+                            }, this),
+                            isLargeOrder && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                style: {
+                                    background: '#06b6d4',
+                                    color: 'white',
+                                    padding: '0.2rem 0.75rem',
+                                    fontSize: '0.7rem',
+                                    fontWeight: 800,
+                                    textAlign: 'center'
+                                },
+                                children: "📦 LARGE ORDER"
                             }, void 0, false, {
                                 fileName: "[project]/app/kitchen/page.tsx",
-                                lineNumber: 365,
+                                lineNumber: 244,
+                                columnNumber: 17
+                            }, this),
+                            isDelivery && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                style: {
+                                    background: '#2563eb',
+                                    color: 'white',
+                                    padding: '0.2rem 0.75rem',
+                                    fontSize: '0.7rem',
+                                    fontWeight: 800,
+                                    textAlign: 'center'
+                                },
+                                children: [
+                                    "🛵 DELIVERY — ",
+                                    order.deliveryAddress ? order.deliveryAddress.slice(0, 30) + (order.deliveryAddress.length > 30 ? '…' : '') : 'Address on file'
+                                ]
+                            }, void 0, true, {
+                                fileName: "[project]/app/kitchen/page.tsx",
+                                lineNumber: 253,
                                 columnNumber: 17
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                 style: {
-                                    padding: '0.7rem 1rem',
-                                    borderTop: '1px solid #2a2a2a',
-                                    display: 'flex',
-                                    gap: '0.5rem'
+                                    padding: '0.75rem 1rem'
                                 },
                                 children: [
-                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
-                                        onClick: ()=>togglePriority(order.id),
+                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                         style: {
-                                            background: isPriority ? '#7c3aed' : '#2a2a2a',
-                                            color: isPriority ? 'white' : '#aaa',
-                                            border: `1px solid ${isPriority ? '#7c3aed' : '#444'}`,
-                                            flex: '0 0 auto',
-                                            borderRadius: '8px',
-                                            fontWeight: 700,
-                                            cursor: 'pointer',
-                                            fontSize: '0.82rem',
-                                            fontFamily: 'Poppins,sans-serif',
-                                            padding: '0.45rem 0.9rem'
+                                            display: 'flex',
+                                            justifyContent: 'space-between',
+                                            alignItems: 'flex-start',
+                                            marginBottom: '0.5rem'
                                         },
-                                        children: isPriority ? '⭐ Priority' : '☆ Flag'
+                                        children: [
+                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                children: [
+                                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                        style: {
+                                                            fontWeight: 900,
+                                                            fontSize: '1rem',
+                                                            color: '#F9A826'
+                                                        },
+                                                        children: [
+                                                            "#",
+                                                            order.orderNum || order.id.slice(-4)
+                                                        ]
+                                                    }, void 0, true, {
+                                                        fileName: "[project]/app/kitchen/page.tsx",
+                                                        lineNumber: 264,
+                                                        columnNumber: 21
+                                                    }, this),
+                                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                        style: {
+                                                            fontSize: '0.72rem',
+                                                            color: '#888',
+                                                            marginTop: '0.1rem'
+                                                        },
+                                                        children: [
+                                                            order.customerName,
+                                                            order.tableId ? ` · Table ${order.tableId}` : ''
+                                                        ]
+                                                    }, void 0, true, {
+                                                        fileName: "[project]/app/kitchen/page.tsx",
+                                                        lineNumber: 267,
+                                                        columnNumber: 21
+                                                    }, this)
+                                                ]
+                                            }, void 0, true, {
+                                                fileName: "[project]/app/kitchen/page.tsx",
+                                                lineNumber: 263,
+                                                columnNumber: 19
+                                            }, this),
+                                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                style: {
+                                                    textAlign: 'right'
+                                                },
+                                                children: [
+                                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                        style: {
+                                                            fontSize: '0.7rem',
+                                                            fontWeight: 700,
+                                                            padding: '0.15rem 0.55rem',
+                                                            borderRadius: 10,
+                                                            background: (STATUS_COLOR[order.status] || '#333') + '30',
+                                                            color: STATUS_COLOR[order.status] || '#888'
+                                                        },
+                                                        children: STATUS_LABEL[order.status] || order.status
+                                                    }, void 0, false, {
+                                                        fileName: "[project]/app/kitchen/page.tsx",
+                                                        lineNumber: 272,
+                                                        columnNumber: 21
+                                                    }, this),
+                                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                        style: {
+                                                            fontSize: '0.75rem',
+                                                            marginTop: '0.2rem',
+                                                            fontWeight: 800,
+                                                            fontVariantNumeric: 'tabular-nums',
+                                                            color: isUrgent ? '#ef4444' : isHighPriority ? '#f59e0b' : '#888'
+                                                        },
+                                                        children: [
+                                                            "⏱ ",
+                                                            timerLabel
+                                                        ]
+                                                    }, void 0, true, {
+                                                        fileName: "[project]/app/kitchen/page.tsx",
+                                                        lineNumber: 275,
+                                                        columnNumber: 21
+                                                    }, this)
+                                                ]
+                                            }, void 0, true, {
+                                                fileName: "[project]/app/kitchen/page.tsx",
+                                                lineNumber: 271,
+                                                columnNumber: 19
+                                            }, this)
+                                        ]
+                                    }, void 0, true, {
+                                        fileName: "[project]/app/kitchen/page.tsx",
+                                        lineNumber: 262,
+                                        columnNumber: 17
+                                    }, this),
+                                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                        style: {
+                                            borderTop: '1px solid #2a2a2a',
+                                            paddingTop: '0.5rem',
+                                            marginBottom: '0.6rem'
+                                        },
+                                        children: (order.items || []).map((item, i)=>{
+                                            const itemStatus = item.itemStatus || 'queued';
+                                            const isItemPrepared = itemStatus === 'prepared';
+                                            return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                style: {
+                                                    marginBottom: '0.5rem'
+                                                },
+                                                children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                    style: {
+                                                        display: 'flex',
+                                                        justifyContent: 'space-between',
+                                                        alignItems: 'center',
+                                                        marginBottom: '0.25rem'
+                                                    },
+                                                    children: [
+                                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                            style: {
+                                                                display: 'flex',
+                                                                alignItems: 'center',
+                                                                gap: '0.4rem',
+                                                                flex: 1
+                                                            },
+                                                            children: [
+                                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                                                    style: {
+                                                                        fontWeight: 700,
+                                                                        fontSize: '0.82rem',
+                                                                        color: '#ccc'
+                                                                    },
+                                                                    children: item.name
+                                                                }, void 0, false, {
+                                                                    fileName: "[project]/app/kitchen/page.tsx",
+                                                                    lineNumber: 294,
+                                                                    columnNumber: 29
+                                                                }, this),
+                                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
+                                                                    style: {
+                                                                        color: '#F9A826',
+                                                                        fontWeight: 800,
+                                                                        fontSize: '0.75rem'
+                                                                    },
+                                                                    children: [
+                                                                        "×",
+                                                                        item.qty
+                                                                    ]
+                                                                }, void 0, true, {
+                                                                    fileName: "[project]/app/kitchen/page.tsx",
+                                                                    lineNumber: 295,
+                                                                    columnNumber: 29
+                                                                }, this)
+                                                            ]
+                                                        }, void 0, true, {
+                                                            fileName: "[project]/app/kitchen/page.tsx",
+                                                            lineNumber: 293,
+                                                            columnNumber: 27
+                                                        }, this),
+                                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                            style: {
+                                                                display: 'flex',
+                                                                gap: '0.3rem',
+                                                                alignItems: 'center'
+                                                            },
+                                                            children: [
+                                                                itemStatus === 'queued' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["Fragment"], {
+                                                                    children: [
+                                                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                                            style: {
+                                                                                fontSize: '0.65rem',
+                                                                                fontWeight: 700,
+                                                                                padding: '0.1rem 0.4rem',
+                                                                                borderRadius: 6,
+                                                                                background: '#66666640',
+                                                                                color: '#999'
+                                                                            },
+                                                                            children: "Queued"
+                                                                        }, void 0, false, {
+                                                                            fileName: "[project]/app/kitchen/page.tsx",
+                                                                            lineNumber: 300,
+                                                                            columnNumber: 33
+                                                                        }, this),
+                                                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                                                            onClick: ()=>advanceItem(order.id, i),
+                                                                            style: {
+                                                                                ...btn('#3b82f6'),
+                                                                                fontSize: '0.65rem',
+                                                                                padding: '0.25rem 0.5rem',
+                                                                                borderRadius: 6
+                                                                            },
+                                                                            children: "▶ Start"
+                                                                        }, void 0, false, {
+                                                                            fileName: "[project]/app/kitchen/page.tsx",
+                                                                            lineNumber: 303,
+                                                                            columnNumber: 33
+                                                                        }, this)
+                                                                    ]
+                                                                }, void 0, true),
+                                                                itemStatus === 'preparing' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["Fragment"], {
+                                                                    children: [
+                                                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                                            style: {
+                                                                                fontSize: '0.65rem',
+                                                                                fontWeight: 700,
+                                                                                padding: '0.1rem 0.4rem',
+                                                                                borderRadius: 6,
+                                                                                background: '#3b82f640',
+                                                                                color: '#60a5fa'
+                                                                            },
+                                                                            children: "Cooking"
+                                                                        }, void 0, false, {
+                                                                            fileName: "[project]/app/kitchen/page.tsx",
+                                                                            lineNumber: 313,
+                                                                            columnNumber: 33
+                                                                        }, this),
+                                                                        /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                                                            onClick: ()=>advanceItem(order.id, i),
+                                                                            style: {
+                                                                                ...btn('#10b981'),
+                                                                                fontSize: '0.65rem',
+                                                                                padding: '0.25rem 0.5rem',
+                                                                                borderRadius: 6
+                                                                            },
+                                                                            children: "✅ Done"
+                                                                        }, void 0, false, {
+                                                                            fileName: "[project]/app/kitchen/page.tsx",
+                                                                            lineNumber: 316,
+                                                                            columnNumber: 33
+                                                                        }, this)
+                                                                    ]
+                                                                }, void 0, true),
+                                                                itemStatus === 'prepared' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
+                                                                    style: {
+                                                                        fontSize: '0.65rem',
+                                                                        fontWeight: 700,
+                                                                        padding: '0.1rem 0.4rem',
+                                                                        borderRadius: 6,
+                                                                        background: '#8b5cf640',
+                                                                        color: '#a78bfa'
+                                                                    },
+                                                                    children: "Ready"
+                                                                }, void 0, false, {
+                                                                    fileName: "[project]/app/kitchen/page.tsx",
+                                                                    lineNumber: 325,
+                                                                    columnNumber: 31
+                                                                }, this)
+                                                            ]
+                                                        }, void 0, true, {
+                                                            fileName: "[project]/app/kitchen/page.tsx",
+                                                            lineNumber: 297,
+                                                            columnNumber: 27
+                                                        }, this)
+                                                    ]
+                                                }, void 0, true, {
+                                                    fileName: "[project]/app/kitchen/page.tsx",
+                                                    lineNumber: 292,
+                                                    columnNumber: 25
+                                                }, this)
+                                            }, i, false, {
+                                                fileName: "[project]/app/kitchen/page.tsx",
+                                                lineNumber: 291,
+                                                columnNumber: 23
+                                            }, this);
+                                        })
                                     }, void 0, false, {
                                         fileName: "[project]/app/kitchen/page.tsx",
-                                        lineNumber: 376,
+                                        lineNumber: 285,
+                                        columnNumber: 17
+                                    }, this),
+                                    nextAction && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
+                                        onClick: ()=>advanceOrder(order),
+                                        style: {
+                                            ...btn(nextAction.bg),
+                                            width: '100%',
+                                            padding: '0.55rem',
+                                            borderRadius: 10,
+                                            fontSize: '0.82rem'
+                                        },
+                                        children: nextAction.label
+                                    }, void 0, false, {
+                                        fileName: "[project]/app/kitchen/page.tsx",
+                                        lineNumber: 338,
                                         columnNumber: 19
                                     }, this),
-                                    !isFinalKitchenStep ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
-                                        onClick: ()=>advance(order.id, order.status),
-                                        disabled: isProcessing,
+                                    order.status === 'prepared' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                         style: {
-                                            background: isProcessing ? '#555' : order.status === 'pending' ? '#f59e0b' : '#16a34a',
-                                            color: 'white',
-                                            border: 'none',
-                                            borderRadius: '8px',
-                                            fontWeight: 700,
-                                            cursor: isProcessing ? 'not-allowed' : 'pointer',
-                                            fontSize: '0.82rem',
-                                            fontFamily: 'Poppins,sans-serif',
-                                            padding: '0.45rem 0.9rem',
-                                            flex: 1
+                                            background: '#8b5cf620',
+                                            border: '1px solid #8b5cf640',
+                                            borderRadius: 10,
+                                            padding: '0.45rem',
+                                            textAlign: 'center',
+                                            fontSize: '0.78rem',
+                                            color: '#a78bfa',
+                                            fontWeight: 700
                                         },
-                                        children: isProcessing ? '⏳ ...' : order.status === 'pending' ? '▶ Start Cooking' : '✅ Mark Ready'
+                                        children: "✅ Ready — Waiting for waiter"
                                     }, void 0, false, {
                                         fileName: "[project]/app/kitchen/page.tsx",
-                                        lineNumber: 392,
-                                        columnNumber: 21
-                                    }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$server$2f$route$2d$modules$2f$app$2d$page$2f$vendored$2f$ssr$2f$react$2d$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$ssr$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
-                                        style: {
-                                            flex: 1,
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            color: '#16a34a',
-                                            fontWeight: 700,
-                                            fontSize: '0.85rem'
-                                        },
-                                        children: "✅ Ready — waiting for waiter"
-                                    }, void 0, false, {
-                                        fileName: "[project]/app/kitchen/page.tsx",
-                                        lineNumber: 409,
-                                        columnNumber: 21
+                                        lineNumber: 346,
+                                        columnNumber: 19
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/kitchen/page.tsx",
-                                lineNumber: 375,
-                                columnNumber: 17
+                                lineNumber: 261,
+                                columnNumber: 15
                             }, this)
                         ]
                     }, order.id, true, {
                         fileName: "[project]/app/kitchen/page.tsx",
-                        lineNumber: 307,
-                        columnNumber: 15
+                        lineNumber: 203,
+                        columnNumber: 13
                     }, this);
                 })
             }, void 0, false, {
                 fileName: "[project]/app/kitchen/page.tsx",
-                lineNumber: 284,
-                columnNumber: 9
+                lineNumber: 178,
+                columnNumber: 7
             }, this)
         ]
     }, void 0, true, {
         fileName: "[project]/app/kitchen/page.tsx",
-        lineNumber: 199,
+        lineNumber: 116,
         columnNumber: 5
     }, this);
 }

@@ -26,6 +26,8 @@ __turbopack_context__.s([
     ()=>getStaffAccounts,
     "loginAdmin",
     ()=>loginAdmin,
+    "loginDelivery",
+    ()=>loginDelivery,
     "loginKitchen",
     ()=>loginKitchen,
     "loginManager",
@@ -56,7 +58,8 @@ const SESSION_KEY = {
     admin: 'fl_session_admin',
     kitchen: 'fl_session_kitchen',
     waiter: 'fl_session_waiter',
-    manager: 'fl_session_manager'
+    manager: 'fl_session_manager',
+    delivery: 'fl_session_delivery'
 };
 const KEYS = {
     kitchenPin: 'fl_kitchen_pin',
@@ -193,6 +196,18 @@ function loginManager(pin) {
     saveSession(s);
     return s;
 }
+function loginDelivery(name) {
+    const n = name.trim() || 'Delivery';
+    const s = {
+        role: 'delivery',
+        name: n,
+        username: n.toLowerCase().replace(/\s+/g, '_'),
+        loginAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString()
+    };
+    saveSession(s);
+    return s;
+}
 const SECURITY_QUESTIONS = [
     "What is the name of your first pet?",
     "What was the name of your first school?",
@@ -252,6 +267,8 @@ __turbopack_context__.s([
     ()=>applyDiscount,
     "applyTabDiscount",
     ()=>applyTabDiscount,
+    "buildWhatsappOrderUrl",
+    ()=>buildWhatsappOrderUrl,
     "cancelOrder",
     ()=>cancelOrder,
     "clearFraudAlerts",
@@ -262,24 +279,48 @@ __turbopack_context__.s([
     ()=>createSplitBill,
     "createTab",
     ()=>createTab,
+    "customerConfirmDelivery",
+    ()=>customerConfirmDelivery,
+    "emitBillRequestedEvent",
+    ()=>emitBillRequestedEvent,
     "exportOrdersCSV",
     ()=>exportOrdersCSV,
+    "findActiveDeviceSession",
+    ()=>findActiveDeviceSession,
+    "generateTrackingToken",
+    ()=>generateTrackingToken,
     "getActiveTabsForTable",
     ()=>getActiveTabsForTable,
+    "getAllOrderEvents",
+    ()=>getAllOrderEvents,
+    "getDeliveryQueue",
+    ()=>getDeliveryQueue,
+    "getDeviceRecords",
+    ()=>getDeviceRecords,
+    "getDevicesForTab",
+    ()=>getDevicesForTab,
     "getDisputeAlerts",
     ()=>getDisputeAlerts,
     "getEndOfDayReport",
     ()=>getEndOfDayReport,
+    "getEventsForOrder",
+    ()=>getEventsForOrder,
     "getFraudAlerts",
     ()=>getFraudAlerts,
     "getLastWaiterCallTime",
     ()=>getLastWaiterCallTime,
+    "getLatestEvent",
+    ()=>getLatestEvent,
     "getMenu",
     ()=>getMenu,
     "getNextOrderNumber",
     ()=>getNextOrderNumber,
+    "getOnlineOrderStats",
+    ()=>getOnlineOrderStats,
     "getOpenTabForCustomer",
     ()=>getOpenTabForCustomer,
+    "getOrCreateDeviceId",
+    ()=>getOrCreateDeviceId,
     "getOrders",
     ()=>getOrders,
     "getOrdersInPeriod",
@@ -306,18 +347,32 @@ __turbopack_context__.s([
     ()=>getTables,
     "getTabs",
     ()=>getTabs,
+    "getTrackingUrl",
+    ()=>getTrackingUrl,
     "getWaiterCalls",
     ()=>getWaiterCalls,
     "getWaiterStats",
     ()=>getWaiterStats,
+    "getWhatsappNumber",
+    ()=>getWhatsappNumber,
     "isSplitFullyPaid",
     ()=>isSplitFullyPaid,
+    "markOrderDelivered",
+    ()=>markOrderDelivered,
+    "markOrderPickedUp",
+    ()=>markOrderPickedUp,
     "markSplitEntryPaid",
     ()=>markSplitEntryPaid,
+    "registerDevice",
+    ()=>registerDevice,
+    "removeDeviceRecord",
+    ()=>removeDeviceRecord,
     "requestBill",
     ()=>requestBill,
     "resolveDispute",
     ()=>resolveDispute,
+    "saveDeviceRecords",
+    ()=>saveDeviceRecords,
     "saveDisputeAlerts",
     ()=>saveDisputeAlerts,
     "saveMenu",
@@ -334,6 +389,8 @@ __turbopack_context__.s([
     ()=>saveTabs,
     "saveWaiterCalls",
     ()=>saveWaiterCalls,
+    "saveWhatsappNumber",
+    ()=>saveWhatsappNumber,
     "syncTabTotal",
     ()=>syncTabTotal,
     "syncTableStatus",
@@ -342,6 +399,8 @@ __turbopack_context__.s([
     ()=>updateItemStatus,
     "updateOrderStatus",
     ()=>updateOrderStatus,
+    "verifyTrackingToken",
+    ()=>verifyTrackingToken,
     "voidOrder",
     ()=>voidOrder
 ]);
@@ -356,7 +415,10 @@ const KEYS = {
     fraudAlerts: 'fl_fraud_alerts',
     waiterCalls: 'fl_waiter_calls',
     disputes: 'fl_food_disputes',
-    splitBills: 'fl_split_bills'
+    splitBills: 'fl_split_bills',
+    devices: 'fl_device_records',
+    whatsapp: 'fl_whatsapp_number',
+    events: 'fl_order_events'
 };
 // ─── Storage helpers ──────────────────────────────────────────────────────────
 function ls_get(key, fallback) {
@@ -593,10 +655,30 @@ function getNextOrderNumber() {
 const getOrders = ()=>ls_get(KEYS.orders, []);
 const saveOrders = (o)=>ls_set(KEYS.orders, o);
 function addOrder(order) {
+    // Generate tracking token if missing (used by /track page)
+    if (!order.trackingToken) {
+        order = {
+            ...order,
+            trackingToken: generateTrackingToken()
+        };
+    }
     const orders = getOrders();
     orders.push(order);
     saveOrders(orders);
+    // Emit OrderPlaced event
+    _addOrderEvent(order.id, 'OrderPlaced', order.customerName || 'Customer', order.type === 'delivery' ? `Delivery to: ${order.deliveryAddress}` : order.type === 'pickup' ? 'Pickup order' : `Table ${order.tableId}`);
+    return order;
 }
+/** Map OrderStatus → OrderEventType for automatic event emission */ const STATUS_TO_EVENT = {
+    pending: 'KitchenAccepted',
+    preparing: 'Preparing',
+    prepared: 'Prepared',
+    served: 'Served',
+    out_for_delivery: 'OutForDelivery',
+    delivered: 'Delivered',
+    completed: 'Closed',
+    cancelled: 'Cancelled'
+};
 function updateOrderStatus(id, status, by = 'System', force = false) {
     const orders = getOrders();
     const idx = orders.findIndex((o)=>o.id === id);
@@ -631,6 +713,9 @@ function updateOrderStatus(id, status, by = 'System', force = false) {
         ]
     };
     saveOrders(orders);
+    // Co-emit matching OrderEvent
+    const evtType = STATUS_TO_EVENT[status];
+    if (evtType) _addOrderEvent(id, evtType, by);
     return true;
 }
 function cancelOrder(id, reason, by = 'System') {
@@ -652,6 +737,7 @@ function cancelOrder(id, reason, by = 'System') {
         ]
     };
     saveOrders(orders);
+    _addOrderEvent(id, 'Cancelled', by, reason);
     return true;
 }
 function voidOrder(id, reason, by = 'Manager') {
@@ -1189,6 +1275,219 @@ function getTableOccupancyStats() {
             totalRevenue: s.revenue,
             lastUsed: s.lastUsed
         })).sort((a, b)=>b.totalSessions - a.totalSessions);
+}
+function getOrCreateDeviceId() {
+    if ("TURBOPACK compile-time falsy", 0) //TURBOPACK unreachable
+    ;
+    let id = localStorage.getItem('fl_device_id');
+    if (!id) {
+        id = `DEV-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+        localStorage.setItem('fl_device_id', id);
+    }
+    return id;
+}
+function getDeviceRecords() {
+    return ls_get(KEYS.devices, []);
+}
+function saveDeviceRecords(records) {
+    ls_set(KEYS.devices, records);
+}
+function registerDevice(deviceId, tableId, tabId, customerName) {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const pruned = getDeviceRecords().filter((r)=>new Date(r.joinedAt).getTime() > cutoff && !(r.deviceId === deviceId && r.tableId === tableId));
+    const record = {
+        deviceId,
+        tableId,
+        tabId,
+        customerName,
+        joinedAt: new Date().toISOString()
+    };
+    pruned.push(record);
+    saveDeviceRecords(pruned);
+    return record;
+}
+function findActiveDeviceSession(deviceId, tableId) {
+    const records = getDeviceRecords();
+    const record = records.find((r)=>r.deviceId === deviceId && r.tableId === tableId);
+    if (!record) return null;
+    const tab = getTabs().find((t)=>t.id === record.tabId && [
+            'open',
+            'awaiting_payment'
+        ].includes(t.tabStatus));
+    if (!tab) return null;
+    return {
+        tab,
+        record
+    };
+}
+function removeDeviceRecord(deviceId, tableId) {
+    const records = getDeviceRecords().filter((r)=>!(r.deviceId === deviceId && r.tableId === tableId));
+    saveDeviceRecords(records);
+}
+function getDevicesForTab(tabId) {
+    return getDeviceRecords().filter((r)=>r.tabId === tabId);
+}
+function getWhatsappNumber() {
+    return ls_get(KEYS.whatsapp, '');
+}
+function saveWhatsappNumber(num) {
+    ls_set(KEYS.whatsapp, num.replace(/\D/g, '')); // store digits only
+}
+function getOnlineOrderStats() {
+    const orders = getOrders();
+    const todayStr = new Date().toDateString();
+    const online = orders.filter((o)=>o.source === 'online');
+    const todayOnline = online.filter((o)=>new Date(o.timestamp).toDateString() === todayStr);
+    return {
+        todayTotal: todayOnline.length,
+        todayPickup: todayOnline.filter((o)=>o.type === 'pickup').length,
+        todayDelivery: todayOnline.filter((o)=>o.type === 'delivery').length,
+        todayRevenue: todayOnline.filter((o)=>o.status !== 'cancelled').reduce((s, o)=>s + (o.total || 0), 0),
+        pendingOnline: online.filter((o)=>![
+                'completed',
+                'cancelled',
+                'void'
+            ].includes(o.status)).length,
+        allTimeTotal: online.length,
+        allTimePickup: online.filter((o)=>o.type === 'pickup').length,
+        allTimeDelivery: online.filter((o)=>o.type === 'delivery').length
+    };
+}
+function buildWhatsappOrderUrl(order, restaurantNumber) {
+    const lines = [
+        `🍽️ *New Online Order — Foodie Lover*`,
+        `📋 Order ID: ${order.id}`,
+        `👤 Name: ${order.customerName}`,
+        `📱 Phone: ${order.phone || '—'}`,
+        `📦 Type: ${order.type === 'delivery' ? '🚗 Delivery' : '🏪 Pickup'}`,
+        order.deliveryAddress ? `📍 Address: ${order.deliveryAddress}` : '',
+        `💳 Payment: ${order.payment?.toUpperCase() || 'COD'}`,
+        ``,
+        `*Items:*`,
+        ...(order.items || []).map((i)=>`  • ${i.name} × ${i.qty}  ₹${i.subtotal}`),
+        ``,
+        `💰 *Total: ₹${order.total}*`,
+        `🕐 Time: ${new Date(order.timestamp).toLocaleTimeString('en-IN')}`
+    ].filter((l)=>l !== null);
+    const msg = encodeURIComponent(lines.join('\n'));
+    const num = restaurantNumber.replace(/\D/g, '');
+    return num ? `https://wa.me/${num}?text=${msg}` : `https://wa.me/?text=${msg}`;
+}
+// ─── Private helper (called internally — not exported to keep event writes consistent) ──
+function _addOrderEvent(orderId, eventType, actor, note) {
+    const ev = {
+        eventId: `EV-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+        orderId,
+        eventType,
+        actor,
+        note,
+        createdAt: new Date().toISOString()
+    };
+    const events = ls_get(KEYS.events, []);
+    events.push(ev);
+    ls_set(KEYS.events, events);
+    return ev;
+}
+function getAllOrderEvents() {
+    return ls_get(KEYS.events, []);
+}
+function getEventsForOrder(orderId) {
+    return getAllOrderEvents().filter((e)=>e.orderId === orderId).sort((a, b)=>new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+}
+function getLatestEvent(orderId) {
+    const events = getEventsForOrder(orderId);
+    return events.length ? events[events.length - 1] : null;
+}
+function generateTrackingToken() {
+    return Math.random().toString(36).slice(2, 6).toUpperCase() + Math.random().toString(36).slice(2, 6).toUpperCase();
+}
+function verifyTrackingToken(orderId, token) {
+    const order = getOrders().find((o)=>o.id === orderId);
+    if (!order) return null;
+    if (order.trackingToken !== token) return null;
+    return order;
+}
+function getDeliveryQueue() {
+    return getOrders().filter((o)=>o.type === 'delivery' && [
+            'prepared',
+            'out_for_delivery',
+            'delivered'
+        ].includes(o.status)).sort((a, b)=>new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+}
+function markOrderPickedUp(orderId, deliveryPerson) {
+    const orders = getOrders();
+    const idx = orders.findIndex((o)=>o.id === orderId);
+    if (idx === -1 || orders[idx].status !== 'prepared') return false;
+    orders[idx] = {
+        ...orders[idx],
+        status: 'out_for_delivery',
+        deliveryPerson,
+        timeline: [
+            ...orders[idx].timeline || [],
+            {
+                status: 'out_for_delivery',
+                by: deliveryPerson,
+                at: new Date().toISOString(),
+                note: 'Picked up for delivery'
+            }
+        ]
+    };
+    saveOrders(orders);
+    _addOrderEvent(orderId, 'OrderPickedUp', deliveryPerson, 'Picked up from kitchen');
+    _addOrderEvent(orderId, 'OutForDelivery', deliveryPerson, 'On the way to customer');
+    return true;
+}
+function markOrderDelivered(orderId, deliveryPerson) {
+    const orders = getOrders();
+    const idx = orders.findIndex((o)=>o.id === orderId);
+    if (idx === -1 || orders[idx].status !== 'out_for_delivery') return false;
+    orders[idx] = {
+        ...orders[idx],
+        status: 'delivered',
+        timeline: [
+            ...orders[idx].timeline || [],
+            {
+                status: 'delivered',
+                by: deliveryPerson,
+                at: new Date().toISOString()
+            }
+        ]
+    };
+    saveOrders(orders);
+    _addOrderEvent(orderId, 'Delivered', deliveryPerson, 'Delivered to customer address');
+    return true;
+}
+function customerConfirmDelivery(orderId, token) {
+    const order = verifyTrackingToken(orderId, token);
+    if (!order || order.status !== 'delivered') return false;
+    const orders = getOrders();
+    const idx = orders.findIndex((o)=>o.id === orderId);
+    if (idx === -1) return false;
+    orders[idx] = {
+        ...orders[idx],
+        status: 'completed',
+        timeline: [
+            ...orders[idx].timeline || [],
+            {
+                status: 'completed',
+                by: order.customerName,
+                at: new Date().toISOString(),
+                note: 'Confirmed by customer'
+            }
+        ]
+    };
+    saveOrders(orders);
+    _addOrderEvent(orderId, 'CustomerConfirmed', order.customerName, 'Customer confirmed delivery');
+    _addOrderEvent(orderId, 'Closed', order.customerName);
+    return true;
+}
+function emitBillRequestedEvent(tabId, actor) {
+    // BillRequested is a tab-level event, we store it under the tab's first orderId or a synthetic ID
+    _addOrderEvent(`TAB-${tabId}`, 'BillRequested', actor);
+}
+function getTrackingUrl(order) {
+    if (!order.trackingToken) return '';
+    return `/track?id=${encodeURIComponent(order.id)}&token=${encodeURIComponent(order.trackingToken)}`;
 }
 if (typeof globalThis.$RefreshHelpers$ === 'object' && globalThis.$RefreshHelpers !== null) {
     __turbopack_context__.k.registerExports(__turbopack_context__.m, globalThis.$RefreshHelpers$);

@@ -1,4 +1,41 @@
-[00:00:00.841] Server  LOG     ✓ Ready in 623ms
-[00:00:01.376] Server  WARN    ⚠ Cross origin request detected from monozygotic-lucille-chirurgical.ngrok-free.dev to /_next/* resource. In a future major version of Next.js, you will need to explicitly configure "allowedDevOrigins" in next.config to allow this.
-Read more: https://nextjs.org/docs/app/api-reference/config/next-config-js/allowedDevOrigins
-[00:00:03.309] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:00:02.600] Server  LOG     ✓ Ready in 2s
+[00:00:08.600] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:00:15.586] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:03:31.201] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:03:34.334] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:05:54.183] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:06:26.142] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:07:02.948] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:09:41.292] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:16:15.176] Server  LOG     ✓ Compiled in 553ms
+[00:16:42.828] Server  LOG     ✓ Compiled in 758ms
+[00:16:54.222] Server  LOG     ✓ Compiled in 309ms
+[00:17:12.166] Server  LOG     ✓ Compiled in 641ms
+[00:17:23.414] Server  LOG     ✓ Compiled in 599ms
+[00:21:13.541] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:21:23.331] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:21:33.321] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:21:51.308] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:22:40.465] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:22:41.095] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:46:18.801] Server  LOG     ✓ Compiled in 519ms
+[00:46:30.466] Server  LOG     ✓ Compiled in 786ms
+[00:46:43.367] Server  LOG     ✓ Compiled in 802ms
+[00:46:53.706] Server  LOG     ✓ Compiled in 539ms
+[00:47:37.589] Server  LOG     ✓ Compiled in 846ms
+[00:48:10.434] Server  LOG     ✓ Compiled in 352ms
+[00:48:20.007] Server  LOG     ✓ Compiled in 393ms
+[00:51:52.072] Server  LOG     ✓ Compiled in 146ms
+[00:51:58.249] Server  LOG     ✓ Compiled in 160ms
+[00:52:14.075] Server  LOG     ✓ Compiled in 218ms
+[00:52:30.080] Server  LOG     ✓ Compiled in 110ms
+[00:52:40.107] Server  LOG     ✓ Compiled in 238ms
+[00:52:47.828] Server  LOG     ✓ Compiled in 358ms
+[00:52:56.151] Server  LOG     ✓ Compiled in 182ms
+[00:53:04.198] Server  LOG     ✓ Compiled in 804ms
+[00:53:19.474] Server  LOG     ✓ Compiled in 150ms
+[00:53:30.396] Server  LOG     ✓ Compiled in 375ms
+[00:56:27.724] Server  LOG     ✓ Compiled in 988ms
+[00:56:33.920] Server  LOG     ✓ Compiled in 264ms
+[00:56:41.285] Server  LOG     ✓ Compiled in 176ms
+[00:56:49.357] Server  LOG     ✓ Compiled in 807ms

@@ -23,6 +23,8 @@ __turbopack_context__.s([
     ()=>applyDiscount,
     "applyTabDiscount",
     ()=>applyTabDiscount,
+    "buildWhatsappOrderUrl",
+    ()=>buildWhatsappOrderUrl,
     "cancelOrder",
     ()=>cancelOrder,
     "clearFraudAlerts",
@@ -55,6 +57,8 @@ __turbopack_context__.s([
     ()=>getMenu,
     "getNextOrderNumber",
     ()=>getNextOrderNumber,
+    "getOnlineOrderStats",
+    ()=>getOnlineOrderStats,
     "getOpenTabForCustomer",
     ()=>getOpenTabForCustomer,
     "getOrCreateDeviceId",
@@ -89,6 +93,8 @@ __turbopack_context__.s([
     ()=>getWaiterCalls,
     "getWaiterStats",
     ()=>getWaiterStats,
+    "getWhatsappNumber",
+    ()=>getWhatsappNumber,
     "isSplitFullyPaid",
     ()=>isSplitFullyPaid,
     "markSplitEntryPaid",
@@ -119,6 +125,8 @@ __turbopack_context__.s([
     ()=>saveTabs,
     "saveWaiterCalls",
     ()=>saveWaiterCalls,
+    "saveWhatsappNumber",
+    ()=>saveWhatsappNumber,
     "syncTabTotal",
     ()=>syncTabTotal,
     "syncTableStatus",
@@ -142,7 +150,8 @@ const KEYS = {
     waiterCalls: 'fl_waiter_calls',
     disputes: 'fl_food_disputes',
     splitBills: 'fl_split_bills',
-    devices: 'fl_device_records'
+    devices: 'fl_device_records',
+    whatsapp: 'fl_whatsapp_number'
 };
 // ─── Storage helpers ──────────────────────────────────────────────────────────
 function ls_get(key, fallback) {
@@ -1027,6 +1036,52 @@ function removeDeviceRecord(deviceId, tableId) {
 function getDevicesForTab(tabId) {
     return getDeviceRecords().filter((r)=>r.tabId === tabId);
 }
+function getWhatsappNumber() {
+    return ls_get(KEYS.whatsapp, '');
+}
+function saveWhatsappNumber(num) {
+    ls_set(KEYS.whatsapp, num.replace(/\D/g, '')); // store digits only
+}
+function getOnlineOrderStats() {
+    const orders = getOrders();
+    const todayStr = new Date().toDateString();
+    const online = orders.filter((o)=>o.source === 'online');
+    const todayOnline = online.filter((o)=>new Date(o.timestamp).toDateString() === todayStr);
+    return {
+        todayTotal: todayOnline.length,
+        todayPickup: todayOnline.filter((o)=>o.type === 'pickup').length,
+        todayDelivery: todayOnline.filter((o)=>o.type === 'delivery').length,
+        todayRevenue: todayOnline.filter((o)=>o.status !== 'cancelled').reduce((s, o)=>s + (o.total || 0), 0),
+        pendingOnline: online.filter((o)=>![
+                'completed',
+                'cancelled',
+                'void'
+            ].includes(o.status)).length,
+        allTimeTotal: online.length,
+        allTimePickup: online.filter((o)=>o.type === 'pickup').length,
+        allTimeDelivery: online.filter((o)=>o.type === 'delivery').length
+    };
+}
+function buildWhatsappOrderUrl(order, restaurantNumber) {
+    const lines = [
+        `🍽️ *New Online Order — Foodie Lover*`,
+        `📋 Order ID: ${order.id}`,
+        `👤 Name: ${order.customerName}`,
+        `📱 Phone: ${order.phone || '—'}`,
+        `📦 Type: ${order.type === 'delivery' ? '🚗 Delivery' : '🏪 Pickup'}`,
+        order.deliveryAddress ? `📍 Address: ${order.deliveryAddress}` : '',
+        `💳 Payment: ${order.payment?.toUpperCase() || 'COD'}`,
+        ``,
+        `*Items:*`,
+        ...(order.items || []).map((i)=>`  • ${i.name} × ${i.qty}  ₹${i.subtotal}`),
+        ``,
+        `💰 *Total: ₹${order.total}*`,
+        `🕐 Time: ${new Date(order.timestamp).toLocaleTimeString('en-IN')}`
+    ].filter((l)=>l !== null);
+    const msg = encodeURIComponent(lines.join('\n'));
+    const num = restaurantNumber.replace(/\D/g, '');
+    return num ? `https://wa.me/${num}?text=${msg}` : `https://wa.me/?text=${msg}`;
+}
 if (typeof globalThis.$RefreshHelpers$ === 'object' && globalThis.$RefreshHelpers !== null) {
     __turbopack_context__.k.registerExports(__turbopack_context__.m, globalThis.$RefreshHelpers$);
 }
@@ -1160,9 +1215,11 @@ function OnlineOrderPage() {
                 }));
             const order = {
                 id,
-                type: 'pickup',
+                source: 'online',
+                type: form.type,
                 customerName: form.name.trim(),
                 phone: form.phone.trim(),
+                deliveryAddress: form.type === 'delivery' ? form.address.trim() : undefined,
                 items,
                 subtotal: cartTotal,
                 discount: 0,
@@ -1174,11 +1231,10 @@ function OnlineOrderPage() {
                     {
                         status: 'pending',
                         at: ts,
-                        note: form.type === 'delivery' ? `Delivery: ${form.address}` : 'Pickup'
+                        note: form.type === 'delivery' ? `Delivery to: ${form.address}` : 'Pickup'
                     }
                 ],
-                timestamp: ts,
-                staffName: form.type === 'delivery' ? `Delivery: ${form.address}` : 'Pickup'
+                timestamp: ts
             };
             (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["addOrder"])(order);
             setLastOrderId(id);
@@ -1192,6 +1248,13 @@ function OnlineOrderPage() {
                 address: '',
                 payment: 'cod'
             });
+            // ── WhatsApp Notification ──────────────────────────────────────────────
+            // Open wa.me link so customer can send order details to the restaurant.
+            // getWhatsappNumber() returns the number set by admin (empty string if not set).
+            const waUrl = (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["buildWhatsappOrderUrl"])(order, (0, __TURBOPACK__imported__module__$5b$project$5d2f$lib$2f$storage$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["getWhatsappNumber"])());
+            setTimeout(()=>{
+                window.open(waUrl, '_blank', 'noopener');
+            }, 400); // slight delay so order-placed banner appears first
         } finally{
             submittingRef.current = false;
             setIsSubmitting(false);
@@ -1228,7 +1291,7 @@ function OnlineOrderPage() {
                                 children: "🍽️ Foodie Lover"
                             }, void 0, false, {
                                 fileName: "[project]/app/online/page.tsx",
-                                lineNumber: 125,
+                                lineNumber: 137,
                                 columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1239,13 +1302,13 @@ function OnlineOrderPage() {
                                 children: "📦 Online Ordering — Pickup & Delivery"
                             }, void 0, false, {
                                 fileName: "[project]/app/online/page.tsx",
-                                lineNumber: 126,
+                                lineNumber: 138,
                                 columnNumber: 11
                             }, this)
                         ]
                     }, void 0, true, {
                         fileName: "[project]/app/online/page.tsx",
-                        lineNumber: 124,
+                        lineNumber: 136,
                         columnNumber: 9
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1281,19 +1344,19 @@ function OnlineOrderPage() {
                                 children: cartCount
                             }, void 0, false, {
                                 fileName: "[project]/app/online/page.tsx",
-                                lineNumber: 134,
+                                lineNumber: 146,
                                 columnNumber: 13
                             }, this)
                         ]
                     }, void 0, true, {
                         fileName: "[project]/app/online/page.tsx",
-                        lineNumber: 128,
+                        lineNumber: 140,
                         columnNumber: 9
                     }, this)
                 ]
             }, void 0, true, {
                 fileName: "[project]/app/online/page.tsx",
-                lineNumber: 123,
+                lineNumber: 135,
                 columnNumber: 7
             }, this),
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1312,27 +1375,27 @@ function OnlineOrderPage() {
                         children: "🚗 Free delivery (local area)"
                     }, void 0, false, {
                         fileName: "[project]/app/online/page.tsx",
-                        lineNumber: 143,
+                        lineNumber: 155,
                         columnNumber: 9
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
                         children: "⏱ Pickup ready in 20–30 min"
                     }, void 0, false, {
                         fileName: "[project]/app/online/page.tsx",
-                        lineNumber: 144,
+                        lineNumber: 156,
                         columnNumber: 9
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
                         children: "📱 Track your order in real time"
                     }, void 0, false, {
                         fileName: "[project]/app/online/page.tsx",
-                        lineNumber: 145,
+                        lineNumber: 157,
                         columnNumber: 9
                     }, this)
                 ]
             }, void 0, true, {
                 fileName: "[project]/app/online/page.tsx",
-                lineNumber: 142,
+                lineNumber: 154,
                 columnNumber: 7
             }, this),
             orderPlaced && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1350,7 +1413,7 @@ function OnlineOrderPage() {
                         children: lastOrderId
                     }, void 0, false, {
                         fileName: "[project]/app/online/page.tsx",
-                        lineNumber: 151,
+                        lineNumber: 163,
                         columnNumber: 31
                     }, this),
                     " — We'll prepare it right away.",
@@ -1369,13 +1432,13 @@ function OnlineOrderPage() {
                         children: "×"
                     }, void 0, false, {
                         fileName: "[project]/app/online/page.tsx",
-                        lineNumber: 152,
+                        lineNumber: 164,
                         columnNumber: 11
                     }, this)
                 ]
             }, void 0, true, {
                 fileName: "[project]/app/online/page.tsx",
-                lineNumber: 150,
+                lineNumber: 162,
                 columnNumber: 9
             }, this),
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1403,12 +1466,12 @@ function OnlineOrderPage() {
                         children: cat
                     }, cat, false, {
                         fileName: "[project]/app/online/page.tsx",
-                        lineNumber: 159,
+                        lineNumber: 171,
                         columnNumber: 11
                     }, this))
             }, void 0, false, {
                 fileName: "[project]/app/online/page.tsx",
-                lineNumber: 157,
+                lineNumber: 169,
                 columnNumber: 7
             }, this),
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1440,7 +1503,7 @@ function OnlineOrderPage() {
                                 }
                             }, void 0, false, {
                                 fileName: "[project]/app/online/page.tsx",
-                                lineNumber: 179,
+                                lineNumber: 191,
                                 columnNumber: 28
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1465,7 +1528,7 @@ function OnlineOrderPage() {
                                                 children: item.name
                                             }, void 0, false, {
                                                 fileName: "[project]/app/online/page.tsx",
-                                                lineNumber: 182,
+                                                lineNumber: 194,
                                                 columnNumber: 19
                                             }, this),
                                             item.badge && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -1482,13 +1545,13 @@ function OnlineOrderPage() {
                                                 children: BADGE_LABELS[item.badge] || item.badge
                                             }, void 0, false, {
                                                 fileName: "[project]/app/online/page.tsx",
-                                                lineNumber: 184,
+                                                lineNumber: 196,
                                                 columnNumber: 21
                                             }, this)
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/app/online/page.tsx",
-                                        lineNumber: 181,
+                                        lineNumber: 193,
                                         columnNumber: 17
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1501,7 +1564,7 @@ function OnlineOrderPage() {
                                         children: item.desc
                                     }, void 0, false, {
                                         fileName: "[project]/app/online/page.tsx",
-                                        lineNumber: 189,
+                                        lineNumber: 201,
                                         columnNumber: 17
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1523,7 +1586,7 @@ function OnlineOrderPage() {
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/online/page.tsx",
-                                                lineNumber: 191,
+                                                lineNumber: 203,
                                                 columnNumber: 19
                                             }, this),
                                             inCart ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1552,7 +1615,7 @@ function OnlineOrderPage() {
                                                         children: "−"
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/online/page.tsx",
-                                                        lineNumber: 194,
+                                                        lineNumber: 206,
                                                         columnNumber: 23
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -1564,7 +1627,7 @@ function OnlineOrderPage() {
                                                         children: inCart.qty
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/online/page.tsx",
-                                                        lineNumber: 195,
+                                                        lineNumber: 207,
                                                         columnNumber: 23
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1587,13 +1650,13 @@ function OnlineOrderPage() {
                                                         children: "+"
                                                     }, void 0, false, {
                                                         fileName: "[project]/app/online/page.tsx",
-                                                        lineNumber: 196,
+                                                        lineNumber: 208,
                                                         columnNumber: 23
                                                     }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/app/online/page.tsx",
-                                                lineNumber: 193,
+                                                lineNumber: 205,
                                                 columnNumber: 21
                                             }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
                                                 onClick: ()=>addToCart(item),
@@ -1611,31 +1674,31 @@ function OnlineOrderPage() {
                                                 children: "+ Add"
                                             }, void 0, false, {
                                                 fileName: "[project]/app/online/page.tsx",
-                                                lineNumber: 199,
+                                                lineNumber: 211,
                                                 columnNumber: 21
                                             }, this)
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/app/online/page.tsx",
-                                        lineNumber: 190,
+                                        lineNumber: 202,
                                         columnNumber: 17
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/app/online/page.tsx",
-                                lineNumber: 180,
+                                lineNumber: 192,
                                 columnNumber: 15
                             }, this)
                         ]
                     }, item.id, true, {
                         fileName: "[project]/app/online/page.tsx",
-                        lineNumber: 178,
+                        lineNumber: 190,
                         columnNumber: 13
                     }, this);
                 })
             }, void 0, false, {
                 fileName: "[project]/app/online/page.tsx",
-                lineNumber: 173,
+                lineNumber: 185,
                 columnNumber: 7
             }, this),
             cartOpen && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1675,7 +1738,7 @@ function OnlineOrderPage() {
                                     children: "🛒 Your Cart"
                                 }, void 0, false, {
                                     fileName: "[project]/app/online/page.tsx",
-                                    lineNumber: 213,
+                                    lineNumber: 225,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1690,13 +1753,13 @@ function OnlineOrderPage() {
                                     children: "×"
                                 }, void 0, false, {
                                     fileName: "[project]/app/online/page.tsx",
-                                    lineNumber: 214,
+                                    lineNumber: 226,
                                     columnNumber: 15
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/online/page.tsx",
-                            lineNumber: 212,
+                            lineNumber: 224,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1714,7 +1777,7 @@ function OnlineOrderPage() {
                                 children: "Your cart is empty"
                             }, void 0, false, {
                                 fileName: "[project]/app/online/page.tsx",
-                                lineNumber: 218,
+                                lineNumber: 230,
                                 columnNumber: 19
                             }, this) : cart.map((c)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                     style: {
@@ -1735,7 +1798,7 @@ function OnlineOrderPage() {
                                                     children: c.item.name
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/online/page.tsx",
-                                                    lineNumber: 222,
+                                                    lineNumber: 234,
                                                     columnNumber: 23
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1756,19 +1819,19 @@ function OnlineOrderPage() {
                                                             ]
                                                         }, void 0, true, {
                                                             fileName: "[project]/app/online/page.tsx",
-                                                            lineNumber: 223,
+                                                            lineNumber: 235,
                                                             columnNumber: 103
                                                         }, this)
                                                     ]
                                                 }, void 0, true, {
                                                     fileName: "[project]/app/online/page.tsx",
-                                                    lineNumber: 223,
+                                                    lineNumber: 235,
                                                     columnNumber: 23
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/online/page.tsx",
-                                            lineNumber: 221,
+                                            lineNumber: 233,
                                             columnNumber: 21
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1793,7 +1856,7 @@ function OnlineOrderPage() {
                                                     children: "−"
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/online/page.tsx",
-                                                    lineNumber: 226,
+                                                    lineNumber: 238,
                                                     columnNumber: 23
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -1805,7 +1868,7 @@ function OnlineOrderPage() {
                                                     children: c.qty
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/online/page.tsx",
-                                                    lineNumber: 227,
+                                                    lineNumber: 239,
                                                     columnNumber: 23
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1824,24 +1887,24 @@ function OnlineOrderPage() {
                                                     children: "+"
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/online/page.tsx",
-                                                    lineNumber: 228,
+                                                    lineNumber: 240,
                                                     columnNumber: 23
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/online/page.tsx",
-                                            lineNumber: 225,
+                                            lineNumber: 237,
                                             columnNumber: 21
                                         }, this)
                                     ]
                                 }, c.item.id, true, {
                                     fileName: "[project]/app/online/page.tsx",
-                                    lineNumber: 220,
+                                    lineNumber: 232,
                                     columnNumber: 19
                                 }, this))
                         }, void 0, false, {
                             fileName: "[project]/app/online/page.tsx",
-                            lineNumber: 216,
+                            lineNumber: 228,
                             columnNumber: 13
                         }, this),
                         cart.length > 0 && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1864,7 +1927,7 @@ function OnlineOrderPage() {
                                             children: "Total"
                                         }, void 0, false, {
                                             fileName: "[project]/app/online/page.tsx",
-                                            lineNumber: 237,
+                                            lineNumber: 249,
                                             columnNumber: 19
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -1877,13 +1940,13 @@ function OnlineOrderPage() {
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/online/page.tsx",
-                                            lineNumber: 237,
+                                            lineNumber: 249,
                                             columnNumber: 37
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/online/page.tsx",
-                                    lineNumber: 236,
+                                    lineNumber: 248,
                                     columnNumber: 17
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1906,24 +1969,24 @@ function OnlineOrderPage() {
                                     children: "Proceed to Checkout →"
                                 }, void 0, false, {
                                     fileName: "[project]/app/online/page.tsx",
-                                    lineNumber: 239,
+                                    lineNumber: 251,
                                     columnNumber: 17
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/online/page.tsx",
-                            lineNumber: 235,
+                            lineNumber: 247,
                             columnNumber: 15
                         }, this)
                     ]
                 }, void 0, true, {
                     fileName: "[project]/app/online/page.tsx",
-                    lineNumber: 211,
+                    lineNumber: 223,
                     columnNumber: 11
                 }, this)
             }, void 0, false, {
                 fileName: "[project]/app/online/page.tsx",
-                lineNumber: 210,
+                lineNumber: 222,
                 columnNumber: 9
             }, this),
             showCheckout && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1961,7 +2024,7 @@ function OnlineOrderPage() {
                                     children: "📦 Checkout"
                                 }, void 0, false, {
                                     fileName: "[project]/app/online/page.tsx",
-                                    lineNumber: 253,
+                                    lineNumber: 265,
                                     columnNumber: 15
                                 }, this),
                                 !isSubmitting && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1976,13 +2039,13 @@ function OnlineOrderPage() {
                                     children: "×"
                                 }, void 0, false, {
                                     fileName: "[project]/app/online/page.tsx",
-                                    lineNumber: 255,
+                                    lineNumber: 267,
                                     columnNumber: 17
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/online/page.tsx",
-                            lineNumber: 252,
+                            lineNumber: 264,
                             columnNumber: 13
                         }, this),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2006,7 +2069,7 @@ function OnlineOrderPage() {
                                             children: "Your Name *"
                                         }, void 0, false, {
                                             fileName: "[project]/app/online/page.tsx",
-                                            lineNumber: 260,
+                                            lineNumber: 272,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -2027,13 +2090,13 @@ function OnlineOrderPage() {
                                             }
                                         }, void 0, false, {
                                             fileName: "[project]/app/online/page.tsx",
-                                            lineNumber: 261,
+                                            lineNumber: 273,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/online/page.tsx",
-                                    lineNumber: 259,
+                                    lineNumber: 271,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2052,7 +2115,7 @@ function OnlineOrderPage() {
                                             children: "Phone Number *"
                                         }, void 0, false, {
                                             fileName: "[project]/app/online/page.tsx",
-                                            lineNumber: 265,
+                                            lineNumber: 277,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -2074,13 +2137,13 @@ function OnlineOrderPage() {
                                             }
                                         }, void 0, false, {
                                             fileName: "[project]/app/online/page.tsx",
-                                            lineNumber: 266,
+                                            lineNumber: 278,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/online/page.tsx",
-                                    lineNumber: 264,
+                                    lineNumber: 276,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2099,7 +2162,7 @@ function OnlineOrderPage() {
                                             children: "Order Type"
                                         }, void 0, false, {
                                             fileName: "[project]/app/online/page.tsx",
-                                            lineNumber: 270,
+                                            lineNumber: 282,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2135,18 +2198,18 @@ function OnlineOrderPage() {
                                                     children: t.l
                                                 }, t.k, false, {
                                                     fileName: "[project]/app/online/page.tsx",
-                                                    lineNumber: 276,
+                                                    lineNumber: 288,
                                                     columnNumber: 21
                                                 }, this))
                                         }, void 0, false, {
                                             fileName: "[project]/app/online/page.tsx",
-                                            lineNumber: 271,
+                                            lineNumber: 283,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/online/page.tsx",
-                                    lineNumber: 269,
+                                    lineNumber: 281,
                                     columnNumber: 15
                                 }, this),
                                 form.type === 'delivery' && /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2165,7 +2228,7 @@ function OnlineOrderPage() {
                                             children: "Delivery Address *"
                                         }, void 0, false, {
                                             fileName: "[project]/app/online/page.tsx",
-                                            lineNumber: 291,
+                                            lineNumber: 303,
                                             columnNumber: 19
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("textarea", {
@@ -2188,13 +2251,13 @@ function OnlineOrderPage() {
                                             }
                                         }, void 0, false, {
                                             fileName: "[project]/app/online/page.tsx",
-                                            lineNumber: 292,
+                                            lineNumber: 304,
                                             columnNumber: 19
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/online/page.tsx",
-                                    lineNumber: 290,
+                                    lineNumber: 302,
                                     columnNumber: 17
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2213,7 +2276,7 @@ function OnlineOrderPage() {
                                             children: "Payment"
                                         }, void 0, false, {
                                             fileName: "[project]/app/online/page.tsx",
-                                            lineNumber: 297,
+                                            lineNumber: 309,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("select", {
@@ -2237,7 +2300,7 @@ function OnlineOrderPage() {
                                                     children: "Cash on Delivery/Pickup"
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/online/page.tsx",
-                                                    lineNumber: 299,
+                                                    lineNumber: 311,
                                                     columnNumber: 19
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("option", {
@@ -2245,7 +2308,7 @@ function OnlineOrderPage() {
                                                     children: "Google Pay"
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/online/page.tsx",
-                                                    lineNumber: 300,
+                                                    lineNumber: 312,
                                                     columnNumber: 19
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("option", {
@@ -2253,7 +2316,7 @@ function OnlineOrderPage() {
                                                     children: "PhonePe"
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/online/page.tsx",
-                                                    lineNumber: 301,
+                                                    lineNumber: 313,
                                                     columnNumber: 19
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("option", {
@@ -2261,7 +2324,7 @@ function OnlineOrderPage() {
                                                     children: "UPI"
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/online/page.tsx",
-                                                    lineNumber: 302,
+                                                    lineNumber: 314,
                                                     columnNumber: 19
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("option", {
@@ -2269,19 +2332,19 @@ function OnlineOrderPage() {
                                                     children: "Card"
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/online/page.tsx",
-                                                    lineNumber: 303,
+                                                    lineNumber: 315,
                                                     columnNumber: 19
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/online/page.tsx",
-                                            lineNumber: 298,
+                                            lineNumber: 310,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/online/page.tsx",
-                                    lineNumber: 296,
+                                    lineNumber: 308,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2308,7 +2371,7 @@ function OnlineOrderPage() {
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/app/online/page.tsx",
-                                                        lineNumber: 311,
+                                                        lineNumber: 323,
                                                         columnNumber: 21
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -2318,13 +2381,13 @@ function OnlineOrderPage() {
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/app/online/page.tsx",
-                                                        lineNumber: 311,
+                                                        lineNumber: 323,
                                                         columnNumber: 57
                                                     }, this)
                                                 ]
                                             }, c.item.id, true, {
                                                 fileName: "[project]/app/online/page.tsx",
-                                                lineNumber: 310,
+                                                lineNumber: 322,
                                                 columnNumber: 19
                                             }, this)),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2342,7 +2405,7 @@ function OnlineOrderPage() {
                                                     children: "Total"
                                                 }, void 0, false, {
                                                     fileName: "[project]/app/online/page.tsx",
-                                                    lineNumber: 315,
+                                                    lineNumber: 327,
                                                     columnNumber: 19
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -2352,19 +2415,19 @@ function OnlineOrderPage() {
                                                     ]
                                                 }, void 0, true, {
                                                     fileName: "[project]/app/online/page.tsx",
-                                                    lineNumber: 315,
+                                                    lineNumber: 327,
                                                     columnNumber: 37
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/app/online/page.tsx",
-                                            lineNumber: 314,
+                                            lineNumber: 326,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/app/online/page.tsx",
-                                    lineNumber: 308,
+                                    lineNumber: 320,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -2385,30 +2448,30 @@ function OnlineOrderPage() {
                                     children: isSubmitting ? '⏳ Placing Order…' : `✅ Place Order — ₹${cartTotal}`
                                 }, void 0, false, {
                                     fileName: "[project]/app/online/page.tsx",
-                                    lineNumber: 319,
+                                    lineNumber: 331,
                                     columnNumber: 15
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/app/online/page.tsx",
-                            lineNumber: 258,
+                            lineNumber: 270,
                             columnNumber: 13
                         }, this)
                     ]
                 }, void 0, true, {
                     fileName: "[project]/app/online/page.tsx",
-                    lineNumber: 251,
+                    lineNumber: 263,
                     columnNumber: 11
                 }, this)
             }, void 0, false, {
                 fileName: "[project]/app/online/page.tsx",
-                lineNumber: 250,
+                lineNumber: 262,
                 columnNumber: 9
             }, this)
         ]
     }, void 0, true, {
         fileName: "[project]/app/online/page.tsx",
-        lineNumber: 120,
+        lineNumber: 132,
         columnNumber: 5
     }, this);
 }
