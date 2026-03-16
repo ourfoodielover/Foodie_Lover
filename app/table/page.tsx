@@ -7,7 +7,7 @@ import {
   createTab, addOrderToTab, requestBill, syncTabTotal,
   addWaiterCall, getLastWaiterCallTime, addFoodReceiptDispute,
   getOrCreateDeviceId, findActiveDeviceSession, registerDevice,
-  getDevicesForTab, removeDeviceRecord,
+  getDevicesForTab, removeDeviceRecord, verifyTablePin,
   MenuItem, Order, CustomerTab,
 } from '@/lib/storage';
 
@@ -82,6 +82,10 @@ function TablePageInner() {
   // ── Welcome-back overlay ──
   const [welcomeBack, setWelcomeBack]     = useState(false);
   const [existingTabForJoin, setExistingTabForJoin] = useState<CustomerTab | null>(null);
+
+  // ── PIN security ──
+  const [pinInput, setPinInput]           = useState('');
+  const [pinError, setPinError]           = useState('');
 
   // ── Tab ──
   const [tabId, setTabId]                 = useState<string | null>(null);
@@ -205,6 +209,12 @@ function TablePageInner() {
     const name = nameInput.trim();
     if (!name) { setNameError('Please enter your name'); return; }
     if (name.length < 2) { setNameError('Name must be at least 2 characters'); return; }
+
+    // Validate 4-digit PIN (required for new sessions)
+    const pin = pinInput.trim();
+    if (!pin) { setPinError('Please set a 4-digit PIN to protect your table'); return; }
+    if (!/^\d{4}$/.test(pin)) { setPinError('PIN must be exactly 4 digits'); return; }
+
     const party = Math.max(1, parseInt(partyInput) || 1);
 
     // Re-check in case another device just created a session
@@ -213,6 +223,8 @@ function TablePageInner() {
     if (openTab) {
       // Race condition — someone just opened. Switch to join flow.
       setExistingTabForJoin(openTab);
+      setPinInput('');
+      setPinError('');
       setView('join');
       return;
     }
@@ -220,24 +232,31 @@ function TablePageInner() {
     // Check if a tab was already opened for this exact name
     const existingByName = getOpenTabForCustomer(tableId, name);
     if (existingByName) {
+      // Verify PIN matches existing session
+      if (!verifyTablePin(existingByName.id, pin)) {
+        setPinError('Incorrect PIN for this session. Ask the table host for the PIN.');
+        return;
+      }
       registerDevice(deviceId, tableId, existingByName.id, name);
       setTabId(existingByName.id);
       setCustomerName(name);
       setTab(existingByName);
       confirmedRef.current = getConfirmedOrderIds(tableId);
       setNameError('');
+      setPinError('');
       setView('tracking');
       return;
     }
 
-    // Create brand-new session
-    const newTab = createTab(tableId, name, party);
+    // Create brand-new session with PIN
+    const newTab = createTab(tableId, name, party, pin);
     registerDevice(deviceId, tableId, newTab.id, name);
     setTabId(newTab.id);
     setCustomerName(name);
     setTab(newTab);
     confirmedRef.current = new Set<string>();
     setNameError('');
+    setPinError('');
     setView('menu');
   }
 
@@ -259,18 +278,35 @@ function TablePageInner() {
       return;
     }
 
+    // Verify PIN if the existing session has one set
+    if (openTab.tableSessionPin) {
+      const pin = pinInput.trim();
+      if (!pin) { setPinError('Enter the table PIN (ask the person who started the session)'); return; }
+      if (!verifyTablePin(openTab.id, pin)) {
+        setPinError('Incorrect PIN — ask the table host for the 4-digit PIN');
+        return;
+      }
+    }
+
     registerDevice(deviceId, tableId, openTab.id, name);
     setTabId(openTab.id);
     setCustomerName(name);
     setTab(openTab);
     confirmedRef.current = getConfirmedOrderIds(tableId);
     setNameError('');
+    setPinError('');
     setView('menu');
   }
 
   // ─── HANDLER: Place order ──────────────────────────────────────────────────
   function handlePlaceOrder() {
     if (!tabId || !customerName) return;
+    // Block new orders after bill has been requested
+    if (tab && tab.tabStatus === 'awaiting_payment') {
+      setOrderMsg('🚫 Bill has been requested — no new orders can be added.');
+      setTimeout(() => setOrderMsg(''), 4000);
+      return;
+    }
     const entries = Object.entries(cart).filter(([, qty]) => qty > 0);
     if (!entries.length) return;
 
@@ -419,6 +455,27 @@ function TablePageInner() {
               autoFocus
               style={{ width: '100%', boxSizing: 'border-box', padding: '0.7rem 0.9rem', border: `2px solid ${nameError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '0.95rem', outline: 'none' }}
             />
+            {nameError && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem' }}>{nameError}</div>}
+          </div>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>
+              🔐 Set Table PIN <span style={{ fontWeight: 400, color: '#888' }}>(4 digits — share with your group)</span>
+            </label>
+            <input
+              type="tel"
+              inputMode="numeric"
+              maxLength={4}
+              value={pinInput}
+              onChange={e => { setPinInput(e.target.value.replace(/\D/g, '').slice(0, 4)); setPinError(''); }}
+              onKeyDown={e => e.key === 'Enter' && handleStartSession()}
+              placeholder="e.g. 1234"
+              style={{ width: '100%', boxSizing: 'border-box', padding: '0.7rem 0.9rem', border: `2px solid ${pinError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '1.1rem', outline: 'none', letterSpacing: '0.3rem', fontWeight: 700 }}
+            />
+            {pinError && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem' }}>{pinError}</div>}
+            <div style={{ fontSize: '0.68rem', color: '#aaa', marginTop: '0.2rem' }}>
+              This PIN prevents others from adding to your bill without permission.
+            </div>
           </div>
 
           <div style={{ marginBottom: '1.25rem' }}>
@@ -439,12 +496,6 @@ function TablePageInner() {
               ))}
             </div>
           </div>
-
-          {nameError && (
-            <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '0.6rem 0.8rem', fontSize: '0.78rem', color: '#ef4444', marginBottom: '1rem' }}>
-              {nameError}
-            </div>
-          )}
 
           <button onClick={handleStartSession} style={{ ...btn(), width: '100%', padding: '0.85rem', fontSize: '1rem', borderRadius: 12 }}>
             🚀 Start Ordering
@@ -482,7 +533,7 @@ function TablePageInner() {
             </div>
           </div>
 
-          <div style={{ marginBottom: '1.25rem' }}>
+          <div style={{ marginBottom: '1rem' }}>
             <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>Your Name *</label>
             <input
               value={nameInput}
@@ -492,11 +543,25 @@ function TablePageInner() {
               autoFocus
               style={{ width: '100%', boxSizing: 'border-box', padding: '0.7rem 0.9rem', border: `2px solid ${nameError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '0.95rem', outline: 'none' }}
             />
+            {nameError && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem' }}>{nameError}</div>}
           </div>
 
-          {nameError && (
-            <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '0.6rem 0.8rem', fontSize: '0.78rem', color: '#ef4444', marginBottom: '1rem' }}>
-              {nameError}
+          {existingTabForJoin?.tableSessionPin && (
+            <div style={{ marginBottom: '1.25rem' }}>
+              <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>
+                🔐 Table PIN <span style={{ fontWeight: 400, color: '#888' }}>(ask the table host)</span>
+              </label>
+              <input
+                type="tel"
+                inputMode="numeric"
+                maxLength={4}
+                value={pinInput}
+                onChange={e => { setPinInput(e.target.value.replace(/\D/g, '').slice(0, 4)); setPinError(''); }}
+                onKeyDown={e => e.key === 'Enter' && handleJoinSession()}
+                placeholder="••••"
+                style={{ width: '100%', boxSizing: 'border-box', padding: '0.7rem 0.9rem', border: `2px solid ${pinError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '1.1rem', outline: 'none', letterSpacing: '0.3rem', fontWeight: 700 }}
+              />
+              {pinError && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem' }}>{pinError}</div>}
             </div>
           )}
 
@@ -516,6 +581,8 @@ function TablePageInner() {
   // ─── VIEW: Menu ───────────────────────────────────────────────────────────────
   // ══════════════════════════════════════════════════════════════════════════════
   if (view === 'menu') {
+    // If bill has been requested, block further ordering
+    const billRequested = tab?.tabStatus === 'awaiting_payment';
     const filtered = catFilter === 'All' ? menu : menu.filter(m => m.category === catFilter);
 
     return (
@@ -546,11 +613,25 @@ function TablePageInner() {
           </div>
         </div>
 
+        {/* Bill-requested lock banner */}
+        {billRequested && (
+          <div style={{ background: '#fef3c7', border: '2px solid #f59e0b', margin: '0.75rem 1rem 0', borderRadius: 12, padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span style={{ fontSize: '1.2rem' }}>🚫</span>
+            <div>
+              <div style={{ fontWeight: 800, color: '#92400e', fontSize: '0.85rem' }}>Bill has been requested</div>
+              <div style={{ fontSize: '0.72rem', color: '#78350f' }}>No new orders can be added. Please proceed to payment.</div>
+            </div>
+            <button onClick={() => setView('tracking')} style={{ ...btn('#f59e0b', '#1A0800'), fontSize: '0.72rem', padding: '0.35rem 0.75rem', marginLeft: 'auto', whiteSpace: 'nowrap' }}>
+              View Bill →
+            </button>
+          </div>
+        )}
+
         <div style={{ padding: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(160px,1fr))', gap: '0.75rem' }}>
           {filtered.map(item => {
             const qty = cart[item.id] || 0;
             return (
-              <div key={item.id} style={{ background: 'white', borderRadius: 14, overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.07)', border: qty > 0 ? '2px solid #E65C00' : '2px solid transparent' }}>
+              <div key={item.id} style={{ background: 'white', borderRadius: 14, overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.07)', border: qty > 0 ? '2px solid #E65C00' : '2px solid transparent', opacity: billRequested ? 0.6 : 1 }}>
                 <div style={{ fontSize: '2.5rem', textAlign: 'center', padding: '0.75rem 0 0.4rem', background: '#faf5ee' }}>{item.img}</div>
                 {item.badge && <div style={{ fontSize: '0.62rem', fontWeight: 700, color: '#E65C00', textAlign: 'center', marginBottom: '0.2rem' }}>{BADGE_LABEL[item.badge] || item.badge}</div>}
                 <div style={{ padding: '0.4rem 0.6rem 0.6rem' }}>
@@ -558,7 +639,9 @@ function TablePageInner() {
                   <div style={{ fontSize: '0.68rem', color: '#888', marginBottom: '0.35rem', lineHeight: 1.3 }}>{item.desc}</div>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <span style={{ fontWeight: 900, color: '#E65C00', fontSize: '0.9rem' }}>₹{item.price}</span>
-                    {qty === 0
+                    {billRequested ? (
+                      <span style={{ fontSize: '0.65rem', color: '#f59e0b', fontWeight: 700 }}>🚫 Locked</span>
+                    ) : qty === 0
                       ? <button onClick={() => setQty(item.id, 1)} style={{ ...btn(), fontSize: '0.75rem', padding: '0.3rem 0.7rem', borderRadius: 20 }}>+ Add</button>
                       : <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                           <button onClick={() => setQty(item.id, -1)} style={{ width: 26, height: 26, borderRadius: '50%', border: '2px solid #E65C00', background: 'white', color: '#E65C00', fontWeight: 900, cursor: 'pointer', fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>−</button>
@@ -573,7 +656,7 @@ function TablePageInner() {
           })}
         </div>
 
-        {cartCount > 0 && (
+        {cartCount > 0 && !billRequested && (
           <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, padding: '0.75rem 1rem', background: 'white', boxShadow: '0 -4px 20px rgba(0,0,0,0.12)', zIndex: 100 }}>
             <button onClick={() => setView('cart')} style={{ ...btn(), width: '100%', padding: '0.8rem', fontSize: '0.95rem', borderRadius: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span>🛒 {cartCount} item{cartCount !== 1 ? 's' : ''}</span>

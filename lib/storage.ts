@@ -59,6 +59,7 @@ export interface Order {
   deliveryAddress?: string;     // filled for delivery orders
   trackingToken?:   string;     // secure token for /track page  (generated at order creation)
   deliveryPerson?:  string;     // name of delivery person assigned
+  pickedByDeliveryId?: string; // set when a delivery person claims the order (race condition lock)
 }
 
 export interface CustomerTab {
@@ -74,6 +75,8 @@ export interface CustomerTab {
   paymentMethod:   string;
   createdAt:       string;
   closedAt?:       string;
+  tableSessionId?: string;   // unique ID per table visit (for PIN-protected sessions)
+  tableSessionPin?: string;  // 4-digit PIN set by the first customer at the table
 }
 
 export interface Table {
@@ -427,9 +430,19 @@ export function getTableOccupancy(tableId: string): TableOccupancy | null {
   };
 }
 
-// ─── Menu ─────────────────────────────────────────────────────────────────────
-export const getMenu  = (): MenuItem[] => ls_get<MenuItem[]>(KEYS.menu, DEFAULT_MENU);
-export const saveMenu = (m: MenuItem[]) => ls_set(KEYS.menu, m);
+// ─── Menu (with module-level cache for performance) ───────────────────────────
+let _menuCache: MenuItem[] | null = null;
+
+export function getMenu(): MenuItem[] {
+  if (_menuCache !== null) return _menuCache;
+  _menuCache = ls_get<MenuItem[]>(KEYS.menu, DEFAULT_MENU);
+  return _menuCache;
+}
+
+export function saveMenu(m: MenuItem[]): void {
+  _menuCache = null; // invalidate cache on write
+  ls_set(KEYS.menu, m);
+}
 
 // ─── Customer Tabs ────────────────────────────────────────────────────────────
 export const getTabs  = (): CustomerTab[] => ls_get<CustomerTab[]>(KEYS.tabs, []);
@@ -488,7 +501,9 @@ export function createTab(
   tableId:      string,
   customerName: string,
   partySize:    number,
+  pin?:         string,   // optional 4-digit PIN for table session security
 ): CustomerTab {
+  const sessionId = `SES-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
   const tab: CustomerTab = {
     id:             `TAB-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
     tableId,
@@ -501,6 +516,8 @@ export function createTab(
     discountReason: '',
     paymentMethod:  'cod',
     createdAt:      new Date().toISOString(),
+    tableSessionId: sessionId,
+    tableSessionPin: pin ? pin.trim() : undefined,
   };
   const tabs = getTabs();
   tabs.push(tab);
@@ -1178,15 +1195,20 @@ export function getDeliveryQueue(): Order[] {
 /**
  * Delivery person picks up an order from kitchen.
  * Transitions: prepared → out_for_delivery, emits OrderPickedUp + OutForDelivery.
+ * Race condition protection: if pickedByDeliveryId is already set to a DIFFERENT person, reject.
  */
 export function markOrderPickedUp(orderId: string, deliveryPerson: string): boolean {
   const orders = getOrders();
   const idx = orders.findIndex(o => o.id === orderId);
   if (idx === -1 || orders[idx].status !== 'prepared') return false;
+  // Race condition guard: if already claimed by a different delivery person, reject
+  const existing = orders[idx].pickedByDeliveryId;
+  if (existing && existing !== deliveryPerson) return false;
   orders[idx] = {
     ...orders[idx],
-    status:       'out_for_delivery',
+    status:             'out_for_delivery',
     deliveryPerson,
+    pickedByDeliveryId: deliveryPerson,
     timeline: [
       ...(orders[idx].timeline || []),
       { status: 'out_for_delivery', by: deliveryPerson, at: new Date().toISOString(), note: 'Picked up for delivery' },
@@ -1195,6 +1217,20 @@ export function markOrderPickedUp(orderId: string, deliveryPerson: string): bool
   saveOrders(orders);
   _addOrderEvent(orderId, 'OrderPickedUp',    deliveryPerson, 'Picked up from kitchen');
   _addOrderEvent(orderId, 'OutForDelivery',   deliveryPerson, 'On the way to customer');
+  return true;
+}
+
+/**
+ * Atomically claim a delivery order before pickup (race condition prevention).
+ * Sets pickedByDeliveryId only if the order is unclaimed. Returns true if claimed successfully.
+ */
+export function claimDeliveryOrder(orderId: string, deliveryPerson: string): boolean {
+  const orders = getOrders();
+  const idx = orders.findIndex(o => o.id === orderId);
+  if (idx === -1 || orders[idx].status !== 'prepared') return false;
+  if (orders[idx].pickedByDeliveryId) return false; // already claimed
+  orders[idx] = { ...orders[idx], pickedByDeliveryId: deliveryPerson };
+  saveOrders(orders);
   return true;
 }
 
@@ -1256,4 +1292,26 @@ export function emitBillRequestedEvent(tabId: string, actor: string): void {
 export function getTrackingUrl(order: Order): string {
   if (!order.trackingToken) return '';
   return `/track?id=${encodeURIComponent(order.id)}&token=${encodeURIComponent(order.trackingToken)}`;
+}
+
+/**
+ * Get the timestamp when the kitchen started preparing an order.
+ * Used by the kitchen timer so elapsed time is measured from cooking start, not order creation.
+ * Falls back to order creation timestamp if no Preparing event exists yet.
+ */
+export function getPreparingTimestamp(orderId: string): string | null {
+  const events = getEventsForOrder(orderId);
+  const ev = events.find(e => e.eventType === 'Preparing');
+  return ev ? ev.createdAt : null;
+}
+
+/**
+ * Verify a table session PIN.
+ * Returns true if the tab has no PIN set, or the provided PIN matches.
+ */
+export function verifyTablePin(tabId: string, pin: string): boolean {
+  const tab = getTab(tabId);
+  if (!tab) return false;
+  if (!tab.tableSessionPin) return true; // no PIN set — always allow
+  return tab.tableSessionPin === pin.trim();
 }

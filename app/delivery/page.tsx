@@ -2,8 +2,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  getDeliveryQueue, markOrderPickedUp, markOrderDelivered, getEventsForOrder,
-  getTrackingUrl, Order,
+  getDeliveryQueue, markOrderPickedUp, markOrderDelivered, claimDeliveryOrder,
+  getEventsForOrder, getTrackingUrl, Order,
 } from '@/lib/storage';
 import { getSession, clearSession, AuthSession } from '@/lib/auth';
 
@@ -57,7 +57,18 @@ export default function DeliveryPage() {
   void tick; // used to force re-render for live timers
 
   function doPickup(orderId: string) {
-    const ok = markOrderPickedUp(orderId, session?.name || 'Delivery');
+    const deliveryName = session?.name || 'Delivery';
+    // Atomic claim prevents two delivery users picking the same order simultaneously
+    const claimed = claimDeliveryOrder(orderId, deliveryName);
+    if (!claimed) {
+      // Another delivery person already claimed this order
+      setActionMsg('⚠️ This order was just picked up by another delivery person. Please take the next one.');
+      setTimeout(() => setActionMsg(''), 4000);
+      setConfirmPick(null);
+      refresh();
+      return;
+    }
+    const ok = markOrderPickedUp(orderId, deliveryName);
     if (ok) {
       setActionMsg('✅ Order picked up — head to customer!');
       setTimeout(() => setActionMsg(''), 3000);
@@ -181,6 +192,10 @@ export default function DeliveryPage() {
           const events   = getEventsForOrder(order.id);
           const latestEv = events[events.length - 1];
           const trackUrl = getTrackingUrl(order);
+          // Race condition: another delivery person already claimed this order
+          const claimedByOther = order.status === 'prepared' &&
+            order.pickedByDeliveryId &&
+            order.pickedByDeliveryId !== (session?.name || 'Delivery');
 
           return (
             <div
@@ -191,8 +206,14 @@ export default function DeliveryPage() {
                 border: `2px solid ${isUrgent ? '#ef4444' : (STATUS_COLOR[order.status] || '#e2e8f0')}`,
               }}
             >
+              {/* Claimed-by-other banner */}
+              {claimedByOther && (
+                <div style={{ background: '#7c3aed', color: 'white', padding: '0.2rem 1rem', fontSize: '0.7rem', fontWeight: 800, textAlign: 'center' }}>
+                  🔒 Claimed by {order.pickedByDeliveryId} — picking up now
+                </div>
+              )}
               {/* Urgent banner */}
-              {isUrgent && (
+              {isUrgent && !claimedByOther && (
                 <div style={{ background: '#ef4444', color: 'white', padding: '0.2rem 1rem', fontSize: '0.7rem', fontWeight: 800, textAlign: 'center' }}>
                   ⚡ WAITING {elapsed}m — PICK UP NOW
                 </div>
@@ -282,7 +303,11 @@ export default function DeliveryPage() {
 
                 {/* Action buttons */}
                 {order.status === 'prepared' && (
-                  confirmPick === order.id ? (
+                  claimedByOther ? (
+                    <div style={{ background: '#f5f3ff', border: '1px solid #ddd6fe', borderRadius: 10, padding: '0.6rem', textAlign: 'center', fontSize: '0.78rem', color: '#7c3aed', fontWeight: 700 }}>
+                      🔒 Being picked up by {order.pickedByDeliveryId}
+                    </div>
+                  ) : confirmPick === order.id ? (
                     <div style={{ background: '#f0fdf4', borderRadius: 10, padding: '0.65rem', border: '1px solid #86efac' }}>
                       <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#15803d', marginBottom: '0.4rem' }}>
                         Confirm pickup from kitchen?

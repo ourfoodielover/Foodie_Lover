@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   getOrders, updateOrderStatus, updateItemStatus,
-  getTabs, CustomerTab,
+  getTabs, getPreparingTimestamp, CustomerTab,
   Order, ItemStatus,
 } from '@/lib/storage';
 import { getSession, clearSession, AuthSession } from '@/lib/auth';
@@ -177,12 +177,17 @@ export default function KitchenPage() {
       {/* Order cards */}
       <div style={{ padding: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(280px,1fr))', gap: '0.85rem' }}>
         {shown.map(order => {
-          const totalSecs    = Math.floor((Date.now() - new Date(order.timestamp).getTime()) / 1000);
+          // Timer starts from the Preparing event; falls back to order creation if not yet cooking
+          const timerStart   = order.status === 'preparing' || order.status === 'prepared'
+            ? (getPreparingTimestamp(order.id) || order.timestamp)
+            : order.timestamp;
+          const totalSecs    = Math.floor((Date.now() - new Date(timerStart).getTime()) / 1000);
           const mins         = Math.floor(totalSecs / 60);
           const secs         = totalSecs % 60;
           const timerLabel   = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-          const isUrgent     = mins > 25;
-          const isHighPriority = mins > 15 && !isUrgent;
+          // Color rules: Normal < 5 min, Warning 5–10 min, Urgent > 10 min
+          const isUrgent       = mins >= 10;
+          const isHighPriority = mins >= 5 && !isUrgent;
           const isDelivery   = order.type === 'delivery';
 
           // Check if this order's tab has requested the bill
@@ -221,13 +226,13 @@ export default function KitchenPage() {
                 </div>
               )}
 
-              {/* Urgency badges */}
+              {/* Urgency badges — Normal < 5min, Warning 5–10min, Urgent > 10min */}
               {isUrgent && (
                 <div style={{
                   background: '#ef4444', color: 'white',
                   padding: '0.2rem 0.75rem', fontSize: '0.7rem', fontWeight: 800, textAlign: 'center',
                 }}>
-                  🔥 URGENT — {mins}m waiting
+                  🔥 URGENT — {mins}m cooking
                 </div>
               )}
               {isHighPriority && !isUrgent && (
@@ -235,7 +240,7 @@ export default function KitchenPage() {
                   background: '#f59e0b', color: 'white',
                   padding: '0.2rem 0.75rem', fontSize: '0.7rem', fontWeight: 800, textAlign: 'center',
                 }}>
-                  ⚠️ 15+ MIN — {mins}m waiting
+                  ⚠️ 5+ MIN — {mins}m cooking
                 </div>
               )}
 
