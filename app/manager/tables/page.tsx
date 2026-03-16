@@ -24,10 +24,14 @@ function getTableColor(table: Table): { bg: string; border: string; badge: strin
 
 // ─── Stat card ────────────────────────────────────────────────────────────────
 function StatCard({ icon, value, label, color }: { icon: string; value: string | number; label: string; color: string }) {
+  // Guard: NaN or undefined values must not reach React children — cast to safe string
+  const safeValue = typeof value === 'number'
+    ? (isNaN(value) || !isFinite(value) ? '0' : value.toLocaleString('en-IN'))
+    : (value ?? '0');
   return (
     <div style={{ background: 'rgba(255,255,255,0.12)', borderRadius: 12, padding: '0.85rem 1.1rem', textAlign: 'center', minWidth: '110px' }}>
       <div style={{ fontSize: '1.4rem', marginBottom: '0.2rem' }}>{icon}</div>
-      <div style={{ fontSize: '1.35rem', fontWeight: 900, color }}>{value}</div>
+      <div style={{ fontSize: '1.35rem', fontWeight: 900, color }}>{safeValue}</div>
       <div style={{ fontSize: '0.65rem', color: '#d1fae5', marginTop: '0.1rem' }}>{label}</div>
     </div>
   );
@@ -122,8 +126,10 @@ export default function ManagerTablesPage() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '0.75rem' }}>
           {tables.map(table => {
             const { bg, border, badge, badgeBg } = getTableColor(table);
-            const freeSeats    = Math.max(0, table.capacity - (table.occupiedSeats || 0));
-            const fillPct      = table.capacity > 0 ? Math.round(((table.occupiedSeats || 0) / table.capacity) * 100) : 0;
+            const cap          = table.capacity || 0;
+            const occupied     = table.occupiedSeats || 0;
+            const freeSeats    = Math.max(0, cap - occupied);
+            const fillPct      = cap > 0 ? Math.min(100, Math.round((occupied / cap) * 100)) : 0;
 
             return (
               <div
@@ -142,7 +148,8 @@ export default function ManagerTablesPage() {
                 {/* Table name + ID */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <div>
-                    <div style={{ fontWeight: 800, fontSize: '0.95rem', color: '#1A0800' }}>{table.name}</div>
+                    {/* name may be absent in old localStorage data — fall back to id */}
+                    <div style={{ fontWeight: 800, fontSize: '0.95rem', color: '#1A0800' }}>{table.name || table.id}</div>
                     <div style={{ fontSize: '0.65rem', color: '#888' }}>{table.id}</div>
                   </div>
                   <span style={{ background: badgeBg, color: border, fontSize: '0.62rem', fontWeight: 700, padding: '0.18rem 0.5rem', borderRadius: 8, whiteSpace: 'nowrap' }}>
@@ -154,7 +161,7 @@ export default function ManagerTablesPage() {
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: '#555', marginBottom: '0.2rem' }}>
                     <span>🪑 Seats</span>
-                    <span style={{ fontWeight: 800 }}>{table.occupiedSeats || 0} / {table.capacity}</span>
+                    <span style={{ fontWeight: 800 }}>{occupied} / {cap}</span>
                   </div>
                   <div style={{ background: '#e5e7eb', borderRadius: 6, height: 7, overflow: 'hidden' }}>
                     <div style={{

@@ -137,7 +137,10 @@ export default function ExpensesPage() {
 
   // ── Filtered list ─────────────────────────────────────────────────────────
   const filtered = filterCat === 'All' ? expenses : expenses.filter(e => e.category === filterCat);
-  const netProfit = todayRevenue - stats.todayTotal;
+  // Guard: ensure both values are finite numbers before subtraction
+  const safeRevenue  = isFinite(todayRevenue)       ? todayRevenue        : 0;
+  const safeExpenses = isFinite(stats.todayTotal)   ? stats.todayTotal    : 0;
+  const netProfit    = safeRevenue - safeExpenses;
 
   if (!authChecked) {
     return (
@@ -241,42 +244,48 @@ export default function ExpensesPage() {
       <div style={{ padding: '1.25rem 1.5rem' }}>
 
         {/* ── Summary cards ── */}
-        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1.25rem' }}>
-          <SummaryCard
-            icon="📅"
-            label="Today's Expenses"
-            value={`₹${stats.todayTotal.toLocaleString('en-IN')}`}
-            sub={`${stats.todayCount} entr${stats.todayCount !== 1 ? 'ies' : 'y'}`}
-            accent="#ef4444"
-          />
-          <SummaryCard
-            icon="📆"
-            label="This Week"
-            value={`₹${stats.weekTotal.toLocaleString('en-IN')}`}
-            sub={`${stats.weekCount} entries`}
-            accent="#f59e0b"
-          />
-          <SummaryCard
-            icon="🗓️"
-            label="This Month"
-            value={`₹${stats.monthTotal.toLocaleString('en-IN')}`}
-            sub={`${stats.monthCount} entries`}
-            accent="#8b5cf6"
-          />
-          <SummaryCard
-            icon="💰"
-            label="Today Revenue"
-            value={`₹${todayRevenue.toLocaleString('en-IN')}`}
-            accent="#16a34a"
-          />
-          <SummaryCard
-            icon={netProfit >= 0 ? '📈' : '📉'}
-            label="Today Net Profit"
-            value={`${netProfit >= 0 ? '+' : ''}₹${netProfit.toLocaleString('en-IN')}`}
-            sub="Revenue − Expenses"
-            accent={netProfit >= 0 ? '#16a34a' : '#ef4444'}
-          />
-        </div>
+        {/* fmt: safely format a number to Indian locale, falling back to '0' */}
+        {(() => {
+          const fmt = (n: number) => (isFinite(n) ? n : 0).toLocaleString('en-IN');
+          return (
+            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1.25rem' }}>
+              <SummaryCard
+                icon="📅"
+                label="Today's Expenses"
+                value={`₹${fmt(stats.todayTotal)}`}
+                sub={`${stats.todayCount} entr${stats.todayCount !== 1 ? 'ies' : 'y'}`}
+                accent="#ef4444"
+              />
+              <SummaryCard
+                icon="📆"
+                label="This Week"
+                value={`₹${fmt(stats.weekTotal)}`}
+                sub={`${stats.weekCount} entries`}
+                accent="#f59e0b"
+              />
+              <SummaryCard
+                icon="🗓️"
+                label="This Month"
+                value={`₹${fmt(stats.monthTotal)}`}
+                sub={`${stats.monthCount} entries`}
+                accent="#8b5cf6"
+              />
+              <SummaryCard
+                icon="💰"
+                label="Today Revenue"
+                value={`₹${fmt(safeRevenue)}`}
+                accent="#16a34a"
+              />
+              <SummaryCard
+                icon={netProfit >= 0 ? '📈' : '📉'}
+                label="Today Net Profit"
+                value={`${netProfit >= 0 ? '+' : '−'}₹${fmt(Math.abs(netProfit))}`}
+                sub="Revenue − Expenses"
+                accent={netProfit >= 0 ? '#16a34a' : '#ef4444'}
+              />
+            </div>
+          );
+        })()}
 
         {/* ── Category breakdown ── */}
         {stats.byCategory.length > 0 && (
@@ -391,7 +400,7 @@ export default function ExpensesPage() {
             <div style={{ padding: '0.65rem 1.25rem', background: '#f9fafb', borderTop: '2px solid #f5f0e8', display: 'flex', justifyContent: 'flex-end', gap: '1rem', fontSize: '0.8rem' }}>
               <span style={{ color: '#888' }}>{filtered.length} record{filtered.length !== 1 ? 's' : ''}</span>
               <span style={{ fontWeight: 800, color: '#ef4444' }}>
-                Total: ₹{filtered.reduce((s, e) => s + e.amount, 0).toLocaleString('en-IN')}
+                Total: ₹{filtered.reduce((s, e) => s + (isFinite(e.amount) ? e.amount : 0), 0).toLocaleString('en-IN')}
               </span>
             </div>
           )}

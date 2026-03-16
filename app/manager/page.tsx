@@ -99,8 +99,8 @@ export default function ManagerPage() {
   // ── Discount action ───────────────────────────────────────────────────────
   function applyDiscount() {
     if (!selTab) return;
-    const amt = parseInt(tabDiscAmt);
-    if (!amt || amt <= 0) { setPinMsg('❌ Enter a valid amount'); return; }
+    const amt = parseInt(tabDiscAmt, 10);
+    if (isNaN(amt) || amt <= 0) { setPinMsg('❌ Enter a valid amount'); return; }
     if (amt > selTab.totalAmount) { setPinMsg(`❌ Discount cannot exceed ₹${selTab.totalAmount}`); return; }
     if (pinInput !== getPin()) { setPinMsg('❌ Wrong admin PIN'); return; }
     applyTabDiscount(selTab.id, amt, tabDiscNote || 'Manager discount', session?.name || 'Manager');
@@ -286,22 +286,29 @@ export default function ManagerPage() {
       )}
 
       {/* Stats bar */}
-      <div style={{ background: '#065f46', color: 'white', padding: '0.6rem 1.5rem', display: 'flex', gap: '2rem', overflowX: 'auto' }}>
-        {[
-          { icon: '💰', val: `₹${todayRevenue}`,                       label: 'Revenue Today',   color: '#6ee7b7' },
-          { icon: '💸', val: `₹${todayExpenses}`,                      label: 'Expenses Today',  color: '#fca5a5' },
-          { icon: todayNetProfit >= 0 ? '📈' : '📉',
-            val: `${todayNetProfit >= 0 ? '+' : ''}₹${todayNetProfit}`, label: 'Net Profit Today',color: todayNetProfit >= 0 ? '#6ee7b7' : '#fca5a5' },
-          { icon: '🧾', val: awaitingTabs.length,                       label: 'Awaiting Payment',color: '#fde68a' },
-          { icon: '🟢', val: openTabs.length,                           label: 'Open Tabs',       color: '#6ee7b7' },
-          { icon: '✅', val: closedTabs.length,                         label: 'Closed Today',    color: '#a7f3d0' },
-        ].map(s => (
-          <div key={s.label} style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
-            <div style={{ fontSize: '1.2rem', fontWeight: 900, color: s.color }}>{s.icon} {s.val}</div>
-            <div style={{ fontSize: '0.62rem', color: '#a7f3d0' }}>{s.label}</div>
+      {(() => {
+        const fmt  = (n: number) => (isFinite(n) ? n : 0).toLocaleString('en-IN');
+        const safe = (n: number) => isFinite(n) ? n : 0;
+        const profit = safe(todayNetProfit);
+        return (
+          <div style={{ background: '#065f46', color: 'white', padding: '0.6rem 1.5rem', display: 'flex', gap: '2rem', overflowX: 'auto' }}>
+            {[
+              { icon: '💰', val: `₹${fmt(todayRevenue)}`,                              label: 'Revenue Today',   color: '#6ee7b7' },
+              { icon: '💸', val: `₹${fmt(todayExpenses)}`,                             label: 'Expenses Today',  color: '#fca5a5' },
+              { icon: profit >= 0 ? '📈' : '📉',
+                val: `${profit >= 0 ? '+' : '−'}₹${fmt(Math.abs(profit))}`,            label: 'Net Profit Today',color: profit >= 0 ? '#6ee7b7' : '#fca5a5' },
+              { icon: '🧾', val: awaitingTabs.length,                                   label: 'Awaiting Payment',color: '#fde68a' },
+              { icon: '🟢', val: openTabs.length,                                       label: 'Open Tabs',       color: '#6ee7b7' },
+              { icon: '✅', val: closedTabs.length,                                     label: 'Closed Today',    color: '#a7f3d0' },
+            ].map(s => (
+              <div key={s.label} style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                <div style={{ fontSize: '1.2rem', fontWeight: 900, color: s.color }}>{s.icon} {s.val}</div>
+                <div style={{ fontSize: '0.62rem', color: '#a7f3d0' }}>{s.label}</div>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
+        );
+      })()}
 
       {/* Filter tabs */}
       <div style={{ padding: '0.75rem 1.5rem', display: 'flex', gap: '0.5rem', overflowX: 'auto' }}>

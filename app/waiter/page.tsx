@@ -337,9 +337,10 @@ export default function WaiterPage() {
           const canServe  = order.status === 'prepared';
 
           // Seat usage badge for dine-in orders
+          // Guard: old localStorage tables may lack occupiedSeats (pre-Phase-5 data)
           const tableRow   = order.tableId ? tables.find(t => t.id === order.tableId) : null;
           const seatBadge  = tableRow
-            ? `🪑 Seats: ${tableRow.occupiedSeats} / ${tableRow.capacity}`
+            ? `🪑 Seats: ${tableRow.occupiedSeats ?? 0} / ${tableRow.capacity ?? '?'}`
             : null;
 
           return (

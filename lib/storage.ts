@@ -499,7 +499,8 @@ export function getTableOccupancy(tableId: string): TableOccupancy | null {
 export function getRemainingCapacity(tableId: string): number {
   const table = getTables().find(t => t.id === tableId);
   if (!table) return 0;
-  return Math.max(0, table.capacity - table.occupiedSeats);
+  // Defensive: old localStorage records may lack occupiedSeats (pre-Phase-5 data)
+  return Math.max(0, (table.capacity || 0) - (table.occupiedSeats || 0));
 }
 
 /**
@@ -517,7 +518,7 @@ export function addPartyToTab(tabId: string, additionalSeats: number): boolean {
   const table   = getTables().find(t => t.id === tableId);
   if (!table) return false;
 
-  const freeSeats = Math.max(0, table.capacity - table.occupiedSeats);
+  const freeSeats = Math.max(0, (table.capacity || 0) - (table.occupiedSeats || 0));
   if (additionalSeats > freeSeats) return false;   // not enough room
 
   tabs[idx] = { ...tabs[idx], partySize: tabs[idx].partySize + additionalSeats };
@@ -541,16 +542,17 @@ export interface RestaurantOccupancyStats {
 export function getRestaurantOccupancyStats(): RestaurantOccupancyStats {
   const tables = getTables();
   const totalTables    = tables.length;
-  const totalSeats     = tables.reduce((s, t) => s + t.capacity, 0);
+  // Guard: old localStorage data may lack capacity / occupiedSeats fields
+  const totalSeats     = tables.reduce((s, t) => s + (t.capacity    || 0), 0);
   const occupiedSeats  = tables.reduce((s, t) => s + (t.occupiedSeats || 0), 0);
   const occupiedTables = tables.filter(t => t.status === 'occupied').length;
   return {
     totalTables,
     totalSeats,
     occupiedSeats,
-    freeSeats:      totalSeats - occupiedSeats,
+    freeSeats:      Math.max(0, totalSeats - occupiedSeats),
     occupiedTables,
-    freeTables:     totalTables - occupiedTables,
+    freeTables:     Math.max(0, totalTables - occupiedTables),
   };
 }
 
