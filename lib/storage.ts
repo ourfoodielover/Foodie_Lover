@@ -8,9 +8,11 @@ export type OrderStatus =
   | 'awaiting_waiter'   // newly placed, waiter hasn't accepted yet
   | 'pending'           // accepted by kitchen, not yet started
   | 'preparing'         // kitchen actively cooking
-  | 'prepared'          // ready for pickup by waiter
-  | 'served'            // delivered to table
-  | 'completed'         // paid and done
+  | 'prepared'          // ready for pickup by waiter / delivery person
+  | 'served'            // delivered to dine-in table
+  | 'out_for_delivery'  // delivery order picked up, on the way
+  | 'delivered'         // arrived at customer — awaiting confirmation
+  | 'completed'         // paid / confirmed and done
   | 'cancelled'         // cancelled before completion
   | 'void';             // voided by manager
 
@@ -55,6 +57,8 @@ export interface Order {
   timeline?:        TimelineEntry[];
   source?:          'online' | 'in-store';  // where the order originated
   deliveryAddress?: string;     // filled for delivery orders
+  trackingToken?:   string;     // secure token for /track page  (generated at order creation)
+  deliveryPerson?:  string;     // name of delivery person assigned
 }
 
 export interface CustomerTab {
@@ -144,6 +148,7 @@ const KEYS = {
   splitBills:  'fl_split_bills',
   devices:     'fl_device_records',   // device-based session tracking
   whatsapp:    'fl_whatsapp_number',  // restaurant WhatsApp number
+  events:      'fl_order_events',     // event log (event-based architecture)
 };
 
 // ─── Storage helpers ──────────────────────────────────────────────────────────
@@ -208,11 +213,32 @@ export function getNextOrderNumber(): number {
 export const getOrders  = (): Order[] => ls_get<Order[]>(KEYS.orders, []);
 export const saveOrders = (o: Order[]) => ls_set(KEYS.orders, o);
 
-export function addOrder(order: Order): void {
+export function addOrder(order: Order): Order {
+  // Generate tracking token if missing (used by /track page)
+  if (!order.trackingToken) {
+    order = { ...order, trackingToken: generateTrackingToken() };
+  }
   const orders = getOrders();
   orders.push(order);
   saveOrders(orders);
+  // Emit OrderPlaced event
+  _addOrderEvent(order.id, 'OrderPlaced', order.customerName || 'Customer',
+    order.type === 'delivery' ? `Delivery to: ${order.deliveryAddress}` :
+    order.type === 'pickup'   ? 'Pickup order' : `Table ${order.tableId}`);
+  return order;
 }
+
+/** Map OrderStatus → OrderEventType for automatic event emission */
+const STATUS_TO_EVENT: Partial<Record<OrderStatus, OrderEventType>> = {
+  pending:          'KitchenAccepted',
+  preparing:        'Preparing',
+  prepared:         'Prepared',
+  served:           'Served',
+  out_for_delivery: 'OutForDelivery',
+  delivered:        'Delivered',
+  completed:        'Closed',
+  cancelled:        'Cancelled',
+};
 
 export function updateOrderStatus(
   id:     string,
@@ -246,6 +272,11 @@ export function updateOrderStatus(
     ],
   };
   saveOrders(orders);
+
+  // Co-emit matching OrderEvent
+  const evtType = STATUS_TO_EVENT[status];
+  if (evtType) _addOrderEvent(id, evtType, by);
+
   return true;
 }
 
@@ -263,6 +294,7 @@ export function cancelOrder(id: string, reason: string, by: string = 'System'): 
     ],
   };
   saveOrders(orders);
+  _addOrderEvent(id, 'Cancelled', by, reason);
   return true;
 }
 
@@ -1041,4 +1073,187 @@ export function buildWhatsappOrderUrl(order: Order, restaurantNumber: string): s
   const msg = encodeURIComponent(lines.join('\n'));
   const num = restaurantNumber.replace(/\D/g, '');
   return num ? `https://wa.me/${num}?text=${msg}` : `https://wa.me/?text=${msg}`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── EVENT-BASED ORDER SYSTEM ─────────────────────────────────────────────────
+// Every state change emits an immutable OrderEvent alongside the Order.status
+// update. This allows the /track page, kitchen, delivery, and waiter dashboards
+// to react to events, and makes it trivial to swap in a real API later.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export type OrderEventType =
+  | 'OrderPlaced'       // Customer placed the order
+  | 'KitchenAccepted'   // Waiter/system accepted → kitchen queue
+  | 'Preparing'         // Kitchen started cooking
+  | 'Prepared'          // Kitchen: item(s) ready
+  | 'Served'            // Waiter served to dine-in table
+  | 'BillRequested'     // Customer pressed "Request Bill"
+  | 'OrderPickedUp'     // Delivery person picked order from kitchen
+  | 'OutForDelivery'    // On the way to customer
+  | 'Delivered'         // Arrived at customer address
+  | 'CustomerConfirmed' // Customer tapped "Confirm Delivery" on /track
+  | 'Closed'            // Tab/Order closed by manager
+  | 'Cancelled';        // Cancelled at any stage
+
+export interface OrderEvent {
+  eventId:   string;
+  orderId:   string;
+  eventType: OrderEventType;
+  actor:     string;    // who triggered this event (customer name / staff name / 'System')
+  note?:     string;    // optional context note
+  createdAt: string;    // ISO timestamp
+}
+
+// ─── Private helper (called internally — not exported to keep event writes consistent) ──
+function _addOrderEvent(
+  orderId:   string,
+  eventType: OrderEventType,
+  actor:     string,
+  note?:     string,
+): OrderEvent {
+  const ev: OrderEvent = {
+    eventId:   `EV-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+    orderId,
+    eventType,
+    actor,
+    note,
+    createdAt: new Date().toISOString(),
+  };
+  const events = ls_get<OrderEvent[]>(KEYS.events, []);
+  events.push(ev);
+  ls_set(KEYS.events, events);
+  return ev;
+}
+
+/** Get ALL events (all orders). */
+export function getAllOrderEvents(): OrderEvent[] {
+  return ls_get<OrderEvent[]>(KEYS.events, []);
+}
+
+/** Get events for a specific order, sorted oldest→newest. */
+export function getEventsForOrder(orderId: string): OrderEvent[] {
+  return getAllOrderEvents()
+    .filter(e => e.orderId === orderId)
+    .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+}
+
+/** Get the most recent event for an order. */
+export function getLatestEvent(orderId: string): OrderEvent | null {
+  const events = getEventsForOrder(orderId);
+  return events.length ? events[events.length - 1] : null;
+}
+
+// ─── Tracking Token ───────────────────────────────────────────────────────────
+
+export function generateTrackingToken(): string {
+  return Math.random().toString(36).slice(2, 6).toUpperCase() +
+         Math.random().toString(36).slice(2, 6).toUpperCase();
+}
+
+/**
+ * Verify a tracking token against an order.
+ * Returns the Order if token matches, null otherwise.
+ */
+export function verifyTrackingToken(orderId: string, token: string): Order | null {
+  const order = getOrders().find(o => o.id === orderId);
+  if (!order) return null;
+  if (order.trackingToken !== token) return null;
+  return order;
+}
+
+// ─── Delivery-specific helpers ────────────────────────────────────────────────
+
+/**
+ * Return orders that are ready for delivery dispatch:
+ * type === 'delivery' AND status in ['prepared','out_for_delivery','delivered']
+ */
+export function getDeliveryQueue(): Order[] {
+  return getOrders().filter(
+    o => o.type === 'delivery' &&
+         ['prepared', 'out_for_delivery', 'delivered'].includes(o.status),
+  ).sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+}
+
+/**
+ * Delivery person picks up an order from kitchen.
+ * Transitions: prepared → out_for_delivery, emits OrderPickedUp + OutForDelivery.
+ */
+export function markOrderPickedUp(orderId: string, deliveryPerson: string): boolean {
+  const orders = getOrders();
+  const idx = orders.findIndex(o => o.id === orderId);
+  if (idx === -1 || orders[idx].status !== 'prepared') return false;
+  orders[idx] = {
+    ...orders[idx],
+    status:       'out_for_delivery',
+    deliveryPerson,
+    timeline: [
+      ...(orders[idx].timeline || []),
+      { status: 'out_for_delivery', by: deliveryPerson, at: new Date().toISOString(), note: 'Picked up for delivery' },
+    ],
+  };
+  saveOrders(orders);
+  _addOrderEvent(orderId, 'OrderPickedUp',    deliveryPerson, 'Picked up from kitchen');
+  _addOrderEvent(orderId, 'OutForDelivery',   deliveryPerson, 'On the way to customer');
+  return true;
+}
+
+/**
+ * Delivery person marks order as delivered.
+ * Transitions: out_for_delivery → delivered, emits Delivered.
+ */
+export function markOrderDelivered(orderId: string, deliveryPerson: string): boolean {
+  const orders = getOrders();
+  const idx = orders.findIndex(o => o.id === orderId);
+  if (idx === -1 || orders[idx].status !== 'out_for_delivery') return false;
+  orders[idx] = {
+    ...orders[idx],
+    status: 'delivered',
+    timeline: [
+      ...(orders[idx].timeline || []),
+      { status: 'delivered', by: deliveryPerson, at: new Date().toISOString() },
+    ],
+  };
+  saveOrders(orders);
+  _addOrderEvent(orderId, 'Delivered', deliveryPerson, 'Delivered to customer address');
+  return true;
+}
+
+/**
+ * Customer confirms delivery on the /track page.
+ * Transitions: delivered → completed, emits CustomerConfirmed.
+ */
+export function customerConfirmDelivery(orderId: string, token: string): boolean {
+  const order = verifyTrackingToken(orderId, token);
+  if (!order || order.status !== 'delivered') return false;
+  const orders = getOrders();
+  const idx = orders.findIndex(o => o.id === orderId);
+  if (idx === -1) return false;
+  orders[idx] = {
+    ...orders[idx],
+    status: 'completed',
+    timeline: [
+      ...(orders[idx].timeline || []),
+      { status: 'completed', by: order.customerName, at: new Date().toISOString(), note: 'Confirmed by customer' },
+    ],
+  };
+  saveOrders(orders);
+  _addOrderEvent(orderId, 'CustomerConfirmed', order.customerName, 'Customer confirmed delivery');
+  _addOrderEvent(orderId, 'Closed',            order.customerName);
+  return true;
+}
+
+/**
+ * Emit a BillRequested event (tab-level; order status doesn't change).
+ * Called from the table page when customer presses "Request Bill".
+ */
+export function emitBillRequestedEvent(tabId: string, actor: string): void {
+  // BillRequested is a tab-level event, we store it under the tab's first orderId or a synthetic ID
+  _addOrderEvent(`TAB-${tabId}`, 'BillRequested', actor);
+}
+
+/** Return the tracking URL for an order (relative path). */
+export function getTrackingUrl(order: Order): string {
+  if (!order.trackingToken) return '';
+  return `/track?id=${encodeURIComponent(order.id)}&token=${encodeURIComponent(order.trackingToken)}`;
 }

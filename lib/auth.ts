@@ -2,7 +2,7 @@
 // Role-based session management using localStorage.
 // No backend required — all state is local.
 
-export type Role = 'admin' | 'kitchen' | 'waiter' | 'manager';
+export type Role = 'admin' | 'kitchen' | 'waiter' | 'manager' | 'delivery';
 
 export interface StaffAccount {
   id:        string;
@@ -32,10 +32,11 @@ export interface SecuritySetup {
 
 // ─── localStorage keys ────────────────────────────────────────────────────────
 const SESSION_KEY: Record<Role, string> = {
-  admin:   'fl_session_admin',
-  kitchen: 'fl_session_kitchen',
-  waiter:  'fl_session_waiter',
-  manager: 'fl_session_manager',
+  admin:    'fl_session_admin',
+  kitchen:  'fl_session_kitchen',
+  waiter:   'fl_session_waiter',
+  manager:  'fl_session_manager',
+  delivery: 'fl_session_delivery',
 };
 
 const KEYS = {
@@ -184,6 +185,23 @@ export function loginManager(pin: string): AuthSession | null {
   if (pin !== getManagerPin()) return null;
   const s: AuthSession = {
     role: 'manager', name: 'Manager', username: 'manager',
+    loginAt:   new Date().toISOString(),
+    expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
+  };
+  saveSession(s);
+  return s;
+}
+
+/**
+ * Delivery login — no PIN required for the prototype.
+ * The delivery person just enters their name.
+ */
+export function loginDelivery(name: string): AuthSession {
+  const n = name.trim() || 'Delivery';
+  const s: AuthSession = {
+    role:      'delivery',
+    name:      n,
+    username:  n.toLowerCase().replace(/\s+/g, '_'),
     loginAt:   new Date().toISOString(),
     expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
   };

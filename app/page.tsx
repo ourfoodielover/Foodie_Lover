@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
-import { getMenu, addOrder, MenuItem, Order, OrderItem } from '@/lib/storage';
+import { getMenu, addOrder, getTrackingUrl, MenuItem, Order, OrderItem } from '@/lib/storage';
 
 const CATEGORIES = ['All','Biryani','Starters','Mains','Breads','Desserts','Drinks'];
 const BADGE_LABELS: Record<string,string> = {
@@ -19,6 +19,7 @@ export default function CustomerPage() {
   const [form, setForm] = useState({ name: '', phone: '', type: 'pickup', payment: 'cod', tableNo: '' });
   const [showCheckout, setShowCheckout] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [lastTrackUrl, setLastTrackUrl] = useState('');
 
   // Ref prevents double-submit even before React re-renders
   const submittingRef = useRef(false);
@@ -100,12 +101,13 @@ export default function CustomerPage() {
         timestamp: ts,
       };
 
-      addOrder(order);
+      const savedOrder = addOrder(order);
       setLastOrderId(id);
+      setLastTrackUrl(getTrackingUrl(savedOrder));
       setCart([]);
       setShowCheckout(false);
       setOrderPlaced(true);
-      setTimeout(() => setOrderPlaced(false), 6000);
+      setTimeout(() => setOrderPlaced(false), 8000);
     } finally {
       submittingRef.current = false;
       setIsSubmitting(false);
@@ -135,8 +137,16 @@ export default function CustomerPage() {
 
       {/* Success notification */}
       {orderPlaced && (
-        <div style={{ background: '#dcfce7', border: '1px solid #86efac', color: '#15803d', padding: '1rem 2rem', textAlign: 'center', fontWeight: 700 }}>
-          ✅ Order placed successfully! Order ID: <strong>{lastOrderId}</strong> — We&apos;ll prepare it shortly.
+        <div style={{ background: '#dcfce7', border: '1px solid #86efac', color: '#15803d', padding: '1rem 2rem', textAlign: 'center' }}>
+          <div style={{ fontWeight: 700, marginBottom: '0.3rem' }}>✅ Order placed! ID: <strong>{lastOrderId}</strong></div>
+          {lastTrackUrl && (
+            <div style={{ fontSize: '0.85rem' }}>
+              📍 Track your order:{' '}
+              <a href={lastTrackUrl} style={{ color: '#15803d', fontWeight: 700, textDecoration: 'underline' }}>
+                {window.location.origin}{lastTrackUrl}
+              </a>
+            </div>
+          )}
         </div>
       )}
 
@@ -321,6 +331,23 @@ export default function CustomerPage() {
           </div>
         </div>
       )}
+
+      {/* Staff Access Footer */}
+      <div style={{ borderTop: '1px solid #e5e7eb', background: '#f9fafb', padding: '0.75rem 1.5rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem', justifyContent: 'center', marginTop: '2rem' }}>
+        <span style={{ fontSize: '0.72rem', color: '#9ca3af', alignSelf: 'center', marginRight: '0.25rem' }}>Staff:</span>
+        {[
+          { href: '/admin', label: '⚙️ Admin' },
+          { href: '/kitchen', label: '👨‍🍳 Kitchen' },
+          { href: '/waiter', label: '🙋 Waiter' },
+          { href: '/delivery', label: '🛵 Delivery' },
+          { href: '/online', label: '🌐 Online Orders' },
+        ].map(link => (
+          <a key={link.href} href={link.href}
+            style={{ fontSize: '0.72rem', color: '#6b7280', textDecoration: 'none', padding: '0.25rem 0.6rem', border: '1px solid #d1d5db', borderRadius: '12px', background: 'white' }}>
+            {link.label}
+          </a>
+        ))}
+      </div>
     </div>
   );
 }

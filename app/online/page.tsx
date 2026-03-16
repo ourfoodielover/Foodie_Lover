@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
 import {
-  getMenu, addOrder, getWhatsappNumber, buildWhatsappOrderUrl,
+  getMenu, addOrder, getWhatsappNumber, buildWhatsappOrderUrl, getTrackingUrl,
   MenuItem, Order, OrderItem,
 } from '@/lib/storage';
 
@@ -18,9 +18,10 @@ export default function OnlineOrderPage() {
   const [filter, setFilter]             = useState('All');
   const [cartOpen, setCartOpen]         = useState(false);
   const [showCheckout, setShowCheckout] = useState(false);
-  const [orderPlaced, setOrderPlaced]   = useState(false);
-  const [lastOrderId, setLastOrderId]   = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [orderPlaced, setOrderPlaced]     = useState(false);
+  const [lastOrderId, setLastOrderId]     = useState('');
+  const [lastTrackUrl, setLastTrackUrl]   = useState('');
+  const [isSubmitting, setIsSubmitting]   = useState(false);
 
   const [form, setForm] = useState({
     name:      '',
@@ -106,8 +107,9 @@ export default function OnlineOrderPage() {
         timestamp:       ts,
       };
 
-      addOrder(order);
+      const savedOrder = addOrder(order);  // returns order with trackingToken populated
       setLastOrderId(id);
+      setLastTrackUrl(getTrackingUrl(savedOrder));
       setCart([]);
       setShowCheckout(false);
       setOrderPlaced(true);
@@ -160,11 +162,21 @@ export default function OnlineOrderPage() {
       {/* Order placed confirmation */}
       {orderPlaced && (
         <div style={{ background: '#dcfce7', border: '1px solid #86efac', color: '#15803d', padding: '1rem 1.5rem' }}>
-          <div style={{ fontWeight: 700, marginBottom: '0.25rem' }}>
-            ✅ Order placed! ID: <strong>{lastOrderId}</strong> — We&apos;ll prepare it right away.
-            <button onClick={() => setOrderPlaced(false)} style={{ marginLeft: '1rem', background: 'none', border: 'none', color: '#15803d', cursor: 'pointer', fontWeight: 700, fontFamily: 'Poppins,sans-serif', fontSize: '0.85rem' }}>×</button>
+          <div style={{ fontWeight: 700, marginBottom: '0.4rem' }}>
+            ✅ Order placed! ID: <strong>{lastOrderId}</strong>
+            <button onClick={() => setOrderPlaced(false)} style={{ marginLeft: '0.75rem', background: 'none', border: 'none', color: '#15803d', cursor: 'pointer', fontWeight: 700, fontFamily: 'Poppins,sans-serif', fontSize: '0.85rem' }}>×</button>
           </div>
-          <div style={{ fontSize: '0.8rem', color: '#166534' }}>
+          {/* Tracking link — most important */}
+          {lastTrackUrl && (
+            <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 8, padding: '0.55rem 0.85rem', marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span style={{ fontSize: '0.8rem', color: '#166534', fontWeight: 700 }}>🔗 Track your order:</span>
+              <a href={lastTrackUrl} target="_blank" rel="noopener noreferrer"
+                style={{ fontSize: '0.78rem', color: '#15803d', fontWeight: 800, textDecoration: 'underline', wordBreak: 'break-all' }}>
+                {typeof window !== 'undefined' ? `${window.location.origin}${lastTrackUrl}` : lastTrackUrl}
+              </a>
+            </div>
+          )}
+          <div style={{ fontSize: '0.78rem', color: '#166534' }}>
             📱 A WhatsApp window opened — send it to notify the restaurant instantly.
             {' '}<span
               onClick={() => {

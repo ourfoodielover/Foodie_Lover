@@ -23,6 +23,7 @@ export default function KitchenPage() {
   const [orders, setOrders]           = useState<Order[]>([]);
   const [tabs, setTabs]               = useState<CustomerTab[]>([]);
   const [clock, setClock]             = useState('');
+  const [tick, setTick]               = useState(0); // increments every second for live timers
   const [filter, setFilter]           = useState<'all' | 'queued' | 'cooking' | 'ready'>('all');
 
   // ── Auth ──────────────────────────────────────────────────────────────────
@@ -43,9 +44,14 @@ export default function KitchenPage() {
     if (!authChecked) return;
     refresh();
     const t1 = setInterval(refresh, 3000);
-    const t2 = setInterval(() => setClock(new Date().toLocaleTimeString()), 1000);
+    const t2 = setInterval(() => {
+      setClock(new Date().toLocaleTimeString());
+      setTick(n => n + 1); // forces re-render for live MM:SS timers
+    }, 1000);
     return () => { clearInterval(t1); clearInterval(t2); };
   }, [refresh, authChecked]);
+
+  void tick; // referenced to prevent lint warnings about unused state
 
   function logout() { clearSession('kitchen'); router.replace('/kitchen/login'); }
 
@@ -171,9 +177,13 @@ export default function KitchenPage() {
       {/* Order cards */}
       <div style={{ padding: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(280px,1fr))', gap: '0.85rem' }}>
         {shown.map(order => {
-          const mins = Math.floor((Date.now() - new Date(order.timestamp).getTime()) / 60000);
-          const isUrgent = mins > 25;
+          const totalSecs    = Math.floor((Date.now() - new Date(order.timestamp).getTime()) / 1000);
+          const mins         = Math.floor(totalSecs / 60);
+          const secs         = totalSecs % 60;
+          const timerLabel   = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+          const isUrgent     = mins > 25;
           const isHighPriority = mins > 15 && !isUrgent;
+          const isDelivery   = order.type === 'delivery';
 
           // Check if this order's tab has requested the bill
           const billRequested = tabs.some(
@@ -238,6 +248,15 @@ export default function KitchenPage() {
                   📦 LARGE ORDER
                 </div>
               )}
+              {/* Delivery badge */}
+              {isDelivery && (
+                <div style={{
+                  background: '#2563eb', color: 'white',
+                  padding: '0.2rem 0.75rem', fontSize: '0.7rem', fontWeight: 800, textAlign: 'center',
+                }}>
+                  🛵 DELIVERY — {order.deliveryAddress ? order.deliveryAddress.slice(0, 30) + (order.deliveryAddress.length > 30 ? '…' : '') : 'Address on file'}
+                </div>
+              )}
 
               <div style={{ padding: '0.75rem 1rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
@@ -253,7 +272,12 @@ export default function KitchenPage() {
                     <div style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.15rem 0.55rem', borderRadius: 10, background: (STATUS_COLOR[order.status] || '#333') + '30', color: STATUS_COLOR[order.status] || '#888' }}>
                       {STATUS_LABEL[order.status] || order.status}
                     </div>
-                    <div style={{ fontSize: '0.65rem', color: '#555', marginTop: '0.2rem' }}>⏱ {mins}m</div>
+                    <div style={{
+                      fontSize: '0.75rem', marginTop: '0.2rem', fontWeight: 800, fontVariantNumeric: 'tabular-nums',
+                      color: isUrgent ? '#ef4444' : isHighPriority ? '#f59e0b' : '#888',
+                    }}>
+                      ⏱ {timerLabel}
+                    </div>
                   </div>
                 </div>
 

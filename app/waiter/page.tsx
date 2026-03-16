@@ -125,6 +125,10 @@ export default function WaiterPage() {
               : filter === 'served' ? served
               : orders.slice(-80).reverse();
 
+  // Delivery orders that are prepared — ready for delivery pickup
+  const deliveryReadyOrders = orders.filter(o => o.type === 'delivery' && o.status === 'prepared');
+  const deliveryEnRoute     = orders.filter(o => o.type === 'delivery' && o.status === 'out_for_delivery');
+
   // For bill-requested smart banner
   const awaitingPaymentTabs = tabs.filter(t => t.tabStatus === 'awaiting_payment');
   const tabsWithPendingFood = awaitingPaymentTabs.filter(tab =>
@@ -224,6 +228,28 @@ export default function WaiterPage() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* ── Delivery Ready Banner ── */}
+      {deliveryReadyOrders.length > 0 && (
+        <div style={{ background: '#eff6ff', borderBottom: '2px solid #2563eb', padding: '0.65rem 1.25rem' }}>
+          <div style={{ fontWeight: 800, fontSize: '0.82rem', color: '#1e40af', marginBottom: '0.35rem' }}>
+            🛵 Delivery Orders Ready — Notify delivery person
+          </div>
+          {deliveryReadyOrders.map(o => (
+            <div key={o.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.2rem 0', fontSize: '0.78rem', color: '#1e40af' }}>
+              <span>#{o.id.slice(-6)} · {o.customerName} · ₹{o.total}</span>
+              {o.deliveryAddress && <span style={{ color: '#3b82f6', fontSize: '0.7rem' }}>📍 {o.deliveryAddress.slice(0, 25)}{o.deliveryAddress.length > 25 ? '…' : ''}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+      {deliveryEnRoute.length > 0 && (
+        <div style={{ background: '#f0f9ff', borderBottom: '1px solid #bae6fd', padding: '0.5rem 1.25rem' }}>
+          <div style={{ fontSize: '0.75rem', color: '#0369a1', fontWeight: 700 }}>
+            🛵 {deliveryEnRoute.length} order{deliveryEnRoute.length > 1 ? 's' : ''} currently out for delivery
+          </div>
         </div>
       )}
 
