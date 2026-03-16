@@ -14,6 +14,16 @@ export interface StaffAccount {
   createdAt: string;
 }
 
+export interface DeliveryAccount {
+  id:        string;
+  username:  string;
+  pin:       string;   // 4–6 digit PIN
+  role:      'delivery';
+  name:      string;   // Display name
+  active:    boolean;
+  createdAt: string;
+}
+
 export interface AuthSession {
   accountId?: string;  // Set for waiter individual accounts
   role:       Role;
@@ -40,10 +50,11 @@ const SESSION_KEY: Record<Role, string> = {
 };
 
 const KEYS = {
-  kitchenPin:    'fl_kitchen_pin',
-  managerPin:    'fl_manager_pin',
-  staffAccounts: 'fl_staff_accounts',
-  securitySetup: 'fl_admin_security',
+  kitchenPin:        'fl_kitchen_pin',
+  managerPin:        'fl_manager_pin',
+  staffAccounts:     'fl_staff_accounts',
+  deliveryAccounts:  'fl_delivery_accounts',
+  securitySetup:     'fl_admin_security',
 };
 
 // Sessions expire after 8 hours of inactivity
@@ -115,6 +126,53 @@ export function toggleStaffAccount(id: string): void {
 export function updateStaffPin(id: string, newPin: string): void {
   saveStaffAccounts(
     getStaffAccounts().map(a => a.id === id ? { ...a, pin: newPin } : a),
+  );
+}
+
+// ─── Delivery Accounts ────────────────────────────────────────────────────────
+export const getDeliveryAccounts  = (): DeliveryAccount[] =>
+  ls_get<DeliveryAccount[]>(KEYS.deliveryAccounts, []);
+export const saveDeliveryAccounts = (a: DeliveryAccount[]) =>
+  ls_set(KEYS.deliveryAccounts, a);
+
+export function createDeliveryAccount(
+  name:     string,
+  username: string,
+  pin:      string,
+): DeliveryAccount | { error: string } {
+  const accounts = getDeliveryAccounts();
+  if (accounts.some(a => a.username.toLowerCase() === username.toLowerCase().trim())) {
+    return { error: 'Username already exists' };
+  }
+  if (pin.length < 4) return { error: 'PIN must be at least 4 digits' };
+
+  const account: DeliveryAccount = {
+    id:        `DEL-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+    username:  username.trim(),
+    pin:       pin.trim(),
+    role:      'delivery',
+    name:      name.trim(),
+    active:    true,
+    createdAt: new Date().toISOString(),
+  };
+  accounts.push(account);
+  saveDeliveryAccounts(accounts);
+  return account;
+}
+
+export function deleteDeliveryAccount(id: string): void {
+  saveDeliveryAccounts(getDeliveryAccounts().filter(a => a.id !== id));
+}
+
+export function toggleDeliveryAccount(id: string): void {
+  saveDeliveryAccounts(
+    getDeliveryAccounts().map(a => a.id === id ? { ...a, active: !a.active } : a),
+  );
+}
+
+export function updateDeliveryPin(id: string, newPin: string): void {
+  saveDeliveryAccounts(
+    getDeliveryAccounts().map(a => a.id === id ? { ...a, pin: newPin } : a),
   );
 }
 
@@ -193,15 +251,22 @@ export function loginManager(pin: string): AuthSession | null {
 }
 
 /**
- * Delivery login — no PIN required for the prototype.
- * The delivery person just enters their name.
+ * Delivery login — validates username + PIN against stored delivery accounts.
+ * Returns null if credentials are invalid or the account is inactive.
  */
-export function loginDelivery(name: string): AuthSession {
-  const n = name.trim() || 'Delivery';
+export function loginDelivery(username: string, pin: string): AuthSession | null {
+  const account = getDeliveryAccounts().find(
+    a =>
+      a.username.toLowerCase() === username.toLowerCase().trim() &&
+      a.pin === pin.trim() &&
+      a.active,
+  );
+  if (!account) return null;
   const s: AuthSession = {
+    accountId: account.id,
     role:      'delivery',
-    name:      n,
-    username:  n.toLowerCase().replace(/\s+/g, '_'),
+    name:      account.name,
+    username:  account.username,
     loginAt:   new Date().toISOString(),
     expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
   };

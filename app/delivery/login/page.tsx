@@ -5,14 +5,30 @@ import { loginDelivery } from '@/lib/auth';
 
 export default function DeliveryLoginPage() {
   const router = useRouter();
-  const [name, setName]   = useState('');
-  const [error, setError] = useState('');
+  const [username, setUsername] = useState('');
+  const [pin,      setPin]      = useState('');
+  const [error,    setError]    = useState('');
+  const [loading,  setLoading]  = useState(false);
 
   function handleLogin() {
-    if (!name.trim()) { setError('Please enter your name'); return; }
-    loginDelivery(name.trim());
+    if (!username.trim()) { setError('Please enter your username'); return; }
+    if (!pin.trim())      { setError('Please enter your PIN');      return; }
+    setLoading(true);
+    const session = loginDelivery(username.trim(), pin.trim());
+    setLoading(false);
+    if (!session) {
+      setError('Invalid username or PIN. Ask admin to create / check your account.');
+      return;
+    }
     router.replace('/delivery');
   }
+
+  const inp: React.CSSProperties = {
+    width: '100%', padding: '0.7rem 0.9rem',
+    border: '2px solid #e5e7eb', borderRadius: 10,
+    fontFamily: 'Poppins,sans-serif', fontSize: '0.92rem',
+    outline: 'none', boxSizing: 'border-box',
+  };
 
   return (
     <div style={{
@@ -32,40 +48,56 @@ export default function DeliveryLoginPage() {
           </div>
         </div>
 
-        <div style={{ marginBottom: '1rem' }}>
+        {/* Username */}
+        <div style={{ marginBottom: '0.85rem' }}>
           <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.4rem' }}>
-            Your Name
+            Username
           </label>
           <input
-            value={name}
-            onChange={e => { setName(e.target.value); setError(''); }}
+            value={username}
+            onChange={e => { setUsername(e.target.value); setError(''); }}
             onKeyDown={e => e.key === 'Enter' && handleLogin()}
-            placeholder="e.g. Ravi Kumar"
+            placeholder="e.g. ravi"
             autoFocus
-            style={{
-              width: '100%', padding: '0.7rem 0.9rem',
-              border: '2px solid #e5e7eb', borderRadius: 10,
-              fontFamily: 'Poppins,sans-serif', fontSize: '0.92rem',
-              outline: 'none', boxSizing: 'border-box',
-            }}
+            autoComplete="username"
+            style={inp}
+          />
+        </div>
+
+        {/* PIN */}
+        <div style={{ marginBottom: '1rem' }}>
+          <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.4rem' }}>
+            PIN
+          </label>
+          <input
+            type="password"
+            inputMode="numeric"
+            value={pin}
+            onChange={e => { setPin(e.target.value.replace(/\D/g, '')); setError(''); }}
+            onKeyDown={e => e.key === 'Enter' && handleLogin()}
+            placeholder="••••"
+            maxLength={6}
+            autoComplete="current-password"
+            style={{ ...inp, letterSpacing: '0.4em', textAlign: 'center' }}
           />
         </div>
 
         {error && (
-          <div style={{ fontSize: '0.78rem', color: '#ef4444', marginBottom: '0.75rem', fontWeight: 600 }}>
+          <div style={{ fontSize: '0.78rem', color: '#ef4444', marginBottom: '0.75rem', fontWeight: 600, lineHeight: 1.4 }}>
             {error}
           </div>
         )}
 
         <button
           onClick={handleLogin}
+          disabled={loading}
           style={{
-            width: '100%', background: '#0f172a', color: 'white', border: 'none',
+            width: '100%', background: loading ? '#94a3b8' : '#0f172a', color: 'white', border: 'none',
             padding: '0.8rem', borderRadius: 12, fontWeight: 700, fontSize: '0.95rem',
-            cursor: 'pointer', fontFamily: 'Poppins,sans-serif',
+            cursor: loading ? 'not-allowed' : 'pointer', fontFamily: 'Poppins,sans-serif',
           }}
         >
-          🛵 Start Delivery Shift
+          {loading ? '⏳ Checking…' : '🛵 Start Delivery Shift'}
         </button>
 
         <div style={{ textAlign: 'center', marginTop: '1.25rem' }}>

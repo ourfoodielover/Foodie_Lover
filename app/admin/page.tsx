@@ -11,10 +11,11 @@ import {
 import {
   getSession, clearSession, AuthSession,
   getStaffAccounts, createStaffAccount, deleteStaffAccount, toggleStaffAccount, updateStaffPin,
+  getDeliveryAccounts, createDeliveryAccount, deleteDeliveryAccount, toggleDeliveryAccount, updateDeliveryPin,
   getKitchenPin, saveKitchenPin, getManagerPin, saveManagerPin,
   getSecuritySetup, saveSecuritySetup, verifySecurityAnswer,
   SECURITY_QUESTIONS,
-  StaffAccount,
+  StaffAccount, DeliveryAccount,
 } from '@/lib/auth';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -82,6 +83,13 @@ export default function AdminPage() {
   const [editPinId,  setEditPinId]  = useState('');
   const [editPinVal, setEditPinVal] = useState('');
 
+  // ── Delivery accounts state ──
+  const [deliveryAccounts,  setDeliveryAccounts]  = useState<DeliveryAccount[]>([]);
+  const [deliveryForm,      setDeliveryForm]      = useState({ name: '', username: '', pin: '' });
+  const [deliveryMsg,       setDeliveryMsg]       = useState('');
+  const [editDelivPinId,    setEditDelivPinId]    = useState('');
+  const [editDelivPinVal,   setEditDelivPinVal]   = useState('');
+
   // ── Admin PIN change state ──
   const [adminNewPin,    setAdminNewPin]    = useState('');
   const [adminNewPin2,   setAdminNewPin2]   = useState('');
@@ -101,6 +109,7 @@ export default function AdminPage() {
     setTables(getTables());
     setMenu(getMenu());
     setStaffAccounts(getStaffAccounts());
+    setDeliveryAccounts(getDeliveryAccounts());
     setKitchenPin(getKitchenPin());
     setManagerPin(getManagerPin());
     setSecSetup(getSecuritySetup());
@@ -302,6 +311,17 @@ export default function AdminPage() {
     if ('error' in result) { setStaffMsg(`❌ ${result.error}`); return; }
     setStaffMsg(`✅ Account created for ${result.name}`);
     setStaffForm({ name: '', username: '', pin: '' });
+    refresh();
+  }
+
+  function addDeliveryAccount() {
+    if (!deliveryForm.name.trim() || !deliveryForm.username.trim() || !deliveryForm.pin.trim()) {
+      setDeliveryMsg('❌ All fields required'); return;
+    }
+    const result = createDeliveryAccount(deliveryForm.name, deliveryForm.username, deliveryForm.pin);
+    if ('error' in result) { setDeliveryMsg(`❌ ${result.error}`); return; }
+    setDeliveryMsg(`✅ Account created for ${result.name}`);
+    setDeliveryForm({ name: '', username: '', pin: '' });
     refresh();
   }
 
@@ -1035,17 +1055,116 @@ export default function AdminPage() {
             }
           </div>
 
+          {/* ── Create Delivery Account ── */}
+          <div style={card('#0f172a')}>
+            <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:'1rem',fontWeight:700,marginBottom:'0.75rem',color:'#1A0800'}}>➕ Create Delivery Account</h3>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr auto',gap:'0.75rem',alignItems:'flex-end'}}>
+              <div>
+                <label style={{fontSize:'0.73rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.25rem'}}>Full Name</label>
+                <input value={deliveryForm.name} onChange={e=>setDeliveryForm(f=>({...f,name:e.target.value}))} placeholder="e.g. Ravi Kumar" style={{...inp}} />
+              </div>
+              <div>
+                <label style={{fontSize:'0.73rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.25rem'}}>Username</label>
+                <input value={deliveryForm.username} onChange={e=>setDeliveryForm(f=>({...f,username:e.target.value}))} placeholder="e.g. ravi" style={{...inp}} />
+              </div>
+              <div>
+                <label style={{fontSize:'0.73rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.25rem'}}>PIN (4+ digits)</label>
+                <input
+                  type="password"
+                  inputMode="numeric"
+                  value={deliveryForm.pin}
+                  onChange={e=>setDeliveryForm(f=>({...f,pin:e.target.value.replace(/\D/g,'')}))}
+                  placeholder="••••"
+                  maxLength={6}
+                  style={{...inp,letterSpacing:'0.3em',textAlign:'center'}}
+                />
+              </div>
+              <button onClick={addDeliveryAccount} style={{...btn('#0f172a'),padding:'0.65rem 1.1rem',whiteSpace:'nowrap' as const}}>✅ Add</button>
+            </div>
+            {deliveryMsg && <div style={{fontSize:'0.78rem',color:deliveryMsg.includes('✅')?'#16a34a':'#ef4444',marginTop:'0.5rem'}}>{deliveryMsg}</div>}
+          </div>
+
+          {/* ── Delivery Accounts List ── */}
+          <div style={card()}>
+            <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:'1rem',fontWeight:700,marginBottom:'0.75rem',color:'#1A0800'}}>
+              🛵 Delivery Accounts ({deliveryAccounts.length})
+            </h3>
+            {!deliveryAccounts.length
+              ? <div style={{color:'#999',fontSize:'0.85rem',textAlign:'center',padding:'2rem 0'}}>No delivery accounts yet. Create one above.</div>
+              : <div style={{overflowX:'auto'}}>
+                  <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.83rem'}}>
+                    <thead>
+                      <tr style={{background:'#f8fafc'}}>
+                        {['Name','Username','Status','Created','Actions'].map(h=>(
+                          <th key={h} style={{padding:'0.5rem 0.75rem',textAlign:'left',fontSize:'0.7rem',fontWeight:700,color:'#475569',textTransform:'uppercase'}}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {deliveryAccounts.map(acc=>(
+                        <tr key={acc.id} style={{borderBottom:'1px solid #f1f5f9',opacity:acc.active?1:0.5}}>
+                          <td style={{padding:'0.55rem 0.75rem',fontWeight:700}}>{acc.name}</td>
+                          <td style={{padding:'0.55rem 0.75rem',color:'#666',fontFamily:'monospace'}}>{acc.username}</td>
+                          <td style={{padding:'0.55rem 0.75rem'}}>
+                            <span style={{fontSize:'0.72rem',fontWeight:700,padding:'0.18rem 0.5rem',borderRadius:10,background:acc.active?'#dcfce7':'#fee2e2',color:acc.active?'#16a34a':'#ef4444'}}>
+                              {acc.active?'Active':'Inactive'}
+                            </span>
+                          </td>
+                          <td style={{padding:'0.55rem 0.75rem',color:'#aaa',fontSize:'0.78rem'}}>
+                            {new Date(acc.createdAt).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}
+                          </td>
+                          <td style={{padding:'0.55rem 0.75rem'}}>
+                            <div style={{display:'flex',gap:'0.4rem',flexWrap:'wrap' as const}}>
+                              <button
+                                onClick={()=>{ toggleDeliveryAccount(acc.id); refresh(); }}
+                                style={{...btn(acc.active?'#fef2f2':'#f0fdf4',acc.active?'#ef4444':'#16a34a'),fontSize:'0.72rem',padding:'0.25rem 0.6rem',border:`1px solid ${acc.active?'#fecaca':'#bbf7d0'}`}}
+                              >
+                                {acc.active?'⛔ Disable':'✅ Enable'}
+                              </button>
+                              {editDelivPinId===acc.id
+                                ? <div style={{display:'flex',gap:'0.3rem',alignItems:'center'}}>
+                                    <input
+                                      type="password"
+                                      inputMode="numeric"
+                                      value={editDelivPinVal}
+                                      onChange={e=>setEditDelivPinVal(e.target.value.replace(/\D/g,''))}
+                                      placeholder="New PIN"
+                                      maxLength={6}
+                                      style={{width:'80px',padding:'0.25rem 0.4rem',border:'2px solid #e5e7eb',borderRadius:6,fontSize:'0.78rem',fontFamily:'Poppins,sans-serif',letterSpacing:'0.3em',textAlign:'center'}}
+                                    />
+                                    <button onClick={()=>{ if(editDelivPinVal.length>=4){updateDeliveryPin(acc.id,editDelivPinVal);setEditDelivPinId('');setEditDelivPinVal('');refresh();} }} style={{...btn('#3b82f6'),fontSize:'0.72rem',padding:'0.25rem 0.5rem'}}>Save</button>
+                                    <button onClick={()=>{setEditDelivPinId('');setEditDelivPinVal('');}} style={{...btn('#e5e7eb','#555'),fontSize:'0.72rem',padding:'0.25rem 0.5rem'}}>✕</button>
+                                  </div>
+                                : <button onClick={()=>{ setEditDelivPinId(acc.id); setEditDelivPinVal(''); }} style={{...btn('#374151'),fontSize:'0.72rem',padding:'0.25rem 0.6rem'}}>🔑 PIN</button>
+                              }
+                              <button
+                                onClick={()=>{ if(confirm(`Delete account for ${acc.name}?`)){deleteDeliveryAccount(acc.id);refresh();} }}
+                                style={{...btn('#ef4444'),fontSize:'0.72rem',padding:'0.25rem 0.6rem'}}
+                              >
+                                🗑️ Delete
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+            }
+          </div>
+
           {/* Staff portal links */}
           <div style={card()}>
             <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:'1rem',fontWeight:700,marginBottom:'0.75rem',color:'#1A0800'}}>🔗 Staff Portal Links</h3>
             <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))',gap:'0.65rem'}}>
               {[
-                {href:'/kitchen/login',label:'🔥 Kitchen Login',   color:'#3b82f6'},
-                {href:'/waiter/login', label:'🧑‍🍳 Waiter Login',   color:'#8b5cf6'},
-                {href:'/manager/login',label:'💳 Manager Login',   color:'#16a34a'},
-                {href:'/admin/login',  label:'🔧 Admin Login',     color:'#E65C00'},
-                {href:'/online',       label:'📦 Online Ordering', color:'#06b6d4'},
-                {href:'/',             label:'🪑 Dine-In Menu',    color:'#f59e0b'},
+                {href:'/kitchen/login',  label:'🔥 Kitchen Login',    color:'#3b82f6'},
+                {href:'/waiter/login',   label:'🧑‍🍳 Waiter Login',    color:'#8b5cf6'},
+                {href:'/delivery/login', label:'🛵 Delivery Login',   color:'#0f172a'},
+                {href:'/manager/login',  label:'💳 Manager Login',    color:'#16a34a'},
+                {href:'/admin/login',    label:'🔧 Admin Login',      color:'#E65C00'},
+                {href:'/online',         label:'📦 Online Ordering',  color:'#06b6d4'},
+                {href:'/',               label:'🪑 Dine-In Menu',     color:'#f59e0b'},
               ].map(l=>(
                 <a key={l.href} href={l.href} target="_blank" rel="noreferrer" style={{padding:'0.65rem 1rem',background:l.color,color:'white',borderRadius:8,fontWeight:700,textDecoration:'none',fontSize:'0.82rem',textAlign:'center',display:'block'}}>
                   {l.label}
