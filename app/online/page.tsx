@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
 import {
-  getMenu, addOrder, getWhatsappNumber, buildWhatsappOrderUrl, getTrackingUrl,
+  getMenu, addOrder, getTrackingUrl,
   MenuItem, Order, OrderItem,
 } from '@/lib/storage';
 
@@ -115,13 +115,6 @@ export default function OnlineOrderPage() {
       setOrderPlaced(true);
       setForm({ name: '', phone: '', type: 'pickup', address: '', payment: 'cod' });
 
-      // ── WhatsApp Notification ──────────────────────────────────────────────
-      // Open wa.me link so customer can send order details to the restaurant.
-      // getWhatsappNumber() returns the number set by admin (empty string if not set).
-      const waUrl = buildWhatsappOrderUrl(order, getWhatsappNumber());
-      setTimeout(() => {
-        window.open(waUrl, '_blank', 'noopener');
-      }, 400); // slight delay so order-placed banner appears first
     } finally {
       submittingRef.current = false;
       setIsSubmitting(false);
@@ -176,17 +169,6 @@ export default function OnlineOrderPage() {
               </a>
             </div>
           )}
-          <div style={{ fontSize: '0.78rem', color: '#166534' }}>
-            📱 A WhatsApp window opened — send it to notify the restaurant instantly.
-            {' '}<span
-              onClick={() => {
-                const orders = (JSON.parse(localStorage.getItem('fl_orders') || '[]') as Order[]);
-                const o = orders.find(x => x.id === lastOrderId);
-                if (o) window.open(buildWhatsappOrderUrl(o, getWhatsappNumber()), '_blank', 'noopener');
-              }}
-              style={{ cursor: 'pointer', textDecoration: 'underline', fontWeight: 700 }}
-            >Resend WhatsApp</span>
-          </div>
         </div>
       )}
 

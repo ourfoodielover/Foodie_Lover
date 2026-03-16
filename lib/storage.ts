@@ -189,7 +189,6 @@ const KEYS = {
   disputes:    'fl_food_disputes',
   splitBills:  'fl_split_bills',
   devices:     'fl_device_records',   // device-based session tracking
-  whatsapp:    'fl_whatsapp_number',  // restaurant WhatsApp number
   events:      'fl_order_events',     // event log (event-based architecture)
   expenses:    'fl_expenses',         // manager expense tracker
 };
@@ -1150,14 +1149,6 @@ export function getDevicesForTab(tabId: string): DeviceRecord[] {
   return getDeviceRecords().filter(r => r.tabId === tabId);
 }
 
-// ─── WhatsApp Number ──────────────────────────────────────────────────────────
-export function getWhatsappNumber(): string {
-  return ls_get<string>(KEYS.whatsapp, '');
-}
-export function saveWhatsappNumber(num: string): void {
-  ls_set(KEYS.whatsapp, num.replace(/\D/g, '')); // store digits only
-}
-
 // ─── Online Order Stats ───────────────────────────────────────────────────────
 export interface OnlineOrderStats {
   todayTotal:        number;   // count of all online orders today
@@ -1185,32 +1176,6 @@ export function getOnlineOrderStats(): OnlineOrderStats {
     allTimePickup:   online.filter(o => o.type === 'pickup').length,
     allTimeDelivery: online.filter(o => o.type === 'delivery').length,
   };
-}
-
-/**
- * Build a WhatsApp message pre-fill URL for a new online order.
- * Opens wa.me with order details so the customer can send it to the restaurant.
- */
-export function buildWhatsappOrderUrl(order: Order, restaurantNumber: string): string {
-  const lines: string[] = [
-    `🍽️ *New Online Order — Foodie Lover*`,
-    `📋 Order ID: ${order.id}`,
-    `👤 Name: ${order.customerName}`,
-    `📱 Phone: ${order.phone || '—'}`,
-    `📦 Type: ${order.type === 'delivery' ? '🚗 Delivery' : '🏪 Pickup'}`,
-    order.deliveryAddress ? `📍 Address: ${order.deliveryAddress}` : '',
-    `💳 Payment: ${order.payment?.toUpperCase() || 'COD'}`,
-    ``,
-    `*Items:*`,
-    ...(order.items || []).map(i => `  • ${i.name} × ${i.qty}  ₹${i.subtotal}`),
-    ``,
-    `💰 *Total: ₹${order.total}*`,
-    `🕐 Time: ${new Date(order.timestamp).toLocaleTimeString('en-IN')}`,
-  ].filter(l => l !== null);
-
-  const msg = encodeURIComponent(lines.join('\n'));
-  const num = restaurantNumber.replace(/\D/g, '');
-  return num ? `https://wa.me/${num}?text=${msg}` : `https://wa.me/?text=${msg}`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

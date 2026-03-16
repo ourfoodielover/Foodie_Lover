@@ -5,7 +5,7 @@ import {
   getOrders, getTables, getMenu, saveMenu, getPin, savePin,
   updateOrderStatus, cancelOrder, applyDiscount, exportOrdersCSV, getOrdersInPeriod,
   getEndOfDayReport, getWaiterStats, getTableOccupancyStats, getFraudAlerts,
-  getOnlineOrderStats, getWhatsappNumber, saveWhatsappNumber,
+  getOnlineOrderStats,
   Order, Table, MenuItem, DEFAULT_MENU, WaiterStats, TableOccupancyStats, OnlineOrderStats,
 } from '@/lib/storage';
 import {
@@ -71,10 +71,6 @@ export default function AdminPage() {
   const [tableOccupancy, setTableOccupancy] = useState<TableOccupancyStats[]>([]);
   const [onlineStats,    setOnlineStats]    = useState<OnlineOrderStats | null>(null);
 
-  // ── WhatsApp setting ──
-  const [waNum,    setWaNum]    = useState('');
-  const [waNumMsg, setWaNumMsg] = useState('');
-
   // ── Staff management state ──
   const [staffAccounts, setStaffAccounts] = useState<StaffAccount[]>([]);
   const [staffForm,  setStaffForm]  = useState({ name: '', username: '', pin: '' });
@@ -111,7 +107,6 @@ export default function AdminPage() {
     setWaiterStats(getWaiterStats());
     setTableOccupancy(getTableOccupancyStats());
     setOnlineStats(getOnlineOrderStats());
-    setWaNum(getWhatsappNumber());
   }, []);
 
   // ── Auth check ──
@@ -322,14 +317,6 @@ export default function AdminPage() {
     saveManagerPin(managerPin);
     setManagerPinMsg('✅ Manager PIN updated');
     setTimeout(() => setManagerPinMsg(''), 3000);
-  }
-
-  function saveWaNumFn() {
-    const digits = waNum.replace(/\D/g, '');
-    if (digits.length < 10) { setWaNumMsg('❌ Enter a valid number (min 10 digits with country code)'); return; }
-    saveWhatsappNumber(digits);
-    setWaNumMsg('✅ WhatsApp number saved!');
-    setTimeout(() => setWaNumMsg(''), 3000);
   }
 
   // ─────────────────────────────── RENDER ────────────────────────────────────
@@ -947,30 +934,6 @@ export default function AdminPage() {
               />
               {managerPinMsg && <div style={{fontSize:'0.75rem',color:managerPinMsg.includes('✅')?'#16a34a':'#ef4444',marginBottom:'0.4rem'}}>{managerPinMsg}</div>}
               <button onClick={saveManagerPinFn} style={{...btn('#16a34a'),width:'100%'}}>💾 Save Manager PIN</button>
-            </div>
-          </div>
-
-          {/* WhatsApp Notification Number */}
-          <div style={card('#25d366')}>
-            <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:'1rem',fontWeight:700,marginBottom:'0.4rem',color:'#1A0800'}}>📱 WhatsApp Notification Number</h3>
-            <p style={{fontSize:'0.78rem',color:'#555',marginBottom:'0.75rem',lineHeight:1.5}}>
-              When a customer places an online order, WhatsApp will open with the order details pre-filled — so the customer can send it directly to this number. Include country code (e.g. 919876543210 for India).
-            </p>
-            <input
-              value={waNum}
-              onChange={e => setWaNum(e.target.value)}
-              placeholder="e.g. 919876543210"
-              type="tel"
-              style={{...inp, marginBottom:'0.5rem'}}
-            />
-            {waNumMsg && <div style={{fontSize:'0.75rem',color:waNumMsg.includes('✅')?'#16a34a':'#ef4444',marginBottom:'0.4rem'}}>{waNumMsg}</div>}
-            <div style={{display:'flex',gap:'0.6rem',alignItems:'center',flexWrap:'wrap'}}>
-              <button onClick={saveWaNumFn} style={{...btn('#25d366'),padding:'0.5rem 1.1rem'}}>💾 Save Number</button>
-              {waNum.replace(/\D/g,'').length >= 10 && (
-                <a href={`https://wa.me/${waNum.replace(/\D/g,'')}`} target="_blank" rel="noopener noreferrer" style={{fontSize:'0.78rem',color:'#25d366',fontWeight:700,textDecoration:'underline'}}>
-                  Test this number →
-                </a>
-              )}
             </div>
           </div>
 
