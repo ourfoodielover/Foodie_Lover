@@ -3,9 +3,9 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   getOrders, updateOrderStatus, cancelOrder,
-  getTabs, getPendingDisputes, resolveDispute, getPendingWaiterCalls, acknowledgeWaiterCall,
+  getTabs, getTables, getPendingDisputes, resolveDispute, getPendingWaiterCalls, acknowledgeWaiterCall,
   getWaiterStats,
-  CustomerTab, Order, FoodReceiptDispute, WaiterCall,
+  CustomerTab, Order, FoodReceiptDispute, WaiterCall, Table,
 } from '@/lib/storage';
 import { getSession, clearSession, AuthSession } from '@/lib/auth';
 
@@ -32,6 +32,7 @@ export default function WaiterPage() {
 
   const [orders, setOrders]           = useState<Order[]>([]);
   const [tabs, setTabs]               = useState<CustomerTab[]>([]);
+  const [tables, setTables]           = useState<Table[]>([]);
   const [disputes, setDisputes]       = useState<FoodReceiptDispute[]>([]);
   const [waiterCalls, setWaiterCalls] = useState<WaiterCall[]>([]);
   const [filter, setFilter]           = useState<'active' | 'served' | 'all'>('active');
@@ -52,6 +53,7 @@ export default function WaiterPage() {
   const refresh = useCallback(() => {
     setOrders(getOrders());
     setTabs(getTabs());
+    setTables(getTables());
     setDisputes(getPendingDisputes());
     setWaiterCalls(getPendingWaiterCalls());
     setSelOrder(prev => {
@@ -334,6 +336,12 @@ export default function WaiterPage() {
           const canAccept = order.status === 'awaiting_waiter';
           const canServe  = order.status === 'prepared';
 
+          // Seat usage badge for dine-in orders
+          const tableRow   = order.tableId ? tables.find(t => t.id === order.tableId) : null;
+          const seatBadge  = tableRow
+            ? `🪑 Seats: ${tableRow.occupiedSeats} / ${tableRow.capacity}`
+            : null;
+
           return (
             <div
               key={order.id}
@@ -353,6 +361,11 @@ export default function WaiterPage() {
                   <div style={{ fontSize: '0.72rem', color: '#888', marginTop: '0.1rem' }}>
                     {order.customerName}{order.tableId ? ` · Table ${order.tableId}` : ''}
                   </div>
+                  {seatBadge && (
+                    <div style={{ fontSize: '0.66rem', color: '#E65C00', fontWeight: 700, marginTop: '0.1rem' }}>
+                      {seatBadge}
+                    </div>
+                  )}
                   <div style={{ fontSize: '0.68rem', color: '#aaa', marginTop: '0.08rem' }}>⏱ {mins}m ago</div>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.25rem' }}>

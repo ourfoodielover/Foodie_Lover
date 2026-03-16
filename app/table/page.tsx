@@ -8,6 +8,7 @@ import {
   addWaiterCall, getLastWaiterCallTime, addFoodReceiptDispute,
   getOrCreateDeviceId, findActiveDeviceSession, registerDevice,
   getDevicesForTab, removeDeviceRecord, verifyTablePin,
+  addPartyToTab, getRemainingCapacity,
   MenuItem, Order, CustomerTab,
 } from '@/lib/storage';
 
@@ -86,6 +87,10 @@ function TablePageInner() {
   // ── PIN security ──
   const [pinInput, setPinInput]           = useState('');
   const [pinError, setPinError]           = useState('');
+
+  // ── Joiner party size ──
+  const [joinerPartyInput, setJoinerPartyInput] = useState('1');
+  const [joinerPartyError, setJoinerPartyError] = useState('');
 
   // ── Tab ──
   const [tabId, setTabId]                 = useState<string | null>(null);
@@ -288,13 +293,30 @@ function TablePageInner() {
       }
     }
 
+    // Validate and add joiner's party size
+    const joinerParty = Math.max(1, parseInt(joinerPartyInput) || 1);
+    const remaining   = getRemainingCapacity(tableId);
+    if (joinerParty > remaining) {
+      setJoinerPartyError(
+        remaining === 0
+          ? 'This table is full — no more seats available'
+          : `Only ${remaining} seat${remaining !== 1 ? 's' : ''} remaining at this table`,
+      );
+      return;
+    }
+    addPartyToTab(openTab.id, joinerParty);
+
     registerDevice(deviceId, tableId, openTab.id, name);
     setTabId(openTab.id);
     setCustomerName(name);
-    setTab(openTab);
+    // Re-read the tab from storage so occupiedSeats is up to date
+    const refreshedTabs = getTabs();
+    const refreshedTab  = refreshedTabs.find(t => t.id === openTab.id) || openTab;
+    setTab(refreshedTab);
     confirmedRef.current = getConfirmedOrderIds(tableId);
     setNameError('');
     setPinError('');
+    setJoinerPartyError('');
     setView('menu');
   }
 
@@ -545,6 +567,39 @@ function TablePageInner() {
             />
             {nameError && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem' }}>{nameError}</div>}
           </div>
+
+          {/* Joiner party size */}
+          {(() => {
+            const remaining = existingTabForJoin ? getRemainingCapacity(tableId) : 0;
+            return (
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>
+                  👥 Party Size <span style={{ fontWeight: 400, color: '#888' }}>(how many people joining with you?)</span>
+                </label>
+                <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                  <input
+                    type="number"
+                    min={1}
+                    max={remaining > 0 ? remaining : 1}
+                    value={joinerPartyInput}
+                    onChange={e => { setJoinerPartyInput(e.target.value); setJoinerPartyError(''); }}
+                    style={{ width: '80px', padding: '0.7rem 0.9rem', border: `2px solid ${joinerPartyError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '0.95rem', outline: 'none', fontWeight: 700, textAlign: 'center' }}
+                  />
+                  {remaining > 0 && (
+                    <span style={{ fontSize: '0.75rem', color: '#16a34a', fontWeight: 600 }}>
+                      🪑 {remaining} seat{remaining !== 1 ? 's' : ''} available
+                    </span>
+                  )}
+                  {remaining === 0 && (
+                    <span style={{ fontSize: '0.75rem', color: '#ef4444', fontWeight: 600 }}>
+                      🔴 Table is full
+                    </span>
+                  )}
+                </div>
+                {joinerPartyError && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem' }}>{joinerPartyError}</div>}
+              </div>
+            );
+          })()}
 
           {existingTabForJoin?.tableSessionPin && (
             <div style={{ marginBottom: '1.25rem' }}>

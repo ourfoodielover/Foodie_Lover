@@ -80,10 +80,13 @@ export interface CustomerTab {
 }
 
 export interface Table {
-  id:            string;
-  status:        'available' | 'occupied' | 'reserved';
-  capacity:      number;
-  sessionStart?: string;  // legacy — use CustomerTab for session info
+  id:               string;
+  name:             string;   // human-readable name e.g. "Table 01"
+  status:           'available' | 'occupied' | 'reserved';
+  capacity:         number;
+  occupiedSeats:    number;   // derived from sum of active tab partySizes
+  activeSessionId?: string;   // tableSessionId of the first (host) open tab
+  sessionStart?:    string;   // legacy — use CustomerTab for session info
 }
 
 export interface MenuItem {
@@ -195,11 +198,18 @@ export const DEFAULT_MENU: MenuItem[] = [
   { id:'M20', category:'Drinks',    name:'Fresh Lime Soda',         desc:'Refreshing lemon soda',                             price:60,  img:'🍋', badge:'',           available:true },
 ];
 
-const DEFAULT_TABLES: Table[] = Array.from({ length: 20 }, (_, i) => ({
-  id:       `T${String(i + 1).padStart(2, '0')}`,
-  status:   'available' as const,
-  capacity: i < 4 ? 2 : i < 14 ? 4 : 6,
-}));
+const DEFAULT_TABLES: Table[] = Array.from({ length: 20 }, (_, i) => {
+  const num      = String(i + 1).padStart(2, '0');
+  const capacity = i < 4 ? 2 : i < 14 ? 4 : 6;
+  const zone     = i < 4 ? 'Cosy' : i < 14 ? 'Main' : 'Banquet';
+  return {
+    id:            `T${num}`,
+    name:          `${zone} ${num}`,
+    status:        'available' as const,
+    capacity,
+    occupiedSeats: 0,
+  };
+});
 
 // ─── Admin PIN ────────────────────────────────────────────────────────────────
 export const getPin  = (): string    => ls_get<string>(KEYS.pin, '1234');
@@ -403,16 +413,31 @@ export function exportOrdersCSV(): string {
 export const getTables  = (): Table[] => ls_get<Table[]>(KEYS.tables, DEFAULT_TABLES);
 export const saveTables = (t: Table[]) => ls_set(KEYS.tables, t);
 
-export function syncTableStatus(tableId: string): void {
+/**
+ * Derive and persist occupancy data for a table from its active CustomerTabs.
+ * Updates: status, occupiedSeats, activeSessionId.
+ * Called after createTab(), closeTab(), or addPartyToTab().
+ */
+export function syncTableOccupancy(tableId: string): void {
   const activeTabs = getActiveTabsForTable(tableId);
-  const tables = getTables();
-  const idx = tables.findIndex(t => t.id === tableId);
+  const tables     = getTables();
+  const idx        = tables.findIndex(t => t.id === tableId);
   if (idx === -1) return;
+
+  const occupiedSeats   = activeTabs.reduce((sum, t) => sum + (t.partySize || 0), 0);
+  const activeSessionId = activeTabs.length > 0 ? activeTabs[0].tableSessionId : undefined;
   tables[idx] = {
     ...tables[idx],
-    status: activeTabs.length > 0 ? 'occupied' : 'available',
+    status:          activeTabs.length > 0 ? 'occupied' : 'available',
+    occupiedSeats,
+    activeSessionId,
   };
   saveTables(tables);
+}
+
+/** @deprecated Use syncTableOccupancy instead */
+export function syncTableStatus(tableId: string): void {
+  syncTableOccupancy(tableId);
 }
 
 /** Returns occupancy info for a table if any active tab exists */
@@ -427,6 +452,68 @@ export function getTableOccupancy(tableId: string): TableOccupancy | null {
     partySize: tab.partySize,
     since:     tab.createdAt,
     status:    tab.tabStatus,
+  };
+}
+
+/**
+ * Get remaining seat capacity for a table.
+ * Returns 0 if the table is full or over-capacity.
+ */
+export function getRemainingCapacity(tableId: string): number {
+  const table = getTables().find(t => t.id === tableId);
+  if (!table) return 0;
+  return Math.max(0, table.capacity - table.occupiedSeats);
+}
+
+/**
+ * Add additional seats to an existing tab (for joiners who bring a party).
+ * Enforces capacity — returns false if there is not enough room.
+ */
+export function addPartyToTab(tabId: string, additionalSeats: number): boolean {
+  if (additionalSeats < 1) return false;
+  const tabs = getTabs();
+  const idx  = tabs.findIndex(t => t.id === tabId);
+  if (idx === -1) return false;
+  if (!['open', 'awaiting_payment'].includes(tabs[idx].tabStatus)) return false;
+
+  const tableId = tabs[idx].tableId;
+  const table   = getTables().find(t => t.id === tableId);
+  if (!table) return false;
+
+  const freeSeats = Math.max(0, table.capacity - table.occupiedSeats);
+  if (additionalSeats > freeSeats) return false;   // not enough room
+
+  tabs[idx] = { ...tabs[idx], partySize: tabs[idx].partySize + additionalSeats };
+  saveTabs(tabs);
+  syncTableOccupancy(tableId);
+  return true;
+}
+
+/**
+ * Restaurant-wide occupancy summary for the manager dashboard stats bar.
+ */
+export interface RestaurantOccupancyStats {
+  totalTables:    number;
+  totalSeats:     number;
+  occupiedSeats:  number;
+  freeSeats:      number;
+  occupiedTables: number;
+  freeTables:     number;
+}
+
+export function getRestaurantOccupancyStats(): RestaurantOccupancyStats {
+  const tables = getTables();
+  const totalTables    = tables.length;
+  const totalSeats     = tables.reduce((s, t) => s + t.capacity, 0);
+  const occupiedSeats  = tables.reduce((s, t) => s + (t.occupiedSeats || 0), 0);
+  const occupiedTables = tables.filter(t => t.status === 'occupied').length;
+  return {
+    totalTables,
+    totalSeats,
+    occupiedSeats,
+    freeSeats:      totalSeats - occupiedSeats,
+    occupiedTables,
+    freeTables:     totalTables - occupiedTables,
   };
 }
 
@@ -523,13 +610,8 @@ export function createTab(
   tabs.push(tab);
   saveTabs(tabs);
 
-  // Mark table occupied
-  const tables = getTables();
-  const tIdx = tables.findIndex(t => t.id === tableId);
-  if (tIdx !== -1) {
-    tables[tIdx] = { ...tables[tIdx], status: 'occupied' };
-    saveTables(tables);
-  }
+  // Sync occupancy (status + occupiedSeats + activeSessionId)
+  syncTableOccupancy(tableId);
 
   return tab;
 }
@@ -634,8 +716,8 @@ export function closeTab(
   });
   if (changed) saveOrders(orders);
 
-  // Release table if no more active tabs
-  syncTableStatus(tab.tableId);
+  // Recalculate occupancy (releases table if no more active tabs)
+  syncTableOccupancy(tab.tableId);
 
   return true;
 }

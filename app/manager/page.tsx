@@ -220,6 +220,9 @@ export default function ManagerPage() {
               💰 {awaitingTabs.length} Awaiting Payment
             </div>
           )}
+          <button onClick={() => router.push('/manager/tables')} style={{ ...btn('#065f46', '#6ee7b7'), border: '1px solid #6ee7b7', fontSize: '0.72rem' }}>
+            🪑 Table Map
+          </button>
           <button onClick={() => setShowEOD(!showEOD)} style={{ ...btn('#065f46', '#6ee7b7'), border: '1px solid #6ee7b7', fontSize: '0.72rem' }}>
             📊 EOD Report
           </button>
