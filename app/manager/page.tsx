@@ -6,6 +6,7 @@ import {
   getTabs, getTabOrders, getOrders, closeTab, applyTabDiscount, getPin,
   getOrdersInPeriod, getEndOfDayReport,
   createSplitBill, markSplitEntryPaid, isSplitFullyPaid, getSplitBillForTab,
+  getExpenseStats,
   CustomerTab, Order, SplitBill,
 } from '@/lib/storage';
 
@@ -55,6 +56,9 @@ export default function ManagerPage() {
   // End-of-day report
   const [showEOD, setShowEOD]                 = useState(false);
 
+  // Expenses
+  const [todayExpenses, setTodayExpenses]     = useState(0);
+
   // ── Auth ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     const s = getSession('manager');
@@ -73,6 +77,7 @@ export default function ManagerPage() {
       if (!prev) return null;
       return allTabs.find(t => t.id === prev.id) ?? null;
     });
+    setTodayExpenses(getExpenseStats().todayTotal);
   }, []);
 
   useEffect(() => {
@@ -162,7 +167,8 @@ export default function ManagerPage() {
   const closedTabs   = tabs.filter(t => t.tabStatus === 'closed' &&
     t.closedAt && new Date(t.closedAt).toDateString() === new Date().toDateString(),
   );
-  const todayRevenue = getOrdersInPeriod('today').reduce((s, o) => s + (o.total || 0), 0);
+  const todayRevenue  = getOrdersInPeriod('today').reduce((s, o) => s + (o.total || 0), 0);
+  const todayNetProfit = todayRevenue - todayExpenses;
 
   const shown =
     tabFilter === 'awaiting' ? awaitingTabs :
@@ -223,6 +229,9 @@ export default function ManagerPage() {
           <button onClick={() => router.push('/manager/tables')} style={{ ...btn('#065f46', '#6ee7b7'), border: '1px solid #6ee7b7', fontSize: '0.72rem' }}>
             🪑 Table Map
           </button>
+          <button onClick={() => router.push('/manager/expenses')} style={{ ...btn('#065f46', '#6ee7b7'), border: '1px solid #6ee7b7', fontSize: '0.72rem' }}>
+            💸 Expenses
+          </button>
           <button onClick={() => setShowEOD(!showEOD)} style={{ ...btn('#065f46', '#6ee7b7'), border: '1px solid #6ee7b7', fontSize: '0.72rem' }}>
             📊 EOD Report
           </button>
@@ -279,13 +288,16 @@ export default function ManagerPage() {
       {/* Stats bar */}
       <div style={{ background: '#065f46', color: 'white', padding: '0.6rem 1.5rem', display: 'flex', gap: '2rem', overflowX: 'auto' }}>
         {[
-          { icon: '💰', val: `₹${todayRevenue}`,   label: 'Net Revenue'      },
-          { icon: '🧾', val: awaitingTabs.length,   label: 'Awaiting Payment' },
-          { icon: '🟢', val: openTabs.length,       label: 'Open Tabs'        },
-          { icon: '✅', val: closedTabs.length,     label: 'Closed Today'     },
+          { icon: '💰', val: `₹${todayRevenue}`,                       label: 'Revenue Today',   color: '#6ee7b7' },
+          { icon: '💸', val: `₹${todayExpenses}`,                      label: 'Expenses Today',  color: '#fca5a5' },
+          { icon: todayNetProfit >= 0 ? '📈' : '📉',
+            val: `${todayNetProfit >= 0 ? '+' : ''}₹${todayNetProfit}`, label: 'Net Profit Today',color: todayNetProfit >= 0 ? '#6ee7b7' : '#fca5a5' },
+          { icon: '🧾', val: awaitingTabs.length,                       label: 'Awaiting Payment',color: '#fde68a' },
+          { icon: '🟢', val: openTabs.length,                           label: 'Open Tabs',       color: '#6ee7b7' },
+          { icon: '✅', val: closedTabs.length,                         label: 'Closed Today',    color: '#a7f3d0' },
         ].map(s => (
           <div key={s.label} style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
-            <div style={{ fontSize: '1.2rem', fontWeight: 900, color: '#6ee7b7' }}>{s.icon} {s.val}</div>
+            <div style={{ fontSize: '1.2rem', fontWeight: 900, color: s.color }}>{s.icon} {s.val}</div>
             <div style={{ fontSize: '0.62rem', color: '#a7f3d0' }}>{s.label}</div>
           </div>
         ))}

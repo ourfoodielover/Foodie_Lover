@@ -140,6 +140,42 @@ export interface FraudAlert {
   amount?:  number;
 }
 
+export type ExpenseCategory =
+  | 'Ingredients'
+  | 'Utilities'
+  | 'Staff Wages'
+  | 'Rent'
+  | 'Equipment'
+  | 'Marketing'
+  | 'Maintenance'
+  | 'Packaging'
+  | 'Other';
+
+export const EXPENSE_CATEGORIES: ExpenseCategory[] = [
+  'Ingredients', 'Utilities', 'Staff Wages', 'Rent',
+  'Equipment', 'Marketing', 'Maintenance', 'Packaging', 'Other',
+];
+
+export interface Expense {
+  id:          string;
+  category:    ExpenseCategory;
+  description: string;
+  amount:      number;
+  date:        string;   // ISO date string (YYYY-MM-DD)
+  addedBy:     string;
+  createdAt:   string;   // ISO timestamp
+}
+
+export interface ExpenseStats {
+  todayTotal:  number;
+  weekTotal:   number;
+  monthTotal:  number;
+  todayCount:  number;
+  weekCount:   number;
+  monthCount:  number;
+  byCategory:  { category: string; total: number }[];
+}
+
 // ─── localStorage keys ────────────────────────────────────────────────────────
 const KEYS = {
   orders:      'fl_orders',
@@ -155,6 +191,7 @@ const KEYS = {
   devices:     'fl_device_records',   // device-based session tracking
   whatsapp:    'fl_whatsapp_number',  // restaurant WhatsApp number
   events:      'fl_order_events',     // event log (event-based architecture)
+  expenses:    'fl_expenses',         // manager expense tracker
 };
 
 // ─── Storage helpers ──────────────────────────────────────────────────────────
@@ -1396,4 +1433,71 @@ export function verifyTablePin(tabId: string, pin: string): boolean {
   if (!tab) return false;
   if (!tab.tableSessionPin) return true; // no PIN set — always allow
   return tab.tableSessionPin === pin.trim();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── EXPENSE TRACKER ──────────────────────────────────────────────────────────
+// Manager-only feature to log operating expenses and compare with revenue.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export const getExpenses  = (): Expense[] => ls_get<Expense[]>(KEYS.expenses, []);
+export const saveExpenses = (e: Expense[]) => ls_set(KEYS.expenses, e);
+
+/** Add a new expense entry and return it. */
+export function addExpense(data: Omit<Expense, 'id' | 'createdAt'>): Expense {
+  const expense: Expense = {
+    ...data,
+    id:        `EXP-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+    createdAt: new Date().toISOString(),
+  };
+  const expenses = getExpenses();
+  expenses.push(expense);
+  // Keep at most 1000 records to avoid unbounded growth
+  if (expenses.length > 1000) expenses.splice(0, expenses.length - 1000);
+  saveExpenses(expenses);
+  return expense;
+}
+
+/** Remove an expense by ID. Returns true if found and deleted. */
+export function deleteExpense(expenseId: string): boolean {
+  const expenses = getExpenses();
+  const next = expenses.filter(e => e.id !== expenseId);
+  if (next.length === expenses.length) return false;
+  saveExpenses(next);
+  return true;
+}
+
+/** Compute rolling expense totals for today / this week / this month. */
+export function getExpenseStats(): ExpenseStats {
+  const expenses = getExpenses();
+  const now      = new Date();
+
+  // Boundary timestamps
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const weekStart  = (() => {
+    const d = new Date(now);
+    d.setDate(d.getDate() - d.getDay()); // Sunday
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  })();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+
+  let todayTotal = 0, weekTotal = 0, monthTotal = 0;
+  let todayCount = 0, weekCount = 0, monthCount = 0;
+  const catMap: Record<string, number> = {};
+
+  expenses.forEach(e => {
+    const t = new Date(e.createdAt).getTime();
+    const amt = e.amount || 0;
+    catMap[e.category] = (catMap[e.category] || 0) + amt;
+    if (t >= monthStart) { monthTotal += amt; monthCount++; }
+    if (t >= weekStart)  { weekTotal  += amt; weekCount++;  }
+    if (t >= todayStart) { todayTotal += amt; todayCount++; }
+  });
+
+  const byCategory = Object.entries(catMap)
+    .map(([category, total]) => ({ category, total }))
+    .sort((a, b) => b.total - a.total);
+
+  return { todayTotal, weekTotal, monthTotal, todayCount, weekCount, monthCount, byCategory };
 }
