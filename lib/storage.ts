@@ -1265,6 +1265,33 @@ export function verifyTrackingToken(orderId: string, token: string): Order | nul
   return order;
 }
 
+/**
+ * Look up the most recent pickup/delivery order for a customer by name + phone.
+ * Used by /track when no URL token is present (customer clicks "Track Order" from home).
+ * Matches last 10 digits of phone to handle country-code variations (e.g. 91XXXXXXXXXX vs XXXXXXXXXX).
+ */
+export function lookupOrderByContact(name: string, phone: string): Order | null {
+  const nameLower   = name.trim().toLowerCase();
+  const phoneDigits = phone.replace(/\D/g, '');
+  if (!nameLower || !phoneDigits) return null;
+
+  const matches = getOrders().filter(o => {
+    if (o.type === 'dine-in') return false;           // dine-in uses table session, not contact lookup
+    if (!o.trackingToken)     return false;           // must have a tracking token to be trackable
+    const nameMatch  = o.customerName.trim().toLowerCase() === nameLower;
+    const storedDigs = (o.phone || '').replace(/\D/g, '');
+    const phoneMatch = storedDigs && phoneDigits &&
+      storedDigs.slice(-10) === phoneDigits.slice(-10); // compare last 10 digits
+    return nameMatch && phoneMatch;
+  });
+
+  if (!matches.length) return null;
+  // Return most recent order
+  return matches.sort((a, b) =>
+    new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+  )[0];
+}
+
 // ─── Delivery-specific helpers ────────────────────────────────────────────────
 
 /**
