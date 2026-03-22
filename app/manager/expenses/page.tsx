@@ -3,10 +3,10 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession, AuthSession } from '@/lib/auth';
 import {
-  getExpenses, addExpense, deleteExpense, getExpenseStats,
-  getOrdersInPeriod,
+  getOrders,
+  listExpenses, addExpenseApi, deleteExpenseApi, computeExpenseStats,
   Expense, ExpenseStats, ExpenseCategory, EXPENSE_CATEGORIES,
-} from '@/lib/storage';
+} from '@/lib/api';
 
 // ─── Style helpers ─────────────────────────────────────────────────────────────
 const btn = (bg = '#E65C00', c = 'white'): React.CSSProperties => ({
@@ -89,13 +89,28 @@ export default function ExpensesPage() {
     setAuthChecked(true);
   }, [router]);
 
-  // ── Data refresh ──────────────────────────────────────────────────────────
-  const refresh = useCallback(() => {
-    const all = getExpenses().slice().reverse(); // newest first
-    setExpenses(all);
-    setStats(getExpenseStats());
-    const rev = getOrdersInPeriod('today').reduce((s, o) => s + (o.total || 0), 0);
-    setTodayRevenue(rev);
+  // ── Data refresh — all from Supabase ─────────────────────────────────────
+  const refresh = useCallback(async () => {
+    try {
+      const todayMidnight = new Date();
+      todayMidnight.setHours(0, 0, 0, 0);
+      const [allExpenses, todayOrders] = await Promise.all([
+        listExpenses(),
+        getOrders({ since: todayMidnight.toISOString(), limit: 200 }),
+      ]);
+      // Newest first
+      const sorted = [...allExpenses].sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      );
+      setExpenses(sorted);
+      setStats(computeExpenseStats(sorted));
+      const rev = todayOrders
+        .filter(o => !['cancelled', 'void'].includes(o.status))
+        .reduce((s, o) => s + (o.total || 0), 0);
+      setTodayRevenue(rev);
+    } catch {
+      setTodayRevenue(0);
+    }
   }, []);
 
   useEffect(() => {
@@ -103,36 +118,41 @@ export default function ExpensesPage() {
     refresh();
   }, [refresh, authChecked]);
 
-  // ── Add expense ───────────────────────────────────────────────────────────
-  function handleAdd() {
+  // ── Add expense — Supabase ────────────────────────────────────────────────
+  async function handleAdd() {
     const amt = parseFloat(amount);
     if (!description.trim()) { setFormError('Please enter a description'); return; }
     if (!amount || isNaN(amt) || amt <= 0) { setFormError('Please enter a valid amount greater than 0'); return; }
     if (amt > 1_000_000) { setFormError('Amount seems too large — please check'); return; }
-
-    addExpense({
-      category,
-      description: description.trim(),
-      amount:      Math.round(amt * 100) / 100,
-      date:        new Date().toISOString().slice(0, 10),
-      addedBy:     session?.name || 'Manager',
-    });
-
-    setDescription('');
-    setAmount('');
-    setFormError('');
-    setFormMsg('✅ Expense added');
-    setTimeout(() => setFormMsg(''), 2500);
-    setShowForm(false);
-    refresh();
+    try {
+      await addExpenseApi({
+        category,
+        description: description.trim(),
+        amount:      Math.round(amt * 100) / 100,
+        addedBy:     session?.name || 'Manager',
+      });
+      setDescription('');
+      setAmount('');
+      setFormError('');
+      setFormMsg('✅ Expense added');
+      setTimeout(() => setFormMsg(''), 2500);
+      setShowForm(false);
+      void refresh();
+    } catch {
+      setFormError('❌ Failed to save expense. Please try again.');
+    }
   }
 
-  // ── Delete expense ────────────────────────────────────────────────────────
-  function handleDelete(id: string) {
+  // ── Delete expense — Supabase ─────────────────────────────────────────────
+  async function handleDelete(id: string) {
     if (confirmDel !== id) { setConfirmDel(id); return; }
-    deleteExpense(id);
-    setConfirmDel(null);
-    refresh();
+    try {
+      await deleteExpenseApi(id);
+      setConfirmDel(null);
+      void refresh();
+    } catch {
+      setConfirmDel(null);
+    }
   }
 
   // ── Filtered list ─────────────────────────────────────────────────────────

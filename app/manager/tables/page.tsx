@@ -2,10 +2,71 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession, AuthSession } from '@/lib/auth';
-import {
-  getTables, getRestaurantOccupancyStats,
-  Table, RestaurantOccupancyStats,
-} from '@/lib/storage';
+// ── SUPABASE (not localStorage) ─────────────────────────────────────────────
+// Migrated from lib/storage getTables / getRestaurantOccupancyStats to live
+// Supabase API data so that sessions created via the QR table portal are
+// reflected here immediately instead of showing stale localStorage snapshots.
+import { getTables, getTabs, Table, CustomerTab } from '@/lib/api';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+// Extended Table: base Table fields + occupancy derived from active Supabase tabs
+interface TableWithOccupancy extends Table {
+  occupiedSeats:    number;
+  activeSessionId?: string;
+}
+
+interface OccupancyStats {
+  totalTables:    number;
+  totalSeats:     number;
+  occupiedSeats:  number;
+  freeSeats:      number;
+  occupiedTables: number;
+  freeTables:     number;
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Derive real-time occupancy for each table from live Supabase tabs.
+ * A table is 'occupied' if it has at least one non-closed tab referencing it.
+ * This replaces the stale localStorage syncTableOccupancy() approach.
+ */
+function enrichTables(
+  rawTables: Table[],
+  allTabs:   CustomerTab[],
+): TableWithOccupancy[] {
+  const openTabs = allTabs.filter(t => t.status !== 'closed');
+  return rawTables.map(table => {
+    // Match by tableId — customer_tabs.table_id stores the table's ID string
+    const activeTabs    = openTabs.filter(t => t.tableId === table.id);
+    const occupiedSeats = activeTabs.reduce((s, t) => s + (t.partySize || 0), 0);
+    const isOccupied    = activeTabs.length > 0;
+    return {
+      ...table,
+      // Preserve 'reserved' status; otherwise derive from active tabs
+      status:          isOccupied ? 'occupied'
+                     : table.status === 'reserved' ? 'reserved'
+                     : 'available',
+      occupiedSeats,
+      activeSessionId: activeTabs.length > 0 ? activeTabs[0].id : undefined,
+    };
+  });
+}
+
+function computeStats(tables: TableWithOccupancy[]): OccupancyStats {
+  const totalTables   = tables.length;
+  const totalSeats    = tables.reduce((s, t) => s + (t.capacity    || 0), 0);
+  const occupiedSeats = tables.reduce((s, t) => s + (t.occupiedSeats || 0), 0);
+  const occupiedTables = tables.filter(t => t.status !== 'available').length;
+  return {
+    totalTables,
+    totalSeats,
+    occupiedSeats,
+    freeSeats:     Math.max(0, totalSeats - occupiedSeats),
+    occupiedTables,
+    freeTables:    Math.max(0, totalTables - occupiedTables),
+  };
+}
 
 // ─── Style helpers ─────────────────────────────────────────────────────────────
 const btn = (bg = '#E65C00', c = 'white'): React.CSSProperties => ({
@@ -14,17 +75,21 @@ const btn = (bg = '#E65C00', c = 'white'): React.CSSProperties => ({
   padding: '0.5rem 1rem', fontSize: '0.85rem',
 });
 
-// ─── Table status helpers ──────────────────────────────────────────────────────
-function getTableColor(table: Table): { bg: string; border: string; badge: string; badgeBg: string } {
-  if (table.status === 'available') return { bg: '#f0fdf4', border: '#16a34a', badge: '✅ Available', badgeBg: '#dcfce7' };
+// ─── Table colour badge ────────────────────────────────────────────────────────
+function getTableColor(table: TableWithOccupancy): {
+  bg: string; border: string; badge: string; badgeBg: string;
+} {
+  if (table.status === 'available')
+    return { bg: '#f0fdf4', border: '#16a34a', badge: '✅ Available', badgeBg: '#dcfce7' };
   if (table.occupiedSeats >= table.capacity)
     return { bg: '#fff1f2', border: '#ef4444', badge: '🔴 Full',      badgeBg: '#fee2e2' };
-  return { bg: '#fffbeb', border: '#f59e0b', badge: '🟡 Occupied',  badgeBg: '#fef3c7' };
+  return   { bg: '#fffbeb', border: '#f59e0b', badge: '🟡 Occupied',  badgeBg: '#fef3c7' };
 }
 
 // ─── Stat card ────────────────────────────────────────────────────────────────
-function StatCard({ icon, value, label, color }: { icon: string; value: string | number; label: string; color: string }) {
-  // Guard: NaN or undefined values must not reach React children — cast to safe string
+function StatCard({
+  icon, value, label, color,
+}: { icon: string; value: string | number; label: string; color: string }) {
   const safeValue = typeof value === 'number'
     ? (isNaN(value) || !isFinite(value) ? '0' : value.toLocaleString('en-IN'))
     : (value ?? '0');
@@ -43,12 +108,13 @@ export default function ManagerTablesPage() {
   const [authChecked, setAuthChecked] = useState(false);
   const [session, setSession]         = useState<AuthSession | null>(null);
 
-  const [tables, setTables]           = useState<Table[]>([]);
-  const [stats, setStats]             = useState<RestaurantOccupancyStats>({
+  const [tables, setTables]           = useState<TableWithOccupancy[]>([]);
+  const [stats,  setStats]            = useState<OccupancyStats>({
     totalTables: 0, totalSeats: 0,
     occupiedSeats: 0, freeSeats: 0,
     occupiedTables: 0, freeTables: 0,
   });
+  const [fetchError, setFetchError]   = useState('');
 
   // ── Auth ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -58,18 +124,30 @@ export default function ManagerTablesPage() {
     setAuthChecked(true);
   }, [router]);
 
-  // ── Data refresh ──────────────────────────────────────────────────────────
-  const refresh = useCallback(() => {
-    setTables(getTables());
-    setStats(getRestaurantOccupancyStats());
+  // ── Data refresh (Supabase) ────────────────────────────────────────────────
+  const refresh = useCallback(async () => {
+    try {
+      setFetchError('');
+      // Fetch both tables and tabs from Supabase in parallel
+      const [rawTables, allTabs] = await Promise.all([getTables(), getTabs()]);
+      const enriched = enrichTables(rawTables, allTabs);
+      setTables(enriched);
+      setStats(computeStats(enriched));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to load data';
+      setFetchError(msg);
+      console.error('[manager/tables] refresh error:', e);
+    }
   }, []);
 
   useEffect(() => {
     if (!authChecked) return;
-    refresh();
-    const t = setInterval(refresh, 5000);
+    void refresh();
+    const t = setInterval(() => void refresh(), 5000);
     return () => clearInterval(t);
   }, [refresh, authChecked]);
+
+  void session; // referenced to satisfy linter — session used for auth gate only
 
   if (!authChecked) {
     return (
@@ -93,7 +171,7 @@ export default function ManagerTablesPage() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
           <button
-            onClick={refresh}
+            onClick={() => void refresh()}
             style={{ ...btn('#065f46', '#6ee7b7'), border: '1px solid #6ee7b7', fontSize: '0.72rem' }}
           >
             🔄 Refresh
@@ -106,6 +184,16 @@ export default function ManagerTablesPage() {
           </button>
         </div>
       </div>
+
+      {/* Error banner */}
+      {fetchError && (
+        <div style={{ background: '#fef2f2', border: '2px solid #fecaca', borderRadius: 10, padding: '0.75rem 1.5rem', margin: '0.75rem 1.5rem', fontSize: '0.82rem', color: '#dc2626', fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>⚠️ {fetchError}</span>
+          <button onClick={() => void refresh()} style={{ background: '#dc2626', color: 'white', border: 'none', borderRadius: 6, padding: '0.3rem 0.75rem', cursor: 'pointer', fontWeight: 700, fontSize: '0.75rem', fontFamily: 'Poppins,sans-serif' }}>
+            Retry
+          </button>
+        </div>
+      )}
 
       {/* ── Stats bar ── */}
       <div style={{ background: '#065f46', color: 'white', padding: '0.8rem 1.5rem', display: 'flex', gap: '0.75rem', overflowX: 'auto' }}>
@@ -123,13 +211,21 @@ export default function ManagerTablesPage() {
           All Tables ({tables.length})
         </div>
 
+        {tables.length === 0 && !fetchError && (
+          <div style={{ textAlign: 'center', padding: '3rem', color: '#999' }}>
+            <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>🪑</div>
+            <div>No tables configured yet.</div>
+            <div style={{ fontSize: '0.78rem', marginTop: '0.4rem' }}>Add tables in the admin settings.</div>
+          </div>
+        )}
+
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '0.75rem' }}>
           {tables.map(table => {
             const { bg, border, badge, badgeBg } = getTableColor(table);
-            const cap          = table.capacity || 0;
-            const occupied     = table.occupiedSeats || 0;
-            const freeSeats    = Math.max(0, cap - occupied);
-            const fillPct      = cap > 0 ? Math.min(100, Math.round((occupied / cap) * 100)) : 0;
+            const cap       = table.capacity || 0;
+            const occupied  = table.occupiedSeats || 0;
+            const freeSeats = Math.max(0, cap - occupied);
+            const fillPct   = cap > 0 ? Math.min(100, Math.round((occupied / cap) * 100)) : 0;
 
             return (
               <div
@@ -148,7 +244,6 @@ export default function ManagerTablesPage() {
                 {/* Table name + ID */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <div>
-                    {/* name may be absent in old localStorage data — fall back to id */}
                     <div style={{ fontWeight: 800, fontSize: '0.95rem', color: '#1A0800' }}>{table.name || table.id}</div>
                     <div style={{ fontSize: '0.65rem', color: '#888' }}>{table.id}</div>
                   </div>
@@ -179,7 +274,7 @@ export default function ManagerTablesPage() {
                   {freeSeats === 0 ? '🔴 No seats available' : `✅ ${freeSeats} free seat${freeSeats !== 1 ? 's' : ''}`}
                 </div>
 
-                {/* Session ID if occupied */}
+                {/* Active session reference */}
                 {table.activeSessionId && (
                   <div style={{ fontSize: '0.6rem', color: '#888', marginTop: '0.1rem', wordBreak: 'break-all' }}>
                     Session: …{table.activeSessionId.slice(-6)}

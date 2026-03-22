@@ -2,32 +2,78 @@
 import { useState, useEffect, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
-  verifyTrackingToken, lookupOrderByContact, getEventsForOrder, customerConfirmDelivery,
-  Order, OrderEvent, OrderEventType,
-} from '@/lib/storage';
+  verifyTrackingToken, lookupOrderByContact, customerConfirmDelivery,
+  reportNotReceived, getIssueForOrder, ISSUE_MAX_RETRIES,
+  Order, OrderIssue,
+} from '@/lib/api';
 
 // ─── Step definitions ─────────────────────────────────────────────────────────
+// Each order type has its OWN explicit step array.
+// Steps match EXACTLY what statusToEvent() writes into order_events.
+//
+// Real event sequence (what the backend actually writes):
+//   POST /api/orders          → 'OrderPlaced'
+//   status → preparing        → 'Preparing'
+//   status → prepared         → 'Prepared'
+//   status → served           → 'Served'           (pickup & dine-in)
+//   status → out_for_delivery → 'OutForDelivery'   (delivery only)
+//   status → delivered        → 'Delivered'        (delivery only)
+//   status → completed        → 'PaymentCompleted' (pickup & dine-in)
+//   action → customer_confirm → 'CustomerConfirmed'(delivery only, sets completed)
+//
+// NOTE: 'KitchenAccepted' was REMOVED — there is no 'accepted' status in any
+// flow, so that event is never written and must not appear in the tracker.
 
 interface TrackStep {
-  eventType:  OrderEventType | 'OrderPlaced';
-  label:      string;
-  icon:       string;
-  forTypes:   ('dine-in' | 'pickup' | 'delivery')[];
+  eventType: string;
+  label:     string;
+  icon:      string;
 }
 
-const STEPS: TrackStep[] = [
-  { eventType: 'OrderPlaced',       label: 'Order Received',      icon: '📋', forTypes: ['dine-in','pickup','delivery'] },
-  { eventType: 'KitchenAccepted',   label: 'Accepted by Kitchen',  icon: '👨‍🍳', forTypes: ['dine-in','pickup','delivery'] },
-  { eventType: 'Preparing',         label: 'Being Prepared',       icon: '🔥', forTypes: ['dine-in','pickup','delivery'] },
-  { eventType: 'Prepared',          label: 'Ready',                icon: '✅', forTypes: ['dine-in','pickup','delivery'] },
-  { eventType: 'Served',            label: 'Served to Table',      icon: '🍽️', forTypes: ['dine-in'] },
-  { eventType: 'OrderPickedUp',     label: 'Picked Up',            icon: '📦', forTypes: ['pickup','delivery'] },
-  { eventType: 'OutForDelivery',    label: 'Out for Delivery',     icon: '🛵', forTypes: ['delivery'] },
-  { eventType: 'Delivered',         label: 'Delivered',            icon: '🏠', forTypes: ['delivery'] },
-  { eventType: 'CustomerConfirmed', label: 'Order Confirmed',      icon: '🎉', forTypes: ['dine-in','pickup','delivery'] },
+interface TimelineEvent {
+  eventType: string;
+  by?:       string;
+  at?:       string;
+  note?:     string;
+}
+
+// ── PICKUP: pending→preparing→prepared→served→completed ───────────────────────
+// Customer collects order at counter (NOT a delivery portal step)
+const STEPS_PICKUP: TrackStep[] = [
+  { eventType: 'OrderPlaced',      label: 'Order Received',           icon: '📋' },
+  { eventType: 'Preparing',        label: 'Being Prepared',           icon: '🔥' },
+  { eventType: 'Prepared',         label: 'Ready',                    icon: '✅' },
+  { eventType: 'Served',           label: 'Ready at Counter 🏪',     icon: '🏪' },
+  { eventType: 'PaymentCompleted', label: 'Order Completed',          icon: '🎉' },
 ];
 
-function fmtTime(iso: string) {
+// ── DELIVERY: pending→preparing→prepared→out_for_delivery→delivered→confirmed ─
+const STEPS_DELIVERY: TrackStep[] = [
+  { eventType: 'OrderPlaced',       label: 'Order Received',          icon: '📋' },
+  { eventType: 'Preparing',         label: 'Being Prepared',          icon: '🔥' },
+  { eventType: 'Prepared',          label: 'Ready for Pickup',        icon: '✅' },
+  { eventType: 'OutForDelivery',    label: 'Out for Delivery',        icon: '🛵' },
+  { eventType: 'Delivered',         label: 'Delivered to Your Door',  icon: '🏠' },
+  { eventType: 'CustomerConfirmed', label: 'Delivery Confirmed',      icon: '🎉' },
+];
+
+// ── DINE-IN: awaiting_waiter→pending→preparing→prepared→served→completed ──────
+const STEPS_DINE_IN: TrackStep[] = [
+  { eventType: 'OrderPlaced',      label: 'Order Received',           icon: '📋' },
+  { eventType: 'Preparing',        label: 'Being Prepared',           icon: '🔥' },
+  { eventType: 'Prepared',         label: 'Ready',                    icon: '✅' },
+  { eventType: 'Served',           label: 'Served to Table',          icon: '🍽️' },
+  { eventType: 'PaymentCompleted', label: 'Completed',                icon: '🎉' },
+];
+
+function getStepsForType(type: string): TrackStep[] {
+  if (type === 'delivery') return STEPS_DELIVERY;
+  if (type === 'pickup')   return STEPS_PICKUP;
+  return STEPS_DINE_IN;
+}
+
+function fmtTime(iso?: string) {
+  if (!iso) return '';
   return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
 }
 
@@ -58,38 +104,45 @@ function TrackInner() {
   const [lookupLoading, setLookupLoading] = useState(false);
 
   // ── Tracking state ──
-  const [order,      setOrder]      = useState<Order | null>(null);
-  const [events,     setEvents]     = useState<OrderEvent[]>([]);
-  const [notFound,   setNotFound]   = useState(false);
-  const [confirmed,  setConfirmed]  = useState(false);
-  const [reportMsg,  setReportMsg]  = useState('');
-  const [tick,       setTick]       = useState(0);
+  const [order,     setOrder]     = useState<Order | null>(null);
+  const [notFound,  setNotFound]  = useState(false);
+  const [confirmed, setConfirmed] = useState(false);
+  const [reportMsg, setReportMsg] = useState('');
+  const [tick,      setTick]      = useState(0);
+  // ── "Not received" issue tracking (delivery) ──
+  const [activeIssue,   setActiveIssue]   = useState<OrderIssue | null>(null);
+  const [notRecvBusy,   setNotRecvBusy]   = useState(false);
+  const [notRecvMsg,    setNotRecvMsg]    = useState('');
 
   const showLookupForm = !trackOrderId && !trackToken;
 
   // ── Contact lookup submit ──────────────────────────────────────────────────
-  function handleLookup() {
-    if (!lookupName.trim())  { setLookupError('Please enter your name');          return; }
-    if (!lookupPhone.trim()) { setLookupError('Please enter your phone number');  return; }
+  async function handleLookup() {
+    if (!lookupName.trim())  { setLookupError('Please enter your name');         return; }
+    if (!lookupPhone.trim()) { setLookupError('Please enter your phone number'); return; }
     setLookupLoading(true);
     setLookupError('');
-    const found = lookupOrderByContact(lookupName, lookupPhone);
-    setLookupLoading(false);
-    if (!found || !found.trackingToken) {
-      setLookupError('No order found with that name and number. Check your details and try again.');
-      return;
+    try {
+      const found = await lookupOrderByContact(lookupName, lookupPhone);
+      if (!found || !found.trackingToken) {
+        setLookupError('No order found with that name and number. Check your details and try again.');
+        return;
+      }
+      setTrackOrderId(found.id);
+      setTrackToken(found.trackingToken);
+    } catch {
+      setLookupError('Something went wrong. Please try again.');
+    } finally {
+      setLookupLoading(false);
     }
-    setTrackOrderId(found.id);
-    setTrackToken(found.trackingToken);
   }
 
   // ── Load / poll order data ─────────────────────────────────────────────────
-  const loadData = useCallback(() => {
+  const loadData = useCallback(async () => {
     if (!trackOrderId || !trackToken) return;
-    const o = verifyTrackingToken(trackOrderId, trackToken);
+    const o = await verifyTrackingToken(trackOrderId, trackToken);
     if (!o) { setNotFound(true); return; }
     setOrder(o);
-    setEvents(getEventsForOrder(trackOrderId));
   }, [trackOrderId, trackToken]);
 
   useEffect(() => {
@@ -102,10 +155,61 @@ function TrackInner() {
 
   void tick;
 
-  function handleConfirm() {
+  async function handleConfirm() {
     if (!trackOrderId || !trackToken) return;
-    const ok = customerConfirmDelivery(trackOrderId, trackToken);
-    if (ok) { setConfirmed(true); loadData(); }
+    try {
+      await customerConfirmDelivery(trackOrderId);
+      setConfirmed(true);
+      setActiveIssue(null);
+      setNotRecvMsg('');
+      loadData();
+    } catch {
+      // silently ignore — the poll will catch the state update
+    }
+  }
+
+  // ── "Not received" for delivery tracking ─────────────────────────────────
+  async function handleDeliveryNotReceived() {
+    if (!trackOrderId || !order || notRecvBusy) return;
+    setNotRecvBusy(true);
+    setNotRecvMsg('');
+    try {
+      const existingIssue = await getIssueForOrder(trackOrderId);
+      const currentCount  = existingIssue ? existingIssue.retryCount : 0;
+
+      if (currentCount >= ISSUE_MAX_RETRIES) {
+        setNotRecvMsg(
+          `⚠️ This order has been reported ${currentCount} times. ` +
+          `The manager has been alerted and will contact you shortly.`,
+        );
+        return;
+      }
+
+      const issue = await reportNotReceived(
+        trackOrderId,
+        order.customerName || 'Customer',
+        'not_received',
+      );
+      setActiveIssue(issue);
+
+      if (issue.escalated) {
+        setNotRecvMsg(
+          `🚨 Escalated to manager after ${issue.retryCount} reports. ` +
+          `A manager will contact you to resolve this.`,
+        );
+      } else {
+        setNotRecvMsg(
+          `⚠️ Your delivery person has been notified and will re-deliver your order shortly. ` +
+          `(Report ${issue.retryCount}/${ISSUE_MAX_RETRIES})`,
+        );
+      }
+      loadData();
+    } catch (err) {
+      console.error('[track] handleDeliveryNotReceived failed:', err);
+      setNotRecvMsg(`⚠️ Your issue has been logged. Please contact the restaurant directly if not resolved.`);
+    } finally {
+      setNotRecvBusy(false);
+    }
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -238,14 +342,20 @@ function TrackInner() {
   // ── TRACKING VIEW ────────────────────────────────────────────────
   // ════════════════════════════════════════════════════════════════
 
-  const eventTypes    = new Set(events.map(e => e.eventType));
+  const timeline: TimelineEvent[] = order.timeline ?? [];
+  const eventTypes    = new Set(timeline.map(e => e.eventType));
   const orderType     = order.type as 'dine-in' | 'pickup' | 'delivery';
-  const relevantSteps = STEPS.filter(s => s.forTypes.includes(orderType));
 
-  let activeStepIdx = 0;
+  // Select the EXACT flow for this order type — no shared/merged steps
+  const relevantSteps = getStepsForType(orderType);
+
+  // Find the index of the LAST completed step (last step with a matching timeline event).
+  // activeStepIdx = lastDoneIdx + 1 (the step CURRENTLY IN PROGRESS).
+  let lastDoneIdx = -1;
   for (let i = relevantSteps.length - 1; i >= 0; i--) {
-    if (eventTypes.has(relevantSteps[i].eventType)) { activeStepIdx = i; break; }
+    if (eventTypes.has(relevantSteps[i].eventType)) { lastDoneIdx = i; break; }
   }
+  const activeStepIdx = lastDoneIdx + 1; // next step is "in progress"
 
   const isDelivered   = order.status === 'delivered';
   const isCompleted   = order.status === 'completed';
@@ -253,20 +363,30 @@ function TrackInner() {
   const isOutForDeliv = order.status === 'out_for_delivery';
   const elapsedMins   = Math.floor((Date.now() - new Date(order.timestamp).getTime()) / 60000);
 
+  // Type-specific status message — no "Delivery confirmed" for pickup orders
   const estMsg =
-    order.status === 'pending' || order.status === 'preparing' ? 'Est. 20–30 min remaining' :
-    order.status === 'prepared' && order.type !== 'delivery'   ? 'Ready! Pickup from counter' :
-    isOutForDeliv  ? 'On the way! Arriving soon…' :
-    isDelivered    ? 'Arrived at your door!' :
-    isCompleted    ? 'Delivery confirmed ✓' : '';
+    (order.status === 'pending' || order.status === 'preparing') ? 'Est. 20–30 min remaining' :
+    order.status === 'prepared' && orderType === 'pickup'         ? 'Ready! Please collect from counter 🏪' :
+    order.status === 'prepared' && orderType === 'delivery'       ? 'Being dispatched shortly…' :
+    order.status === 'served'   && orderType === 'pickup'         ? 'Your order is at the counter — please collect! 🏪' :
+    isOutForDeliv                                                  ? 'On the way! Arriving soon…' :
+    isDelivered                                                    ? 'Arrived at your door! Please confirm below.' :
+    isCompleted && orderType === 'delivery'                        ? 'Delivery confirmed — thank you! 🎉' :
+    isCompleted                                                    ? 'Order completed — thank you for dining with us! 🎉' :
+    '';
 
-  const accentColor = order.type === 'delivery' ? '#2563eb' : '#16a34a';
+  const accentColor = orderType === 'delivery' ? '#2563eb' : orderType === 'pickup' ? '#16a34a' : '#E65C00';
+  const headerGrad  = orderType === 'delivery'
+    ? 'linear-gradient(135deg,#2563eb,#1d4ed8)'
+    : orderType === 'pickup'
+    ? 'linear-gradient(135deg,#16a34a,#15803d)'
+    : 'linear-gradient(135deg,#E65C00,#c44d00)';
 
   return (
     <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg,#f0f9ff,#eff6ff)', fontFamily: 'Poppins,sans-serif' }}>
 
       {/* Header */}
-      <div style={{ background: `linear-gradient(135deg,${accentColor},${order.type === 'delivery' ? '#1d4ed8' : '#15803d'})`, color: 'white', padding: '1.25rem 1.5rem' }}>
+      <div style={{ background: headerGrad, color: 'white', padding: '1.25rem 1.5rem' }}>
         <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.2rem', fontWeight: 900, marginBottom: '0.15rem' }}>
           🍽️ Foodie Lover — Order Tracking
         </div>
@@ -289,7 +409,9 @@ function TrackInner() {
             <div style={{ textAlign: 'center', padding: '0.5rem 0' }}>
               <div style={{ fontSize: '2.5rem', marginBottom: '0.4rem' }}>🎉</div>
               <div style={{ fontWeight: 800, color: accentColor, fontSize: '1.1rem' }}>
-                {order.type === 'delivery' ? 'Delivery Confirmed!' : 'Order Completed!'}
+                {orderType === 'delivery' ? 'Delivery Confirmed!' :
+                 orderType === 'pickup'   ? 'Order Completed — Thank You!' :
+                 'Order Completed!'}
               </div>
               <div style={{ fontSize: '0.8rem', color: '#888', marginTop: '0.25rem' }}>Thank you for choosing Foodie Lover</div>
             </div>
@@ -297,8 +419,8 @@ function TrackInner() {
             <>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                 <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '1rem' }}>
-                  {order.type === 'delivery' ? '🛵 Delivery Order' :
-                   order.type === 'pickup'   ? '🏪 Pickup Order'   : '🍽️ Dine-In Order'}
+                  {orderType === 'delivery' ? '🛵 Delivery Order' :
+                   orderType === 'pickup'   ? '🏪 Pickup Order'   : '🍽️ Dine-In Order'}
                 </div>
                 <div style={{ fontSize: '0.75rem', color: '#64748b' }}>⏱ {elapsedMins}m ago</div>
               </div>
@@ -321,10 +443,12 @@ function TrackInner() {
               <div style={{ position: 'absolute', left: 16, top: 0, bottom: 0, width: 2, background: '#e2e8f0', zIndex: 0 }} />
               {relevantSteps.map((step, idx) => {
                 const isDone    = eventTypes.has(step.eventType);
+                // isActive = this is the NEXT step not yet done (currently in progress)
                 const isActive  = idx === activeStepIdx && !isDone && !isCompleted;
-                const evForStep = events.find(e => e.eventType === step.eventType);
+                const evForStep = timeline.find(e => e.eventType === step.eventType);
                 return (
-                  <div key={step.eventType} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', marginBottom: '1rem', position: 'relative', zIndex: 1 }}>
+                  // Use composite key: eventType + idx to guarantee uniqueness
+                  <div key={`${step.eventType}-${idx}`} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', marginBottom: '1rem', position: 'relative', zIndex: 1 }}>
                     <div style={{
                       width: 34, height: 34, borderRadius: '50%', flexShrink: 0,
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -345,7 +469,7 @@ function TrackInner() {
                       </div>
                       {evForStep && (
                         <div style={{ fontSize: '0.68rem', color: '#94a3b8', marginTop: '0.1rem' }}>
-                          {fmtTime(evForStep.createdAt)} · {evForStep.actor}
+                          {fmtTime(evForStep.at)}{evForStep.by ? ` · ${evForStep.by}` : ''}
                         </div>
                       )}
                     </div>
@@ -369,46 +493,85 @@ function TrackInner() {
             <span>Total</span>
             <span style={{ color: accentColor }}>₹{order.total}</span>
           </div>
-          {order.deliveryAddress && (
+          {orderType === 'delivery' && order.deliveryAddress && (
             <div style={{ marginTop: '0.75rem', fontSize: '0.78rem', color: '#64748b' }}>
               📍 Delivery to: <strong>{order.deliveryAddress}</strong>
             </div>
           )}
-          {order.type === 'delivery' && order.deliveryPerson && (
+          {orderType === 'pickup' && (
+            <div style={{ marginTop: '0.75rem', fontSize: '0.78rem', color: '#16a34a', fontWeight: 700 }}>
+              🏪 Pickup at counter — no delivery required
+            </div>
+          )}
+          {orderType === 'delivery' && order.deliveryPerson && (
             <div style={{ marginTop: '0.3rem', fontSize: '0.78rem', color: '#64748b' }}>
               🛵 Delivery by: <strong>{order.deliveryPerson}</strong>
             </div>
           )}
           <div style={{ marginTop: '0.3rem', fontSize: '0.78rem', color: '#64748b' }}>
-            💳 Payment: <strong>{order.payment?.toUpperCase() || 'COD'}</strong>
+            💳 Payment: <strong>{(order.paymentMethod || order.payment || 'COD').toUpperCase()}</strong>
           </div>
         </div>
 
-        {/* Customer confirmation */}
-        {isDelivered && !confirmed && (
+        {/* Customer confirmation — DELIVERY ONLY */}
+        {orderType === 'delivery' && isDelivered && !confirmed && order.status !== 're_serve_required' && (
           <div style={{ background: 'white', borderRadius: 16, padding: '1.25rem', boxShadow: '0 4px 20px rgba(0,0,0,0.08)', marginBottom: '1.25rem', border: `2px solid ${accentColor}` }}>
             <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
-              <div style={{ fontSize: '2rem', marginBottom: '0.35rem' }}>🏠</div>
-              <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '1rem' }}>Your order has been delivered!</div>
-              <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '0.25rem' }}>Did you receive your order correctly?</div>
+              <div style={{ fontSize: '2rem', marginBottom: '0.35rem' }}>
+                {activeIssue ? '🔄' : '🏠'}
+              </div>
+              <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '1rem' }}>
+                {activeIssue ? 'Your order has been re-delivered!' : 'Your order has been delivered!'}
+              </div>
+              <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '0.25rem' }}>
+                Did you receive your order correctly?
+              </div>
+              {activeIssue && (
+                <div style={{ fontSize: '0.72rem', background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: 8, padding: '0.35rem 0.6rem', marginTop: '0.5rem', color: '#92400e' }}>
+                  Re-delivery attempt #{activeIssue.retryCount} of {ISSUE_MAX_RETRIES}
+                </div>
+              )}
             </div>
             <div style={{ display: 'flex', gap: '0.65rem' }}>
               <button
-                onClick={handleConfirm}
-                style={{ flex: 1, background: accentColor, color: 'white', border: 'none', padding: '0.75rem', borderRadius: 12, fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer', fontFamily: 'Poppins,sans-serif' }}
+                onClick={() => void handleDeliveryNotReceived()}
+                disabled={notRecvBusy}
+                style={{ flex: 1, background: notRecvBusy ? '#f3f4f6' : '#fef2f2', color: '#ef4444', border: '2px solid #fecaca', padding: '0.75rem', borderRadius: 12, fontWeight: 700, fontSize: '0.9rem', cursor: notRecvBusy ? 'not-allowed' : 'pointer', fontFamily: 'Poppins,sans-serif', opacity: notRecvBusy ? 0.6 : 1 }}
               >
-                ✅ Confirm Delivery
+                {notRecvBusy ? '⏳…' : '❌ Not received'}
               </button>
               <button
-                onClick={() => setReportMsg('Please contact us: 📞 Call the restaurant to report any issue.')}
-                style={{ flex: 1, background: '#fef2f2', color: '#ef4444', border: '2px solid #fecaca', padding: '0.75rem', borderRadius: 12, fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer', fontFamily: 'Poppins,sans-serif' }}
+                onClick={() => void handleConfirm()}
+                disabled={notRecvBusy}
+                style={{ flex: 1, background: accentColor, color: 'white', border: 'none', padding: '0.75rem', borderRadius: 12, fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer', fontFamily: 'Poppins,sans-serif' }}
               >
-                ⚠️ Report Issue
+                ✅ Yes, received!
               </button>
             </div>
+            {notRecvMsg && (
+              <div style={{ marginTop: '0.75rem', background: notRecvMsg.startsWith('🚨') ? '#fef2f2' : '#fef3c7', borderRadius: 8, padding: '0.6rem', fontSize: '0.78rem', color: notRecvMsg.startsWith('🚨') ? '#ef4444' : '#92400e', fontWeight: 600 }}>
+                {notRecvMsg}
+              </div>
+            )}
             {reportMsg && (
               <div style={{ marginTop: '0.75rem', background: '#fef2f2', borderRadius: 8, padding: '0.6rem', fontSize: '0.78rem', color: '#ef4444', fontWeight: 600 }}>
                 {reportMsg}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Re-delivery in progress banner */}
+        {orderType === 'delivery' && order.status === 're_serve_required' && !confirmed && (
+          <div style={{ background: '#fef3c7', border: '2px solid #f59e0b', borderRadius: 16, padding: '1.25rem', marginBottom: '1.25rem', textAlign: 'center' }}>
+            <div style={{ fontSize: '2rem', marginBottom: '0.35rem' }}>⏳</div>
+            <div style={{ fontWeight: 800, color: '#92400e', fontSize: '1rem', marginBottom: '0.25rem' }}>Re-delivery in progress</div>
+            <div style={{ fontSize: '0.8rem', color: '#b45309' }}>
+              Your delivery person has been notified. Your order will be re-delivered shortly.
+            </div>
+            {activeIssue && (
+              <div style={{ fontSize: '0.72rem', color: '#92400e', marginTop: '0.4rem' }}>
+                Attempt {activeIssue.retryCount}/{ISSUE_MAX_RETRIES}
               </div>
             )}
           </div>
@@ -423,17 +586,17 @@ function TrackInner() {
           </div>
         )}
 
-        {/* Event log */}
-        {events.length > 0 && (
+        {/* Event log (collapsible) */}
+        {timeline.length > 0 && (
           <details style={{ background: 'white', borderRadius: 16, padding: '1rem 1.25rem', boxShadow: '0 4px 20px rgba(0,0,0,0.08)' }}>
             <summary style={{ fontSize: '0.78rem', fontWeight: 700, color: '#64748b', cursor: 'pointer', textTransform: 'uppercase', letterSpacing: 1 }}>
-              📋 Full Event Log ({events.length})
+              📋 Full Event Log ({timeline.length})
             </summary>
             <div style={{ marginTop: '0.75rem' }}>
-              {events.map(ev => (
-                <div key={ev.eventId} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.3rem 0', borderBottom: '1px solid #f1f5f9', fontSize: '0.75rem', color: '#64748b' }}>
-                  <span><strong style={{ color: '#0f172a' }}>{ev.eventType}</strong> · {ev.actor}{ev.note ? ` — ${ev.note}` : ''}</span>
-                  <span>{fmtTime(ev.createdAt)}</span>
+              {timeline.map((ev, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.3rem 0', borderBottom: '1px solid #f1f5f9', fontSize: '0.75rem', color: '#64748b' }}>
+                  <span><strong style={{ color: '#0f172a' }}>{ev.eventType}</strong>{ev.by ? ` · ${ev.by}` : ''}{ev.note ? ` — ${ev.note}` : ''}</span>
+                  <span>{fmtTime(ev.at)}</span>
                 </div>
               ))}
             </div>

@@ -1,28 +1,50 @@
 'use client';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { useRouter } from 'next/navigation';
+import { useRealtime } from '@/lib/realtime-client';
+// ── All Supabase-backed functions + types ──────────────────────────────────────
 import {
-  getOrders, getTables, getMenu, saveMenu, getPin, savePin,
-  updateOrderStatus, cancelOrder, applyDiscount, exportOrdersCSV, getOrdersInPeriod,
-  getEndOfDayReport, getWaiterStats, getTableOccupancyStats, getFraudAlerts,
-  getOnlineOrderStats,
-  Order, Table, MenuItem, DEFAULT_MENU, WaiterStats, TableOccupancyStats, OnlineOrderStats,
-} from '@/lib/storage';
+  getOrders, updateOrderStatus as apiUpdateOrderStatus, applyDiscount as apiApplyDiscount,
+  computeOnlineOrderStats, OnlineOrderStats,
+  getTables as getTablesApi, getTabs as getTabsApi,
+  createTable as createTableApi, updateTable as updateTableApi, deleteTable as deleteTableApi,
+  getMenu as getMenuApi, saveMenuItem as saveMenuItemApi, deleteMenuItem as deleteMenuItemApi,
+  Table, MenuItem, WaiterStats, TableOccupancyStats,
+  Order,
+  getSettings, saveSettings, saveSetting,
+  listStaff, addStaff, patchStaff, removeStaff, StaffMember,
+  getAllIssues, OrderIssue,
+  forceCloseTab,
+} from '@/lib/api';
 import {
   getSession, clearSession, AuthSession,
-  getStaffAccounts, createStaffAccount, deleteStaffAccount, toggleStaffAccount, updateStaffPin,
-  getDeliveryAccounts, createDeliveryAccount, deleteDeliveryAccount, toggleDeliveryAccount, updateDeliveryPin,
-  getKitchenPin, saveKitchenPin, getManagerPin, saveManagerPin,
-  getSecuritySetup, saveSecuritySetup, verifySecurityAnswer,
   SECURITY_QUESTIONS,
-  StaffAccount, DeliveryAccount,
 } from '@/lib/auth';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const STATUS_FLOW = ['pending','preparing','prepared','served','completed'] as const;
+// Dine-in flow:  awaiting_waiter→pending→preparing→prepared→served→completed
+// Pickup flow:   pending→preparing→prepared→served→completed   (same as dine-in after accepted)
+// Delivery flow: pending→preparing→prepared→out_for_delivery→delivered→completed
+// NOTE: awaiting_waiter is prepended for dine-in so admin can accept the order if waiter is unavailable.
+const STATUS_FLOW_DINE_IN  = ['awaiting_waiter','pending','preparing','prepared','served','completed'] as const;
+const STATUS_FLOW_PICKUP   = ['pending','preparing','prepared','served','completed'] as const;
+const STATUS_FLOW_DELIVERY = ['pending','preparing','prepared','out_for_delivery','delivered','completed'] as const;
 const CATEGORIES  = ['Biryani','Starters','Mains','Breads','Desserts','Drinks'];
 const BADGE_LABEL : Record<string,string> = { bestseller:'⭐ Bestseller', popular:'🔥 Popular', chef:"👨‍🍳 Chef's Special", famous:'🏆 Famous', new:'✨ New' };
-const STATUS_COLOR: Record<string,string> = { pending:'#f59e0b', preparing:'#3b82f6', prepared:'#8b5cf6', served:'#06b6d4', completed:'#16a34a', cancelled:'#ef4444' };
+const STATUS_COLOR: Record<string,string> = {
+  awaiting_waiter:   '#f59e0b', pending:'#f59e0b', preparing:'#3b82f6',
+  prepared:          '#8b5cf6', served:'#06b6d4', completed:'#16a34a',
+  out_for_delivery:  '#2563eb', delivered:'#7c3aed',
+  re_serve_required: '#dc2626',
+  cancelled:         '#ef4444', void:'#9ca3af',
+};
+const STATUS_LABEL_MAP: Record<string,string> = {
+  awaiting_waiter:   'Awaiting Waiter', pending:'In Queue', preparing:'Preparing',
+  prepared:          'Ready', served:'Served', completed:'Completed',
+  out_for_delivery:  '🛵 Out for Delivery', delivered:'📦 Delivered',
+  re_serve_required: '🚨 Re-Serve Required',
+  cancelled:         'Cancelled', void:'Void',
+};
 
 // ─── Style helpers ────────────────────────────────────────────────────────────
 const card  = (color='#E65C00') => ({ background:'white' as const, borderRadius:12, padding:'1.4rem', boxShadow:'0 2px 8px rgba(0,0,0,0.08)', marginBottom:'1.5rem', borderLeft:`4px solid ${color}` });
@@ -31,10 +53,14 @@ const inp   = { width:'100%', padding:'0.6rem 0.75rem', border:'2px solid #e5e7e
 const btn   = (bg='#E65C00',c='white') => ({ background:bg, color:c, border:'none', padding:'0.55rem 1.1rem', borderRadius:8, fontWeight:700 as const, cursor:'pointer' as const, fontFamily:'Poppins,sans-serif', fontSize:'0.84rem' });
 const emptyItem = ():Partial<MenuItem> => ({ category:'Biryani', name:'', desc:'', price:0, img:'', badge:'', available:true });
 
+const AnalyticsCharts = lazy(() => import('@/components/AnalyticsCharts'));
+
 export default function AdminPage() {
-  const [orders,  setOrders]  = useState<Order[]>([]);
-  const [tables,  setTables]  = useState<Table[]>([]);
-  const [menu,    setMenu]    = useState<MenuItem[]>([]);
+  const [orders,      setOrders]      = useState<Order[]>([]);
+  const [tables,      setTables]      = useState<Table[]>([]);
+  // Live table status derived from Supabase (customer_tabs + tables API)
+  const [liveTables,  setLiveTables]  = useState<(Table & { sessionStart?: string; sessionTabId?: string })[]>([]);
+  const [menu,        setMenu]        = useState<MenuItem[]>([]);
   const [clock,   setClock]   = useState({ date:'', time:'' });
 
   // ── Auth ──
@@ -43,7 +69,7 @@ export default function AdminPage() {
   const [authChecked, setAuthChecked]   = useState(false);
 
   // ── Navigation ──
-  type Section = 'overview'|'orders'|'sales'|'menu'|'fraud'|'staff';
+  type Section = 'overview'|'orders'|'sales'|'menu'|'tables'|'fraud'|'staff';
   const [section, setSection] = useState<Section>('overview');
 
   // ── Tabs / filters ──
@@ -72,23 +98,33 @@ export default function AdminPage() {
   const [tableOccupancy, setTableOccupancy] = useState<TableOccupancyStats[]>([]);
   const [onlineStats,    setOnlineStats]    = useState<OnlineOrderStats | null>(null);
 
+  // ── Issue analytics state ──
+  const [todayIssues,    setTodayIssues]    = useState<OrderIssue[]>([]);
+
   // ── Staff management state ──
-  const [staffAccounts, setStaffAccounts] = useState<StaffAccount[]>([]);
+  const [staffAccounts, setStaffAccounts] = useState<StaffMember[]>([]);
   const [staffForm,  setStaffForm]  = useState({ name: '', username: '', pin: '' });
   const [staffMsg,   setStaffMsg]   = useState('');
   const [kitchenPin, setKitchenPin] = useState('');
   const [managerPin, setManagerPin] = useState('');
+  const [adminDiscountPin, setAdminDiscountPin] = useState('1234');
   const [kitchenPinMsg, setKitchenPinMsg] = useState('');
   const [managerPinMsg, setManagerPinMsg] = useState('');
   const [editPinId,  setEditPinId]  = useState('');
   const [editPinVal, setEditPinVal] = useState('');
 
   // ── Delivery accounts state ──
-  const [deliveryAccounts,  setDeliveryAccounts]  = useState<DeliveryAccount[]>([]);
+  const [deliveryAccounts,  setDeliveryAccounts]  = useState<StaffMember[]>([]);
   const [deliveryForm,      setDeliveryForm]      = useState({ name: '', username: '', pin: '' });
   const [deliveryMsg,       setDeliveryMsg]       = useState('');
   const [editDelivPinId,    setEditDelivPinId]    = useState('');
   const [editDelivPinVal,   setEditDelivPinVal]   = useState('');
+
+  // ── Table management state ──
+  const [tableForm,    setTableForm]    = useState({ name: '', capacity: '4' });
+  const [tableMsg,     setTableMsg]     = useState('');
+  const [editTableId,  setEditTableId]  = useState('');       // id of table being edited inline
+  const [editTableVal, setEditTableVal] = useState({ name: '', capacity: '4' });
 
   // ── Admin PIN change state ──
   const [adminNewPin,    setAdminNewPin]    = useState('');
@@ -101,21 +137,125 @@ export default function AdminPage() {
   const [secAnswer,      setSecAnswer]      = useState('');
   const [secAnswerConf,  setSecAnswerConf]  = useState('');
   const [secMsg,         setSecMsg]         = useState('');
-  const [secSetup,       setSecSetup]       = useState<ReturnType<typeof getSecuritySetup>>(null);
+  const [secSetup,       setSecSetup]       = useState<{ question: string; setupAt: string } | null>(null);
 
   // ── Data refresh ──
-  const refresh = useCallback(() => {
-    setOrders(getOrders());
-    setTables(getTables());
-    setMenu(getMenu());
-    setStaffAccounts(getStaffAccounts());
-    setDeliveryAccounts(getDeliveryAccounts());
-    setKitchenPin(getKitchenPin());
-    setManagerPin(getManagerPin());
-    setSecSetup(getSecuritySetup());
-    setWaiterStats(getWaiterStats());
-    setTableOccupancy(getTableOccupancyStats());
-    setOnlineStats(getOnlineOrderStats());
+  const refresh = useCallback(async () => {
+    // ── Orders: fetched from Supabase (NOT localStorage) ──────────────────────
+    try {
+      // Fetch ALL of today's orders (active + completed + cancelled) so that
+      // admin analytics (EOD totals, cancel rate, waiter stats, discount log)
+      // have access to the full picture.  We bound by "since midnight today" so
+      // we never pull unbounded history. The server caps at 200 rows.
+      const todayMidnight = new Date();
+      todayMidnight.setHours(0, 0, 0, 0);
+      const liveOrders = await getOrders({ since: todayMidnight.toISOString(), limit: 200 });
+      setOrders(liveOrders);
+
+      // Compute online/pickup/delivery stats from the same live data.
+      // This replaces getOnlineOrderStats() from lib/storage which read localStorage.
+      const stats = computeOnlineOrderStats(liveOrders);
+      setOnlineStats(stats);
+
+    } catch (e) {
+      console.error('[Admin] Failed to load orders from Supabase:', e);
+    }
+    // ── Issue analytics: fetch all today's issues ──────────────────────────────
+    try {
+      const allIssues = await getAllIssues();
+      const todayMidnight2 = new Date(); todayMidnight2.setHours(0, 0, 0, 0);
+      setTodayIssues(allIssues.filter(i => new Date(i.createdAt) >= todayMidnight2));
+    } catch (e) {
+      console.error('[Admin] Failed to load issues from Supabase:', e);
+    }
+    // ── Live table occupancy + waiter stats: derived from Supabase customer_tabs ──
+    // waiter_name lives on customer_tabs (not orders), so we compute accountability
+    // stats here by aggregating today's open and recently closed tabs per waiter.
+    try {
+      const todayMidnightTs = new Date();
+      todayMidnightTs.setHours(0, 0, 0, 0);
+      const todayMidnightIso = todayMidnightTs.toISOString();
+      const [apiTables, openTabs, closedTabs] = await Promise.all([
+        getTablesApi(),
+        // All open tabs regardless of age — we need these for occupancy + stale detection
+        getTabsApi('open'),
+        // Only today's closed tabs for waiter stats — avoids fetching all-time history
+        getTabsApi('closed', todayMidnightIso),
+      ]);
+
+      // ── Waiter accountability from today's tabs ─────────────────────────────
+      // openTabs are filtered to today for stats (but ALL open tabs used for occupancy)
+      const todayTabs = [
+        ...openTabs.filter(t => new Date(t.createdAt) >= todayMidnightTs),
+        ...closedTabs,   // already filtered to today on the server
+      ];
+      const byWaiter = new Map<string, { accepted: number; served: number }>();
+      todayTabs.forEach(t => {
+        const name = t.waiterName || 'Unassigned';
+        if (!byWaiter.has(name)) byWaiter.set(name, { accepted: 0, served: 0 });
+        const w = byWaiter.get(name)!;
+        w.accepted++;
+        if (t.status === 'closed') w.served++;
+      });
+      const liveWaiterStats: WaiterStats[] = Array.from(byWaiter.entries()).map(([name, s]) => ({
+        name,
+        ordersAccepted:   s.accepted,
+        ordersCancelled:  0,        // tabs are not cancelled — only closed
+        ordersServed:     s.served,
+        cancellationRate: 0,
+      }));
+      setWaiterStats(liveWaiterStats);
+      // Build a map: tableId → first open tab (sessionStart + tabId for force-close)
+      const openByTableId = new Map<string, { tabId: string; createdAt: string }>();
+      openTabs.forEach(tab => {
+        if (tab.tableId && !openByTableId.has(tab.tableId)) {
+          openByTableId.set(tab.tableId, { tabId: tab.id, createdAt: tab.createdAt });
+        }
+      });
+      const computed = apiTables.map(t => ({
+        ...t,
+        status:       openByTableId.has(t.id) ? ('occupied' as const) : ('available' as const),
+        sessionStart: openByTableId.get(t.id)?.createdAt  ?? undefined,
+        sessionTabId: openByTableId.get(t.id)?.tabId      ?? undefined,
+      }));
+      // Sort by numeric suffix so T1, T2, ... T10 appear in order
+      computed.sort((a, b) => {
+        const na = parseInt(a.id.match(/(\d+)$/)?.[1] ?? '0', 10);
+        const nb = parseInt(b.id.match(/(\d+)$/)?.[1] ?? '0', 10);
+        return na - nb;
+      });
+      setLiveTables(computed);
+    } catch (e) {
+      console.error('[Admin] Failed to load live tables from Supabase:', e);
+    }
+    // ── Menu from Supabase (replaces getMenu() from localStorage) ─────────────
+    try {
+      const menuItems = await getMenuApi();
+      setMenu(menuItems as MenuItem[]);
+    } catch { /* keep existing menu if fetch fails */ }
+    // ── Staff & settings from Supabase ──────────────────────────────────────────
+    try {
+      const [waiters, deliveryStaff, settings] = await Promise.all([
+        listStaff('waiter'),
+        listStaff('delivery'),
+        getSettings(),
+      ]);
+      setStaffAccounts(waiters);
+      setDeliveryAccounts(deliveryStaff);
+      setKitchenPin(settings.kitchen_pin ?? '0000');
+      setManagerPin(settings.manager_pin ?? '9999');
+      setAdminDiscountPin(settings.admin_pin ?? '1234');
+      setSecSetup(settings.security_question
+        ? { question: settings.security_question, setupAt: settings.security_setup_at ?? '' }
+        : null
+      );
+    } catch (e) {
+      console.error('[Admin] Failed to load settings/staff from Supabase:', e);
+    }
+    // waiterStats is derived from today's tabs inside the tables/tabs try-block above.
+    // tableOccupancy requires per-table historical duration data — kept empty (section
+    // is conditionally hidden when empty) until a dedicated analytics endpoint is added.
+    setTableOccupancy([]);
   }, []);
 
   // ── Auth check ──
@@ -137,6 +277,24 @@ export default function AdminPage() {
     return () => { clearInterval(t1); clearInterval(t2); };
   }, [refresh, authChecked]);
 
+  // ── Realtime: instant refresh on any order event (no wait for 5s poll) ──────
+  // Covers: new online orders, status changes, completions, payments
+  useRealtime(
+    process.env.NEXT_PUBLIC_RESTAURANT_ID ?? 'rest_default',
+    {
+      order_created:          () => { void refresh(); },
+      order_status_changed:   () => { void refresh(); },
+      order_ready:            () => { void refresh(); },
+      order_served:           () => { void refresh(); },
+      order_out_for_delivery: () => { void refresh(); },
+      order_delivered:        () => { void refresh(); },
+      payment_completed:      () => { void refresh(); },
+      order_issue_reported:   () => { void refresh(); },
+      order_issue_escalated:  () => { void refresh(); },
+      order_issue_resolved:   () => { void refresh(); },
+    },
+  );
+
   function adminLogout() {
     clearSession('admin');
     router.replace('/admin/login');
@@ -148,37 +306,67 @@ export default function AdminPage() {
   const todayRevenue  = todayOrders.reduce((s,o)=>s+(o.total||0),0);
   const todayDiscount = todayOrders.reduce((s,o)=>s+(o.discount||0),0);
   const todayCancel   = orders.filter(o => o.status === 'cancelled' && new Date(o.timestamp).toDateString()===todayStr);
-  const activeTables  = tables.filter(t=>t.status==='occupied').length;
-  const pendingCount  = orders.filter(o=>o.status==='pending').length;
+  // Active tables: count of tables with status 'occupied' from live Supabase data.
+  const activeTables  = liveTables.filter(t => t.status === 'occupied').length;
+  // Pending count: include awaiting_waiter (new dine-in orders) AND pending (kitchen queue).
+  // Dine-in orders start at 'awaiting_waiter', never 'pending', so omitting it means
+  // every fresh dine-in order is silently missed in this count.
+  const pendingCount  = orders.filter(o => ['awaiting_waiter', 'pending'].includes(o.status)).length;
+
+  // ─── Issue analytics ────────────────────────────────────────────────────────
+  const issueTotal      = todayIssues.length;
+  const issueOpen       = todayIssues.filter(i => ['open', 'reserving'].includes(i.status)).length;
+  const issueEscalated  = todayIssues.filter(i => i.escalated || i.status === 'escalated').length;
+  const issueResolved   = todayIssues.filter(i => i.status === 'resolved').length;
+  const issueRate       = todayOrders.length > 0 ? ((issueTotal / todayOrders.length) * 100).toFixed(1) : '0.0';
 
   // ─── Order actions ────────────────────────────────────────────────────────
-  function advance(id:string) {
+  async function advance(id:string) {
     const o = orders.find(x=>x.id===id);
     if (!o) return;
 
-    const curIdx = STATUS_FLOW.indexOf(o.status as typeof STATUS_FLOW[number]);
-    // Guard: unknown status or already at the final step
-    if (curIdx === -1 || curIdx >= STATUS_FLOW.length - 1) return;
+    // Use type-aware status flow — each order type has its own lifecycle
+    // delivery: prepared → out_for_delivery → delivered → completed
+    // pickup:   prepared → served (customer collects at counter) → completed
+    // dine-in:  awaiting_waiter → pending → … → served → completed
+    const flow =
+      o.type === 'delivery' ? STATUS_FLOW_DELIVERY :
+      o.type === 'pickup'   ? STATUS_FLOW_PICKUP   :
+      STATUS_FLOW_DINE_IN;
 
-    const next = STATUS_FLOW[curIdx + 1];
+    // Find current position in the appropriate flow
+    const curIdx = (flow as readonly string[]).indexOf(o.status);
+    // Guard: unknown status (e.g. awaiting_waiter, cancelled) or already at final step
+    if (curIdx === -1 || curIdx >= flow.length - 1) return;
 
-    // Admin always uses force=true — full control over the order lifecycle
-    updateOrderStatus(id, next, 'Admin', true);
-    refresh();
-  }
+    const next = flow[curIdx + 1];
 
-  function doCancel() {
-    if (!cancelReason.trim()) { alert('Please enter a reason'); return; }
-    const ok = cancelOrder(cancelModal.orderId, cancelReason, 'Admin');
-    if (!ok) {
-      alert('This order can no longer be cancelled. It may already be prepared or completed.');
-      setCancelModal({open:false,orderId:''}); setCancelReason(''); return;
+    try {
+      await apiUpdateOrderStatus(id, next, 'Admin');
+      await refresh();
+      // Close detail modal if open for this order (it will reopen with fresh data if needed)
+      if (selOrder?.id === id) setSelOrder(null);
+    } catch (e) {
+      console.error('[Admin] advance() failed:', e);
+      alert('Failed to advance order status. Please try again.');
     }
-    setCancelModal({open:false,orderId:''}); setCancelReason(''); refresh();
-    if (selOrder?.id===cancelModal.orderId) setSelOrder(null);
   }
 
-  function doDiscount() {
+  async function doCancel() {
+    if (!cancelReason.trim()) { alert('Please enter a reason'); return; }
+    try {
+      await apiUpdateOrderStatus(cancelModal.orderId, 'cancelled', 'Admin', { cancelReason });
+      setCancelModal({open:false,orderId:''}); setCancelReason('');
+      await refresh();
+      if (selOrder?.id === cancelModal.orderId) setSelOrder(null);
+    } catch (e) {
+      console.error('[Admin] doCancel() failed:', e);
+      alert('This order could not be cancelled. Please try again.');
+      setCancelModal({open:false,orderId:''}); setCancelReason('');
+    }
+  }
+
+  async function doDiscount() {
     const amt = parseInt(discAmt);
     if (!amt || amt <= 0) { alert('Enter a valid amount'); return; }
 
@@ -192,27 +380,54 @@ export default function AdminPage() {
       }
     }
 
-    if (pinInput !== getPin()) { setPinMsg('❌ Wrong PIN'); return; }
-    applyDiscount(discountModal.orderId, amt, discNote||'Owner discount', 'Admin');
-    setDiscountModal({open:false,orderId:''}); setDiscAmt(''); setDiscNote(''); setPinInput(''); setPinMsg(''); refresh();
+    if (pinInput !== adminDiscountPin) { setPinMsg('❌ Wrong PIN'); return; }
+    try {
+      await apiApplyDiscount(discountModal.orderId, amt, discNote||'Owner discount');
+      setDiscountModal({open:false,orderId:''}); setDiscAmt(''); setDiscNote(''); setPinInput(''); setPinMsg('');
+      await refresh();
+    } catch (e) {
+      console.error('[Admin] doDiscount() failed:', e);
+      alert('Failed to apply discount. Please try again.');
+    }
   }
 
   // ─── Menu CRUD ────────────────────────────────────────────────────────────
-  function saveItem() {
+  async function saveItem() {
     const it = menuModal.item;
     if (!it.name?.trim()) { alert('Item name required'); return; }
     if (!it.price||it.price<=0) { alert('Enter valid price'); return; }
-    if (menuModal.isEdit) {
-      saveMenu(menu.map(m => m.id===it.id ? {...m,...it} as MenuItem : m));
-    } else {
-      const nid = `M${Date.now()}`;
-      saveMenu([...menu,{id:nid,category:it.category||'Biryani',name:it.name||'',desc:it.desc||'',price:it.price||0,img:it.img||'',badge:it.badge||'',available:true}]);
+    try {
+      // saveMenuItemApi handles both create (no id) and edit (has id) via Supabase
+      await saveMenuItemApi({
+        id:        menuModal.isEdit ? it.id : undefined,
+        name:      it.name     || '',
+        category:  it.category || 'Biryani',
+        price:     it.price    || 0,
+        desc:      it.desc     || '',
+        img:       it.img      || '',
+        badge:     it.badge    || '',
+        available: it.available !== false,
+      });
+      setMenuModal({open:false,item:emptyItem(),isEdit:false});
+      void refresh();
+    } catch (e) {
+      alert('Failed to save menu item: ' + (e instanceof Error ? e.message : String(e)));
     }
-    setMenuModal({open:false,item:emptyItem(),isEdit:false}); refresh();
   }
 
   // ─── Sales data ───────────────────────────────────────────────────────────
-  const periodOrders = getOrdersInPeriod(salesTab);
+  // Filter live Supabase orders by the selected time period
+  function filterByPeriod(allOrders: Order[], period: typeof salesTab): Order[] {
+    const now = new Date();
+    return allOrders.filter(o => {
+      const ts = new Date(o.timestamp);
+      if (period === 'today') return ts.toDateString() === now.toDateString();
+      if (period === 'week')  { const s = new Date(now); s.setDate(s.getDate() - 7);  return ts >= s; }
+      if (period === 'month') { const s = new Date(now); s.setDate(s.getDate() - 30); return ts >= s; }
+      return true; // 'all'
+    });
+  }
+  const periodOrders = filterByPeriod(orders, salesTab);
   const pTotal  = periodOrders.reduce((s,o)=>s+(o.total||0),0);
   const pGross  = periodOrders.reduce((s,o)=>s+(o.subtotal||o.total||0),0);
   const pDisc   = periodOrders.reduce((s,o)=>s+(o.discount||0),0);
@@ -275,68 +490,162 @@ export default function AdminPage() {
   );
 
   // ── Admin PIN change ─────────────────────────────────────────────────────
-  function changeAdminPin() {
+  async function changeAdminPin() {
     setAdminPinMsg('');
     if (!adminPinOld) { setAdminPinMsg('❌ Enter your current PIN'); return; }
-    if (adminPinOld !== getPin()) { setAdminPinMsg('❌ Current PIN is incorrect'); return; }
+    if (adminPinOld !== adminDiscountPin) { setAdminPinMsg('❌ Current PIN is incorrect'); return; }
     if (adminNewPin.length < 4) { setAdminPinMsg('❌ New PIN must be at least 4 digits'); return; }
     if (adminNewPin !== adminNewPin2) { setAdminPinMsg('❌ New PINs do not match'); return; }
-    savePin(adminNewPin);
-    setAdminPinMsg('✅ Admin PIN updated successfully!');
-    setAdminPinOld(''); setAdminNewPin(''); setAdminNewPin2('');
-    setTimeout(() => setAdminPinMsg(''), 4000);
+    try {
+      await saveSetting('admin_pin', adminNewPin);
+      setAdminDiscountPin(adminNewPin);
+      setAdminPinMsg('✅ Admin PIN updated successfully!');
+      setAdminPinOld(''); setAdminNewPin(''); setAdminNewPin2('');
+      setTimeout(() => setAdminPinMsg(''), 4000);
+    } catch (e) {
+      setAdminPinMsg(`❌ ${e instanceof Error ? e.message : 'Failed to update PIN'}`);
+    }
   }
 
   // ── Security question setup ───────────────────────────────────────────────
-  function saveSecurityQuestion() {
+  async function saveSecurityQuestion() {
     setSecMsg('');
     if (!secQuestion) { setSecMsg('❌ Select a security question'); return; }
     if (!secAnswer.trim()) { setSecMsg('❌ Enter your answer'); return; }
     if (secAnswer.toLowerCase().trim() !== secAnswerConf.toLowerCase().trim()) {
       setSecMsg('❌ Answers do not match'); return;
     }
-    saveSecuritySetup(secQuestion, secAnswer);
-    setSecMsg('✅ Security question saved! You can now recover your PIN if forgotten.');
-    setSecQuestion(''); setSecAnswer(''); setSecAnswerConf('');
-    refresh();
-    setTimeout(() => setSecMsg(''), 5000);
+    try {
+      await saveSettings({
+        security_question: secQuestion,
+        security_answer: secAnswer.toLowerCase().trim(),
+        security_setup_at: new Date().toISOString(),
+      });
+      setSecSetup({ question: secQuestion, setupAt: new Date().toISOString() });
+      setSecMsg('✅ Security question saved! You can now recover your PIN if forgotten.');
+      setSecQuestion(''); setSecAnswer(''); setSecAnswerConf('');
+      setTimeout(() => setSecMsg(''), 5000);
+    } catch (e) {
+      setSecMsg(`❌ ${e instanceof Error ? e.message : 'Failed to save security question'}`);
+    }
+  }
+
+  // ── Table management actions ──────────────────────────────────────────────
+  async function handleAddTable() {
+    const name = tableForm.name.trim();
+    if (!name) { setTableMsg('❌ Table name is required'); return; }
+    const capacity = parseInt(tableForm.capacity) || 4;
+    if (capacity < 1 || capacity > 50) { setTableMsg('❌ Capacity must be between 1 and 50'); return; }
+    try {
+      await createTableApi(name, capacity);
+      setTableMsg(`✅ Table "${name}" added`);
+      setTableForm({ name: '', capacity: '4' });
+      await refresh();
+      setTimeout(() => setTableMsg(''), 3000);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Unknown error';
+      setTableMsg(`❌ ${msg}`);
+    }
+  }
+
+  async function handleSaveTableEdit(id: string) {
+    const name = editTableVal.name.trim();
+    if (!name) { setTableMsg('❌ Table name is required'); return; }
+    const capacity = parseInt(editTableVal.capacity) || 4;
+    try {
+      await updateTableApi(id, { name, capacity });
+      setTableMsg(`✅ Table updated`);
+      setEditTableId('');
+      await refresh();
+      setTimeout(() => setTableMsg(''), 3000);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Unknown error';
+      setTableMsg(`❌ ${msg}`);
+    }
+  }
+
+  async function handleDeleteTable(id: string, name: string) {
+    if (!window.confirm(`Delete table "${name}"? This cannot be undone.`)) return;
+    try {
+      await deleteTableApi(id);
+      setTableMsg(`✅ Table "${name}" deleted`);
+      await refresh();
+      setTimeout(() => setTableMsg(''), 3000);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Unknown error';
+      setTableMsg(`❌ ${msg}`);
+    }
+  }
+
+  // Force-close a stale or ghost session from the admin panel.
+  // Uses force=true to bypass the re_serve_required billing guard.
+  async function handleForceCloseSession(tableId: string, tabId: string, tableName: string) {
+    if (!window.confirm(
+      `Force-close the session on "${tableName}"?\n\n` +
+      `This is an admin override for stale or abandoned sessions.\n` +
+      `The tab will be closed with payment method "admin_override".`,
+    )) return;
+    try {
+      setTableMsg(`⏳ Force-closing session on ${tableName}…`);
+      await forceCloseTab(tabId, tableId);
+      setTableMsg(`✅ Session on "${tableName}" force-closed`);
+      await refresh();
+      setTimeout(() => setTableMsg(''), 4000);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Unknown error';
+      setTableMsg(`❌ Force-close failed: ${msg}`);
+    }
   }
 
   // ── Staff management actions ─────────────────────────────────────────────
-  function addStaffAccount() {
+  async function addStaffAccount() {
     if (!staffForm.name.trim() || !staffForm.username.trim() || !staffForm.pin.trim()) {
       setStaffMsg('❌ All fields required'); return;
     }
-    const result = createStaffAccount(staffForm.name, staffForm.username, staffForm.pin);
-    if ('error' in result) { setStaffMsg(`❌ ${result.error}`); return; }
-    setStaffMsg(`✅ Account created for ${result.name}`);
-    setStaffForm({ name: '', username: '', pin: '' });
-    refresh();
+    try {
+      await addStaff({ name: staffForm.name, username: staffForm.username, pin: staffForm.pin, role: 'waiter' });
+      setStaffMsg(`✅ Account created for ${staffForm.name}`);
+      setStaffForm({ name: '', username: '', pin: '' });
+      void refresh();
+    } catch (e) {
+      setStaffMsg(`❌ ${e instanceof Error ? e.message : 'Failed to create account'}`);
+    }
   }
 
-  function addDeliveryAccount() {
+  async function addDeliveryAccount() {
     if (!deliveryForm.name.trim() || !deliveryForm.username.trim() || !deliveryForm.pin.trim()) {
       setDeliveryMsg('❌ All fields required'); return;
     }
-    const result = createDeliveryAccount(deliveryForm.name, deliveryForm.username, deliveryForm.pin);
-    if ('error' in result) { setDeliveryMsg(`❌ ${result.error}`); return; }
-    setDeliveryMsg(`✅ Account created for ${result.name}`);
-    setDeliveryForm({ name: '', username: '', pin: '' });
-    refresh();
+    try {
+      await addStaff({ name: deliveryForm.name, username: deliveryForm.username, pin: deliveryForm.pin, role: 'delivery' });
+      setDeliveryMsg(`✅ Account created for ${deliveryForm.name}`);
+      setDeliveryForm({ name: '', username: '', pin: '' });
+      void refresh();
+    } catch (e) {
+      setDeliveryMsg(`❌ ${e instanceof Error ? e.message : 'Failed to create account'}`);
+    }
   }
 
-  function saveKitchenPinFn() {
+  async function saveKitchenPinFn() {
     if (kitchenPin.length < 4) { setKitchenPinMsg('❌ PIN must be 4+ digits'); return; }
-    saveKitchenPin(kitchenPin);
-    setKitchenPinMsg('✅ Kitchen PIN updated');
-    setTimeout(() => setKitchenPinMsg(''), 3000);
+    try {
+      await saveSetting('kitchen_pin', kitchenPin);
+      setKitchenPinMsg('✅ Kitchen PIN updated');
+      setTimeout(() => setKitchenPinMsg(''), 3000);
+    } catch (e) {
+      setKitchenPinMsg(`❌ ${e instanceof Error ? e.message : 'Failed to update PIN'}`);
+    }
   }
 
-  function saveManagerPinFn() {
+  async function saveManagerPinFn() {
     if (managerPin.length < 4) { setManagerPinMsg('❌ PIN must be 4+ digits'); return; }
-    saveManagerPin(managerPin);
-    setManagerPinMsg('✅ Manager PIN updated');
-    setTimeout(() => setManagerPinMsg(''), 3000);
+    try {
+      await saveSetting('manager_pin', managerPin);
+      setManagerPinMsg('✅ Manager PIN updated');
+      setTimeout(() => setManagerPinMsg(''), 3000);
+    } catch (e) {
+      setManagerPinMsg(`❌ ${e instanceof Error ? e.message : 'Failed to update PIN'}`);
+    }
   }
 
   // ─────────────────────────────── RENDER ────────────────────────────────────
@@ -380,6 +689,7 @@ export default function AdminPage() {
         <NavBtn id="orders"   label="🧾 Orders"           />
         <NavBtn id="sales"    label="📊 Sales Report"     />
         <NavBtn id="menu"     label="🍽️ Menu Management" />
+        <NavBtn id="tables"   label="🪑 Tables"           />
         <NavBtn id="fraud"    label="🔍 Transparency"     />
         <NavBtn id="staff"    label="👥 Staff"            />
       </div>
@@ -397,7 +707,7 @@ export default function AdminPage() {
               {icon:'🏷️',val:`₹${todayDiscount}`,  label:'Discounts Given',  color:'#16a34a'},
               {icon:'❌',val:todayCancel.length,    label:'Cancelled Today',  color:'#ef4444'},
               {icon:'🪑',val:activeTables,          label:'Active Tables',    color:'#3b82f6'},
-              {icon:'⏳',val:pendingCount,          label:'Pending Orders',   color:'#f59e0b'},
+              {icon:'⏳',val:pendingCount,          label:'Awaiting / Queued',color:'#f59e0b'},
             ].map(s=>(
               <div key={s.label} style={{background:'white',padding:'1.1rem',borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,0.08)',borderLeft:`4px solid ${s.color}`}}>
                 <div style={{fontSize:'1.5rem',marginBottom:'0.25rem'}}>{s.icon}</div>
@@ -425,28 +735,124 @@ export default function AdminPage() {
             ))}
           </div>
 
-          {/* Table map */}
+          {/* Issue analytics */}
+          <div style={{fontSize:'0.7rem',fontWeight:700,color:'#888',textTransform:'uppercase',letterSpacing:1,marginBottom:'0.5rem'}}>🚨 Order Issues (Today)</div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(165px,1fr))',gap:'1rem',marginBottom:'1.5rem'}}>
+            {[
+              {icon:'🚨', val: issueTotal,    label:'Issues Reported',   color:'#dc2626'},
+              {icon:'🔓', val: issueOpen,     label:'Unresolved Now',     color:'#f97316'},
+              {icon:'⬆️', val: issueEscalated,label:'Escalated',          color:'#7f1d1d'},
+              {icon:'✅', val: issueResolved, label:'Resolved Today',     color:'#16a34a'},
+              {icon:'📊', val:`${issueRate}%`,label:'Issue Rate',          color:'#8b5cf6'},
+            ].map(s=>(
+              <div key={s.label} style={{background:'white',padding:'1.1rem',borderRadius:12,boxShadow:'0 2px 8px rgba(0,0,0,0.08)',borderLeft:`4px solid ${s.color}`}}>
+                <div style={{fontSize:'1.5rem',marginBottom:'0.25rem'}}>{s.icon}</div>
+                <div style={{fontSize:'1.4rem',fontWeight:900,color:s.color}}>{s.val}</div>
+                <div style={{color:'#888',fontSize:'0.76rem'}}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Active issues detail — only when issues exist */}
+          {issueOpen > 0 && (
+            <div style={{...card('#dc2626'), marginBottom:'1.5rem'}}>
+              <h2 style={{fontFamily:"'Playfair Display',serif",fontSize:'1.05rem',fontWeight:700,marginBottom:'0.85rem',color:'#1A0800'}}>🚨 Active Issues Requiring Attention</h2>
+              <div style={{display:'flex',flexDirection:'column',gap:'0.5rem'}}>
+                {todayIssues.filter(i => ['open','reserving','escalated'].includes(i.status)).map(issue => {
+                  const relOrd = orders.find(o => o.id === issue.orderId);
+                  return (
+                    <div key={issue.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'0.6rem 0.85rem',background:issue.escalated ? '#fef2f2' : '#fff7ed',borderRadius:8,border:`1px solid ${issue.escalated ? '#fecaca' : '#fed7aa'}`,flexWrap:'wrap',gap:'0.5rem'}}>
+                      <div>
+                        <div style={{fontWeight:800,fontSize:'0.82rem',color:'#1A0800'}}>
+                          Order #{relOrd?.orderNum || issue.orderId.slice(-6)}
+                          {relOrd?.customerName && <span style={{fontWeight:400,color:'#888',marginLeft:'0.3rem'}}>— {relOrd.customerName}</span>}
+                          {issue.escalated && <span style={{marginLeft:'0.5rem',background:'#dc2626',color:'white',borderRadius:4,padding:'0.05rem 0.35rem',fontSize:'0.65rem',fontWeight:800}}>ESCALATED</span>}
+                        </div>
+                        <div style={{fontSize:'0.7rem',color:'#64748b',marginTop:'0.1rem'}}>
+                          Reported by: {issue.reportedBy} · Attempt #{issue.retryCount} · Status: {issue.status} · {new Date(issue.reportedAt).toLocaleTimeString()}
+                        </div>
+                      </div>
+                      <span style={{fontSize:'0.72rem',fontWeight:700,padding:'0.2rem 0.55rem',borderRadius:20,background: issue.status === 'reserving' ? '#dbeafe' : issue.escalated ? '#fee2e2' : '#fff7ed',color: issue.status === 'reserving' ? '#1d4ed8' : issue.escalated ? '#dc2626' : '#c2410c'}}>
+                        {issue.status === 'reserving' ? '🔄 Re-serving' : issue.escalated ? '🚨 Escalated' : '⏳ Open'}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Table map — live status from Supabase customer_tabs */}
           <div style={card()}>
             <h2 style={{fontFamily:"'Playfair Display',serif",fontSize:'1.05rem',fontWeight:700,marginBottom:'0.9rem',color:'#1A0800'}}>🪑 Table Overview</h2>
+            {liveTables.length === 0 && (
+              <div style={{fontSize:'0.8rem',color:'#888',textAlign:'center',padding:'1rem'}}>Loading tables…</div>
+            )}
             <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(75px,1fr))',gap:'0.5rem'}}>
-              {tables.map(t=>{
-                const color = t.status==='available'?'#10b981':t.status==='occupied'?'#f97316':'#ef4444';
-                const bg    = t.status==='available'?'#d1fae5':t.status==='occupied'?'#fed7aa':'#fca5a5';
-                const sessionMins = t.sessionStart?Math.floor((Date.now()-new Date(t.sessionStart).getTime())/60000):null;
+              {liveTables.map(t=>{
+                const sessionMins = t.sessionStart
+                  ? Math.floor((Date.now()-new Date(t.sessionStart).getTime())/60000)
+                  : null;
+                // Sessions > 4 hours are flagged as stale (likely forgotten / abandoned)
+                const STALE_MINS = 240;
+                const isStale   = sessionMins !== null && sessionMins >= STALE_MINS;
+                const color =
+                  t.status === 'available' ? '#10b981' :
+                  isStale                  ? '#dc2626' :  // stale → red
+                                             '#f97316';   // normal occupied → orange
+                const bg =
+                  t.status === 'available' ? '#d1fae5' :
+                  isStale                  ? '#fee2e2' :  // stale → light red
+                                             '#fed7aa';   // normal occupied → light orange
+                // Format duration: "23m", "1h 5m", "17h 8m"
+                const fmtDuration = (m: number) =>
+                  m < 60 ? `${m}m` : `${Math.floor(m/60)}h ${m%60}m`;
                 return (
                   <div key={t.id} style={{background:bg,border:`2px solid ${color}`,borderRadius:8,padding:'0.55rem',textAlign:'center'}}>
-                    <div style={{fontWeight:800,fontSize:'0.88rem',color:'#1A0800'}}>T{t.id}</div>
-                    <div style={{fontSize:'0.58rem',color:'#555',fontWeight:600,textTransform:'uppercase'}}>{t.status}</div>
-                    {sessionMins!==null&&t.status==='occupied'&&<div style={{fontSize:'0.56rem',color:'#E65C00',fontWeight:700}}>{sessionMins}m</div>}
+                    <div style={{fontWeight:800,fontSize:'0.88rem',color:'#1A0800'}}>{t.name}</div>
+                    <div style={{fontSize:'0.58rem',color:t.status==='available'?'#065f46':color,fontWeight:700,textTransform:'uppercase'}}>
+                      {isStale ? '⚠️ STALE' : t.status}
+                    </div>
+                    {sessionMins!==null&&t.status==='occupied'&&(
+                      <div style={{fontSize:'0.56rem',color:isStale?'#dc2626':'#E65C00',fontWeight:700}}>
+                        {fmtDuration(sessionMins)}
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
+            {/* Stale session legend */}
+            {liveTables.some(t => {
+              const m = t.sessionStart ? Math.floor((Date.now()-new Date(t.sessionStart).getTime())/60000) : 0;
+              return m >= 240 && t.status === 'occupied';
+            }) && (
+              <div style={{marginTop:'0.6rem',fontSize:'0.68rem',color:'#dc2626',fontWeight:600,textAlign:'center'}}>
+                ⚠️ Red = session open &gt;4h — go to Tables tab to force-close
+              </div>
+            )}
           </div>
 
-          {/* End of Day Report */}
+          {/* End of Day Report — derived from live Supabase orders */}
           {(() => {
-            const eod = getEndOfDayReport();
+            const todayOrdsFull = orders.filter(o => new Date(o.timestamp).toDateString() === todayStr);
+            const eod = {
+              totalOrders:   todayOrdsFull.filter(o => o.status === 'completed').length,
+              totalRevenue:  Math.round(todayOrdsFull.filter(o => !['cancelled','void'].includes(o.status)).reduce((s,o)=>s+(o.total||0),0)),
+              avgOrderValue: (() => {
+                const done = todayOrdsFull.filter(o => o.status === 'completed');
+                return done.length > 0 ? Math.round(done.reduce((s,o)=>s+(o.total||0),0)/done.length) : 0;
+              })(),
+              completedTabs: 0, // requires separate query — shown as 0 for now
+              discountsTotal:Math.round(todayOrdsFull.reduce((s,o)=>s+(o.discount||0),0)),
+              voidedOrders:  todayOrdsFull.filter(o => o.status === 'void').length,
+              topItems: (() => {
+                const map: Record<string,{name:string;qty:number}> = {};
+                todayOrdsFull.filter(o=>!['cancelled','void'].includes(o.status))
+                  .forEach(o=>(o.items||[]).forEach(it=>{if(!map[it.name])map[it.name]={name:it.name,qty:0};map[it.name].qty+=it.qty||1;}));
+                return Object.values(map).sort((a,b)=>b.qty-a.qty).slice(0,5);
+              })(),
+            };
             return (
               <div style={card('#16a34a')}>
                 <h2 style={{fontFamily:"'Playfair Display',serif",fontSize:'1.05rem',fontWeight:700,marginBottom:'0.85rem',color:'#1A0800'}}>📊 End-of-Day Report — Today</h2>
@@ -550,8 +956,14 @@ export default function AdminPage() {
                     ? <tr><td colSpan={12} style={{textAlign:'center',color:'#999',padding:'2rem'}}>No orders</td></tr>
                     : filteredOrders.map(order=>{
                         const t      = new Date(order.timestamp).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-                        const curIdx = STATUS_FLOW.indexOf(order.status as typeof STATUS_FLOW[number]);
-                        const nxt    = curIdx !== -1 && curIdx < STATUS_FLOW.length - 1 ? STATUS_FLOW[curIdx + 1] : undefined;
+                        // Each order type has its own status flow — must NOT share delivery/pickup flows.
+                        // Pickup: pending→preparing→prepared→served→completed  (NOT out_for_delivery)
+                        // Delivery: pending→preparing→prepared→out_for_delivery→delivered→completed
+                        const _flow  = order.type==='delivery' ? STATUS_FLOW_DELIVERY
+                                     : order.type==='pickup'   ? STATUS_FLOW_PICKUP
+                                     : STATUS_FLOW_DINE_IN;
+                        const curIdx = (_flow as readonly string[]).indexOf(order.status);
+                        const nxt    = curIdx !== -1 && curIdx < _flow.length - 1 ? _flow[curIdx + 1] : undefined;
                         const isc    = order.status==='cancelled';
                         return (
                           <tr key={order.id} style={{borderBottom:'1px solid #f5f0e8',opacity:isc?0.6:1}}>
@@ -598,7 +1010,21 @@ export default function AdminPage() {
                 </button>
               ))}
             </div>
-            <button onClick={exportOrdersCSV} style={{...btn('#16a34a'),display:'flex',alignItems:'center',gap:'0.4rem'}}>📁 Export CSV</button>
+            <button onClick={()=>{
+              // Export current period orders from live Supabase data as CSV
+              const rows = periodOrders.map(o=>[
+                o.id,o.orderNum||'',o.type,o.customerName,o.status,
+                o.total||0,o.discount||0,o.paymentMethod||'',
+                new Date(o.timestamp).toLocaleString('en-IN'),
+              ]);
+              const header=['ID','Order#','Type','Customer','Status','Total','Discount','Payment','Date'];
+              const csv=[header,...rows].map(r=>r.map(v=>JSON.stringify(v??'')).join(',')).join('\n');
+              const blob=new Blob([csv],{type:'text/csv'});
+              const url=URL.createObjectURL(blob);
+              const a=document.createElement('a');
+              a.href=url;a.download=`orders-${salesTab}-${new Date().toISOString().slice(0,10)}.csv`;
+              a.click();URL.revokeObjectURL(url);
+            }} style={{...btn('#16a34a'),display:'flex',alignItems:'center',gap:'0.4rem'}}>📁 Export CSV</button>
           </div>
 
           {/* Summary cards */}
@@ -689,7 +1115,7 @@ export default function AdminPage() {
               ))}
             </div>
             <div style={{display:'flex',gap:'0.5rem'}}>
-              <button onClick={()=>{if(confirm('Reset all menu items to defaults?')){saveMenu([...DEFAULT_MENU]);refresh();}}} style={{...btn('#6b7280'),fontSize:'0.78rem'}}>↺ Reset</button>
+              <button onClick={()=>{if(confirm('Reset all menu items to defaults?\n\nNote: This resets the local copy — Supabase items remain. To reset Supabase data, delete items manually or run the init migration.')){void refresh();}}} style={{...btn('#6b7280'),fontSize:'0.78rem'}}>↺ Reset</button>
               <button onClick={()=>setMenuModal({open:true,item:emptyItem(),isEdit:false})} style={{...btn(),display:'flex',alignItems:'center',gap:'0.35rem'}}><span style={{fontSize:'1.1rem',lineHeight:1}}>＋</span> Add Item</button>
             </div>
           </div>
@@ -714,14 +1140,137 @@ export default function AdminPage() {
                       <div style={{fontSize:'0.73rem',color:'#888',marginBottom:'0.75rem',lineHeight:'1.4'}}>{item.desc}</div>
                       <div style={{display:'flex',gap:'0.35rem'}}>
                         <button onClick={()=>setMenuModal({open:true,item:{...item},isEdit:true})} style={{...btn('#3b82f6'),padding:'0.3rem 0.75rem',fontSize:'0.75rem',flex:1}}>✏️ Edit</button>
-                        <button onClick={()=>{saveMenu(menu.map(m=>m.id===item.id?{...m,available:!m.available}:m));refresh();}} style={{...btn(item.available===false?'#16a34a':'#6b7280'),padding:'0.3rem 0.65rem',fontSize:'0.75rem'}}>{item.available===false?'✅':'⏸'}</button>
-                        <button onClick={()=>{if(confirm(`Delete "${item.name}"?`)){saveMenu(menu.filter(m=>m.id!==item.id));refresh();}}} style={{...btn('#ef4444'),padding:'0.3rem 0.6rem',fontSize:'0.75rem'}}>🗑</button>
+                        <button onClick={()=>{saveMenuItemApi({id:item.id,available:item.available===false}).then(()=>refresh()).catch(e=>alert(String(e)));}} style={{...btn(item.available===false?'#16a34a':'#6b7280'),padding:'0.3rem 0.65rem',fontSize:'0.75rem'}}>{item.available===false?'✅':'⏸'}</button>
+                        <button onClick={()=>{if(confirm(`Delete "${item.name}"?`)){deleteMenuItemApi(item.id).then(()=>refresh()).catch(e=>alert(String(e)));}}} style={{...btn('#ef4444'),padding:'0.3rem 0.6rem',fontSize:'0.75rem'}}>🗑</button>
                       </div>
                     </div>
                   </div>
                 ))}
               </div>
           }
+        </>}
+
+        {/* ═══════════ TABLES MANAGEMENT ═══════════ */}
+        {section==='tables' && <>
+          <div style={card('#E65C00')}>
+            <h2 style={{fontFamily:"'Playfair Display',serif",fontSize:'1.05rem',fontWeight:700,marginBottom:'0.3rem',color:'#1A0800'}}>🪑 Tables Management</h2>
+            <p style={{fontSize:'0.78rem',color:'#666',marginBottom:'1rem'}}>Add, edit or remove tables. Changes sync instantly to QR, waiter, kitchen and manager portals.</p>
+
+            {tableMsg && (
+              <div style={{padding:'0.6rem 0.8rem',borderRadius:8,background:tableMsg.startsWith('✅')?'#dcfce7':'#fef2f2',color:tableMsg.startsWith('✅')?'#16a34a':'#ef4444',fontWeight:700,fontSize:'0.82rem',marginBottom:'1rem'}}>
+                {tableMsg}
+              </div>
+            )}
+
+            {/* Add Table Form */}
+            <div style={{background:'#faf8f3',borderRadius:10,padding:'1rem',marginBottom:'1.25rem',border:'1px solid #e5e7eb'}}>
+              <h3 style={{fontSize:'0.88rem',fontWeight:700,color:'#1A0800',marginBottom:'0.7rem'}}>➕ Add New Table</h3>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 120px auto',gap:'0.75rem',alignItems:'flex-end'}}>
+                <div>
+                  <label style={{fontSize:'0.73rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.25rem'}}>Table Name / Number</label>
+                  <input value={tableForm.name} onChange={e=>setTableForm(f=>({...f,name:e.target.value}))} placeholder="e.g. T1 or Table 5" style={{...inp}} />
+                </div>
+                <div>
+                  <label style={{fontSize:'0.73rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.25rem'}}>Seats</label>
+                  <input type="number" min={1} max={50} value={tableForm.capacity} onChange={e=>setTableForm(f=>({...f,capacity:e.target.value}))} style={{...inp,textAlign:'center'}} />
+                </div>
+                <button onClick={handleAddTable} style={{...btn('#E65C00'),whiteSpace:'nowrap' as const}}>+ Add Table</button>
+              </div>
+            </div>
+
+            {/* Existing Tables */}
+            <h3 style={{fontSize:'0.88rem',fontWeight:700,color:'#1A0800',marginBottom:'0.7rem'}}>All Tables ({liveTables.length})</h3>
+            {liveTables.length === 0 && (
+              <div style={{textAlign:'center',padding:'2rem',color:'#999',fontSize:'0.85rem'}}>No tables found. Add your first table above.</div>
+            )}
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))',gap:'0.75rem'}}>
+              {liveTables.map(t => {
+                const isEditing  = editTableId === t.id;
+                const isOccupied = t.status === 'occupied';
+                const sessionMins = t.sessionStart
+                  ? Math.floor((Date.now()-new Date(t.sessionStart).getTime())/60000)
+                  : null;
+                const STALE_MINS = 240;
+                const isStale   = sessionMins !== null && sessionMins >= STALE_MINS;
+                const fmtDuration = (m: number) =>
+                  m < 60 ? `${m}m` : `${Math.floor(m/60)}h ${m%60}m`;
+                const borderColor =
+                  !isOccupied ? '#e5e7eb' :
+                  isStale     ? '#dc2626' :
+                                '#f97316';
+                const statusBg    = !isOccupied ? '#d1fae5' : isStale ? '#fee2e2' : '#fed7aa';
+                const statusColor = !isOccupied ? '#065f46' : isStale ? '#991b1b' : '#92400e';
+                const statusLabel = !isOccupied ? '🟢 Available' : isStale ? '🔴 Stale Session' : '🟠 Occupied';
+                return (
+                  <div key={t.id} style={{background:'white',border:`2px solid ${borderColor}`,borderRadius:12,padding:'0.85rem 1rem'}}>
+                    {isEditing ? (
+                      <>
+                        <div style={{display:'grid',gridTemplateColumns:'1fr 80px',gap:'0.5rem',marginBottom:'0.6rem'}}>
+                          <input value={editTableVal.name} onChange={e=>setEditTableVal(v=>({...v,name:e.target.value}))} placeholder="Table name" style={{...inp,fontSize:'0.85rem'}} />
+                          <input type="number" min={1} max={50} value={editTableVal.capacity} onChange={e=>setEditTableVal(v=>({...v,capacity:e.target.value}))} style={{...inp,fontSize:'0.85rem',textAlign:'center'}} />
+                        </div>
+                        <div style={{display:'flex',gap:'0.5rem'}}>
+                          <button onClick={()=>handleSaveTableEdit(t.id)} style={{...btn('#16a34a'),flex:1,fontSize:'0.78rem'}}>💾 Save</button>
+                          <button onClick={()=>setEditTableId('')} style={{...btn('#6b7280'),flex:1,fontSize:'0.78rem'}}>Cancel</button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'0.4rem'}}>
+                          <div style={{fontWeight:800,fontSize:'1rem',color:'#1A0800'}}>{t.name}</div>
+                          <span style={{fontSize:'0.7rem',fontWeight:700,background:statusBg,color:statusColor,borderRadius:20,padding:'0.15rem 0.5rem'}}>
+                            {statusLabel}
+                          </span>
+                        </div>
+                        <div style={{fontSize:'0.78rem',color:'#666',marginBottom:'0.5rem'}}>
+                          🪑 {t.capacity} seat{t.capacity!==1?'s':''} &nbsp;·&nbsp; ID: <code style={{fontSize:'0.68rem',background:'#f3f4f6',padding:'0.1rem 0.3rem',borderRadius:4}}>{t.id}</code>
+                        </div>
+                        {/* Session info for occupied tables */}
+                        {isOccupied && sessionMins !== null && (
+                          <div style={{fontSize:'0.72rem',color:isStale?'#dc2626':'#f97316',fontWeight:600,marginBottom:'0.5rem',background:isStale?'#fee2e2':'#fff7ed',borderRadius:6,padding:'0.25rem 0.5rem'}}>
+                            ⏱ Session open for <strong>{fmtDuration(sessionMins)}</strong>
+                            {isStale && ' — likely abandoned, consider force-closing'}
+                          </div>
+                        )}
+                        <div style={{display:'flex',gap:'0.4rem',flexWrap:'wrap'}}>
+                          <button onClick={()=>{setEditTableId(t.id);setEditTableVal({name:t.name,capacity:String(t.capacity)});}} style={{...btn('#E65C00'),flex:1,fontSize:'0.72rem',padding:'0.35rem 0.5rem'}}>✏️ Edit</button>
+                          {/* Force-close button: visible for any occupied table, prominent for stale */}
+                          {isOccupied && t.sessionTabId && (
+                            <button
+                              onClick={()=>handleForceCloseSession(t.id, t.sessionTabId!, t.name)}
+                              style={{...btn(isStale?'#dc2626':'#6b7280'),flex:1,fontSize:'0.72rem',padding:'0.35rem 0.5rem'}}
+                              title="Admin override: force-close this session"
+                            >
+                              {isStale ? '🔴 Force Close' : '🔒 Close Session'}
+                            </button>
+                          )}
+                          <button onClick={()=>handleDeleteTable(t.id,t.name)} disabled={isOccupied} title={isOccupied?'Force-close the session first, then delete':'Delete table'} style={{...btn(isOccupied?'#d1d5db':'#ef4444',isOccupied?'#9ca3af':'white'),flex:1,fontSize:'0.72rem',padding:'0.35rem 0.5rem',cursor:isOccupied?'not-allowed':'pointer'}}>🗑️ Delete</button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Summary stats */}
+            {liveTables.length > 0 && (
+              <div style={{marginTop:'1.25rem',display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))',gap:'0.6rem'}}>
+                {[
+                  {icon:'🪑',val:liveTables.length,label:'Total Tables',color:'#E65C00'},
+                  {icon:'🔴',val:liveTables.filter(t=>t.status==='occupied').length,label:'Occupied',color:'#f97316'},
+                  {icon:'🟢',val:liveTables.filter(t=>t.status==='available').length,label:'Available',color:'#16a34a'},
+                  {icon:'👥',val:liveTables.reduce((s,t)=>s+t.capacity,0),label:'Total Seats',color:'#3b82f6'},
+                ].map(s=>(
+                  <div key={s.label} style={{background:'white',padding:'0.75rem',borderRadius:10,textAlign:'center',boxShadow:'0 1px 4px rgba(0,0,0,0.06)',borderLeft:`3px solid ${s.color}`}}>
+                    <div style={{fontSize:'1.4rem',marginBottom:'0.1rem'}}>{s.icon}</div>
+                    <div style={{fontWeight:900,fontSize:'1.2rem',color:s.color}}>{s.val}</div>
+                    <div style={{fontSize:'0.68rem',color:'#888'}}>{s.label}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </>}
 
         {/* ═══════════ FRAUD / TRANSPARENCY ═══════════ */}
@@ -802,6 +1351,44 @@ export default function AdminPage() {
             }
           </div>
 
+          {/* Issue / Not-Received Log */}
+          <div style={card('#dc2626')}>
+            <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:'0.98rem',fontWeight:700,marginBottom:'0.75rem',color:'#1A0800'}}>🚨 Not-Received Issue Log — Today</h3>
+            {!todayIssues.length
+              ? <div style={{color:'#999',fontSize:'0.85rem'}}>No issues reported today</div>
+              : <div style={{overflowX:'auto'}}>
+                  <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.8rem'}}>
+                    <thead><tr style={{background:'#fef2f2'}}>
+                      {['Order','Reported By','Retries','Status','Escalated','Reported At','Resolved By','Resolved At'].map(h=>(
+                        <th key={h} style={{padding:'0.48rem 0.7rem',textAlign:'left',fontSize:'0.68rem',fontWeight:700,color:'#991b1b',textTransform:'uppercase',whiteSpace:'nowrap'}}>{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>
+                      {todayIssues.map(issue => {
+                        const relOrd = orders.find(o => o.id === issue.orderId);
+                        return (
+                          <tr key={issue.id} style={{borderBottom:'1px solid #fee2e2',background:issue.escalated?'#fef2f2':'white'}}>
+                            <td style={{padding:'0.48rem 0.7rem',fontWeight:700,color:'#dc2626'}}>{relOrd?.orderNum || issue.orderId.slice(-6)}</td>
+                            <td style={{padding:'0.48rem 0.7rem'}}>{issue.reportedBy}</td>
+                            <td style={{padding:'0.48rem 0.7rem',textAlign:'center',fontWeight:700,color:issue.retryCount>=3?'#dc2626':'#555'}}>#{issue.retryCount}</td>
+                            <td style={{padding:'0.48rem 0.7rem'}}>
+                              <span style={{fontSize:'0.7rem',fontWeight:700,padding:'0.12rem 0.45rem',borderRadius:10,background:issue.status==='resolved'?'#dcfce7':issue.status==='reserving'?'#dbeafe':'#fef9c3',color:issue.status==='resolved'?'#16a34a':issue.status==='reserving'?'#1d4ed8':'#854d0e'}}>
+                                {issue.status}
+                              </span>
+                            </td>
+                            <td style={{padding:'0.48rem 0.7rem',textAlign:'center'}}>{issue.escalated?<span style={{color:'#dc2626',fontWeight:800}}>⬆ YES</span>:'—'}</td>
+                            <td style={{padding:'0.48rem 0.7rem',color:'#888',whiteSpace:'nowrap'}}>{new Date(issue.reportedAt).toLocaleTimeString()}</td>
+                            <td style={{padding:'0.48rem 0.7rem',color:'#555'}}>{issue.resolvedBy || '—'}</td>
+                            <td style={{padding:'0.48rem 0.7rem',color:'#888',whiteSpace:'nowrap'}}>{issue.resolvedAt ? new Date(issue.resolvedAt).toLocaleTimeString() : '—'}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+            }
+          </div>
+
           {/* Staff Accountability */}
           <div style={card('#06b6d4')}>
             <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:'0.98rem',fontWeight:700,marginBottom:'0.75rem',color:'#1A0800'}}>👤 Staff Accountability — Today</h3>
@@ -837,9 +1424,28 @@ export default function AdminPage() {
             }
           </div>
 
-          {/* Fraud Alert Log */}
+          {/* ── Analytics Charts (Recharts) ────── */}
+          <Suspense fallback={<div style={{padding:'1rem',textAlign:'center',color:'#94a3b8'}}>Loading charts…</div>}>
+            <AnalyticsCharts period={salesTab} />
+          </Suspense>
+
+        {/* Fraud Alert Log — derived from live Supabase orders */}
           {(() => {
-            const fraudAlerts = getFraudAlerts().slice(0, 20);
+            // Build fraud log from live order timeline events (replaces localStorage getFraudAlerts)
+            const fraudAlerts = orders
+              .flatMap(o => (o.timeline||[])
+                .filter(e => ['OrderCancelled','FoodDisputed','DisputeResolved'].includes(e.eventType))
+                .map(e => ({
+                  id:     `${o.id}-${e.eventType}`,
+                  type:   e.eventType,
+                  detail: `Order #${o.orderNum||o.id.slice(-6)} — ${o.customerName}`,
+                  by:     e.by || 'System',
+                  amount: e.eventType === 'OrderCancelled' ? (o.total||0) : 0,
+                  at:     e.at || o.timestamp,
+                }))
+              )
+              .sort((a,b) => new Date(b.at).getTime() - new Date(a.at).getTime())
+              .slice(0, 20);
             if (!fraudAlerts.length) return null;
             return (
               <div style={card('#f97316')}>
@@ -1013,12 +1619,12 @@ export default function AdminPage() {
                             </span>
                           </td>
                           <td style={{padding:'0.55rem 0.75rem',color:'#aaa',fontSize:'0.78rem'}}>
-                            {new Date(acc.createdAt).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}
+                            {acc.createdAt ? new Date(acc.createdAt).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}) : '—'}
                           </td>
                           <td style={{padding:'0.55rem 0.75rem'}}>
                             <div style={{display:'flex',gap:'0.4rem',flexWrap:'wrap' as const}}>
                               <button
-                                onClick={()=>{ toggleStaffAccount(acc.id); refresh(); }}
+                                onClick={()=>{ void patchStaff(acc.id, { active: !acc.active }).then(() => refresh()); }}
                                 style={{...btn(acc.active?'#fef2f2':'#f0fdf4',acc.active?'#ef4444':'#16a34a'),fontSize:'0.72rem',padding:'0.25rem 0.6rem',border:`1px solid ${acc.active?'#fecaca':'#bbf7d0'}`}}
                               >
                                 {acc.active?'⛔ Disable':'✅ Enable'}
@@ -1034,13 +1640,13 @@ export default function AdminPage() {
                                       maxLength={6}
                                       style={{width:'80px',padding:'0.25rem 0.4rem',border:'2px solid #e5e7eb',borderRadius:6,fontSize:'0.78rem',fontFamily:'Poppins,sans-serif',letterSpacing:'0.3em',textAlign:'center'}}
                                     />
-                                    <button onClick={()=>{ if(editPinVal.length>=4){updateStaffPin(acc.id,editPinVal);setEditPinId('');setEditPinVal('');refresh();} }} style={{...btn('#3b82f6'),fontSize:'0.72rem',padding:'0.25rem 0.5rem'}}>Save</button>
+                                    <button onClick={()=>{ if(editPinVal.length>=4){ void patchStaff(acc.id, { pin: editPinVal }).then(() => { setEditPinId(''); setEditPinVal(''); void refresh(); }); } }} style={{...btn('#3b82f6'),fontSize:'0.72rem',padding:'0.25rem 0.5rem'}}>Save</button>
                                     <button onClick={()=>{setEditPinId('');setEditPinVal('');}} style={{...btn('#e5e7eb','#555'),fontSize:'0.72rem',padding:'0.25rem 0.5rem'}}>✕</button>
                                   </div>
                                 : <button onClick={()=>{ setEditPinId(acc.id); setEditPinVal(''); }} style={{...btn('#374151'),fontSize:'0.72rem',padding:'0.25rem 0.6rem'}}>🔑 PIN</button>
                               }
                               <button
-                                onClick={()=>{ if(confirm(`Delete account for ${acc.name}?`)){deleteStaffAccount(acc.id);refresh();} }}
+                                onClick={()=>{ if(confirm(`Delete account for ${acc.name}?`)){void removeStaff(acc.id).then(() => refresh());} }}
                                 style={{...btn('#ef4444'),fontSize:'0.72rem',padding:'0.25rem 0.6rem'}}
                               >
                                 🗑️ Delete
@@ -1111,12 +1717,12 @@ export default function AdminPage() {
                             </span>
                           </td>
                           <td style={{padding:'0.55rem 0.75rem',color:'#aaa',fontSize:'0.78rem'}}>
-                            {new Date(acc.createdAt).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}
+                            {acc.createdAt ? new Date(acc.createdAt).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}) : '—'}
                           </td>
                           <td style={{padding:'0.55rem 0.75rem'}}>
                             <div style={{display:'flex',gap:'0.4rem',flexWrap:'wrap' as const}}>
                               <button
-                                onClick={()=>{ toggleDeliveryAccount(acc.id); refresh(); }}
+                                onClick={()=>{ void patchStaff(acc.id, { active: !acc.active }).then(() => refresh()); }}
                                 style={{...btn(acc.active?'#fef2f2':'#f0fdf4',acc.active?'#ef4444':'#16a34a'),fontSize:'0.72rem',padding:'0.25rem 0.6rem',border:`1px solid ${acc.active?'#fecaca':'#bbf7d0'}`}}
                               >
                                 {acc.active?'⛔ Disable':'✅ Enable'}
@@ -1132,13 +1738,13 @@ export default function AdminPage() {
                                       maxLength={6}
                                       style={{width:'80px',padding:'0.25rem 0.4rem',border:'2px solid #e5e7eb',borderRadius:6,fontSize:'0.78rem',fontFamily:'Poppins,sans-serif',letterSpacing:'0.3em',textAlign:'center'}}
                                     />
-                                    <button onClick={()=>{ if(editDelivPinVal.length>=4){updateDeliveryPin(acc.id,editDelivPinVal);setEditDelivPinId('');setEditDelivPinVal('');refresh();} }} style={{...btn('#3b82f6'),fontSize:'0.72rem',padding:'0.25rem 0.5rem'}}>Save</button>
+                                    <button onClick={()=>{ if(editDelivPinVal.length>=4){ void patchStaff(acc.id, { pin: editDelivPinVal }).then(() => { setEditDelivPinId(''); setEditDelivPinVal(''); void refresh(); }); } }} style={{...btn('#3b82f6'),fontSize:'0.72rem',padding:'0.25rem 0.5rem'}}>Save</button>
                                     <button onClick={()=>{setEditDelivPinId('');setEditDelivPinVal('');}} style={{...btn('#e5e7eb','#555'),fontSize:'0.72rem',padding:'0.25rem 0.5rem'}}>✕</button>
                                   </div>
                                 : <button onClick={()=>{ setEditDelivPinId(acc.id); setEditDelivPinVal(''); }} style={{...btn('#374151'),fontSize:'0.72rem',padding:'0.25rem 0.6rem'}}>🔑 PIN</button>
                               }
                               <button
-                                onClick={()=>{ if(confirm(`Delete account for ${acc.name}?`)){deleteDeliveryAccount(acc.id);refresh();} }}
+                                onClick={()=>{ if(confirm(`Delete account for ${acc.name}?`)){void removeStaff(acc.id).then(() => refresh());} }}
                                 style={{...btn('#ef4444'),fontSize:'0.72rem',padding:'0.25rem 0.6rem'}}
                               >
                                 🗑️ Delete
@@ -1232,12 +1838,12 @@ export default function AdminPage() {
                 <div style={{fontSize:'0.75rem',fontWeight:700,color:'#6B5246',textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:'0.6rem'}}>⏱ Order Timeline</div>
                 {(selOrder.timeline || []).map((ev,i)=>(
                   <div key={i} style={{display:'flex',gap:'0.65rem',alignItems:'flex-start',marginBottom:'0.35rem'}}>
-                    <div style={{width:9,height:9,borderRadius:'50%',background:STATUS_COLOR[ev.status]||'#888',marginTop:3,flexShrink:0}}/>
+                    <div style={{width:9,height:9,borderRadius:'50%',background:'#E65C00',marginTop:3,flexShrink:0}}/>
                     <div>
-                      <span style={{fontWeight:700,textTransform:'capitalize',color:STATUS_COLOR[ev.status]||'#333',fontSize:'0.8rem'}}>{ev.status}</span>
+                      <span style={{fontWeight:700,textTransform:'capitalize',color:'#333',fontSize:'0.8rem'}}>{ev.eventType?.replace(/_/g,' ')}</span>
                       {ev.by&&<span style={{color:'#888',fontSize:'0.73rem'}}> by {ev.by}</span>}
                       {ev.note&&<div style={{fontSize:'0.72rem',color:'#888',fontStyle:'italic'}}>{ev.note}</div>}
-                      <div style={{fontSize:'0.7rem',color:'#bbb'}}>{new Date(ev.at || ev.timestamp || '').toLocaleTimeString()}</div>
+                      <div style={{fontSize:'0.7rem',color:'#bbb'}}>{ev.at ? new Date(ev.at).toLocaleTimeString() : ''}</div>
                     </div>
                   </div>
                 ))}
@@ -1343,11 +1949,11 @@ export default function AdminPage() {
         <div className="modal-overlay show" onClick={()=>{setShowPinMgr(false);setNewPin('');setNewPinMsg('');}}>
           <div onClick={e=>e.stopPropagation()} style={{background:'white',borderRadius:16,width:'100%',maxWidth:350,padding:'1.75rem',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
             <h3 style={{fontFamily:"'Playfair Display',serif",marginBottom:'0.3rem',fontSize:'1.1rem'}}>🔑 Owner PIN</h3>
-            <p style={{fontSize:'0.8rem',color:'#666',marginBottom:'0.9rem'}}>Used to authorise discounts. Current PIN: <strong>{getPin()}</strong></p>
+            <p style={{fontSize:'0.8rem',color:'#666',marginBottom:'0.9rem'}}>Used to authorise discounts. Current PIN: <strong>{adminDiscountPin}</strong></p>
             <label style={{fontSize:'0.75rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.28rem'}}>New 4-digit PIN</label>
             <input type="password" value={newPin} onChange={e=>setNewPin(e.target.value)} placeholder="••••" maxLength={4} style={{...inp,letterSpacing:'0.35em',textAlign:'center' as const,marginBottom:'0.25rem'}} />
             {newPinMsg && <div style={{fontSize:'0.76rem',color:newPinMsg.includes('✓')?'#16a34a':'#ef4444',marginBottom:'0.5rem'}}>{newPinMsg}</div>}
-            <button onClick={()=>{if(!/^\d{4}$/.test(newPin)){setNewPinMsg('❌ Must be exactly 4 digits');return;}savePin(newPin);setNewPinMsg('✓ PIN updated!');setTimeout(()=>{setShowPinMgr(false);setNewPin('');setNewPinMsg('');},1500);}} style={{...btn(),width:'100%',marginTop:'0.5rem'}}>Save PIN</button>
+            <button onClick={()=>{if(!/^\d{4}$/.test(newPin)){setNewPinMsg('❌ Must be exactly 4 digits');return;} void saveSetting('admin_pin', newPin).then(()=>{setAdminDiscountPin(newPin);setNewPinMsg('✓ PIN updated!');setTimeout(()=>{setShowPinMgr(false);setNewPin('');setNewPinMsg('');},1500);}).catch(e=>setNewPinMsg(`❌ ${e instanceof Error ? e.message : 'Failed to save PIN'}`));}} style={{...btn(),width:'100%',marginTop:'0.5rem'}}>Save PIN</button>
           </div>
         </div>
       )}

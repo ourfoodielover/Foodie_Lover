@@ -29,3 +29,8 @@ Thumbs.db
 
 # Vercel
 .vercel
+
+# Prisma
+dev.db
+dev.db-journal
+prisma/migrations/

@@ -1,16 +1,69 @@
 'use client';
 import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
+// ── API (Supabase) ─ all business data lives in the database ──────────────────
 import {
-  getMenu, addOrder, getOrders, getNextOrderNumber,
-  getTabs, getActiveTabsForTable, getOpenTabForCustomer,
-  createTab, addOrderToTab, requestBill, syncTabTotal,
-  addWaiterCall, getLastWaiterCallTime, addFoodReceiptDispute,
-  getOrCreateDeviceId, findActiveDeviceSession, registerDevice,
-  getDevicesForTab, removeDeviceRecord, verifyTablePin,
-  addPartyToTab, getRemainingCapacity,
-  MenuItem, Order, CustomerTab,
-} from '@/lib/storage';
+  getMenu           as getMenuApi,
+  createOrder       as createOrderApi,
+  getTables         as getTablesApi,
+  getTabs           as getTabsApi,
+  createTab         as createTabApi,
+  updateTab         as updateTabApi,
+  getOrders         as getOrdersApi,
+  registerTabDevice,
+  getTabDevices,
+  getDeviceTabRecord,
+  removeTabDevice,
+  recordWaiterCall,
+  getLastWaiterCallAt,
+  verifyTabPin,
+  createOrderEvent,
+  reportNotReceived,
+  resolveIssue,
+  getIssueForOrder,
+  ISSUE_MAX_RETRIES,
+  OrderIssue,
+  MenuItem          as ApiMenuItem,
+  Order             as ApiOrder,
+  Table             as ApiTable,
+} from '@/lib/api';
+// ── localStorage ─ ONLY device identity (not business data) ──────────────────
+import { getOrCreateDeviceId } from '@/lib/storage';
+
+// ─── TabUI — normalised tab shape used throughout this component ───────────────
+type TabStatus = 'open' | 'awaiting_payment' | 'closed';
+interface TabUI {
+  id:              string;
+  tableId?:        string;
+  customerName:    string;
+  partySize:       number;
+  status:          TabStatus;
+  tabStatus:       TabStatus;  // alias for status — referenced heavily in JSX
+  total:           number;
+  totalAmount:     number;     // alias for total
+  discount:        number;
+  discountReason?: string;
+  tableSessionPin: string;     // PIN from Supabase customer_tabs.pin (not localStorage)
+  createdAt:       string;
+}
+function toTabUI(
+  t: { id: string; tableId?: string | null; customerName: string; partySize: number;
+       status: string; total: number; discount: number; discountReason?: string | null;
+       pin?: string | null; createdAt: string },
+): TabUI {
+  const s = (t.status || 'open') as TabStatus;
+  return {
+    id: t.id, tableId: t.tableId ?? undefined, customerName: t.customerName,
+    partySize: t.partySize, status: s, tabStatus: s,
+    total: t.total, totalAmount: t.total,
+    discount: t.discount, discountReason: t.discountReason ?? undefined,
+    tableSessionPin: t.pin ?? '',   // PIN comes from Supabase, no localStorage needed
+    createdAt: t.createdAt,
+  };
+}
+// Local type aliases
+type MenuItem    = ApiMenuItem;
+type Order       = ApiOrder;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const CATEGORIES = ['All', 'Biryani', 'Starters', 'Mains', 'Breads', 'Desserts', 'Drinks'];
@@ -42,21 +95,28 @@ const btn = (bg = '#E65C00', c = 'white'): React.CSSProperties => ({
   padding: '0.5rem 1rem', fontSize: '0.85rem',
 });
 
-// ─── sessionStorage helpers (only for confirmed-orders tracking) ──────────────
-function getConfirmedOrderIds(tableId: string): Set<string> {
-  try {
-    if (typeof window === 'undefined') return new Set();
-    const raw = sessionStorage.getItem(`fl_confirmed_${tableId}`);
-    return raw ? new Set<string>(JSON.parse(raw)) : new Set<string>();
-  } catch { return new Set<string>(); }
+// ─── Table ID comparison helper ───────────────────────────────────────────────
+// Table identifiers come in multiple formats depending on the source:
+//   URL param (old QR): "T04"   DB id: "tbl_04"   DB name: "T4"
+// All three refer to the same physical table.  sameTable() extracts the trailing
+// integer from any format so "T04", "T4", and "tbl_04" all compare as equal.
+function tableNum(raw: string | undefined | null): number {
+  if (!raw) return -1;
+  const m = raw.match(/(\d+)$/);
+  return m ? parseInt(m[1], 10) : -1;
 }
-function addConfirmedOrderId(tableId: string, orderId: string): void {
-  try {
-    const set = getConfirmedOrderIds(tableId);
-    set.add(orderId);
-    sessionStorage.setItem(`fl_confirmed_${tableId}`, JSON.stringify([...set]));
-  } catch {}
+function sameTable(a: string | undefined | null, b: string | undefined | null): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const n = tableNum(a);
+  return n !== -1 && n === tableNum(b);
 }
+
+// ─── Confirmed-orders tracking (in-memory only) ────────────────────────────────
+// confirmedRef (useRef<Set<string>>) tracks which food-receipt dialogs have been
+// dismissed during this session. No localStorage/sessionStorage needed — if the
+// page is hard-refreshed the dialog re-appears for any still-served orders, which
+// is acceptable UX and prevents silent misses.
 
 // ─── Inner component ──────────────────────────────────────────────────────────
 function TablePageInner() {
@@ -82,7 +142,7 @@ function TablePageInner() {
 
   // ── Welcome-back overlay ──
   const [welcomeBack, setWelcomeBack]     = useState(false);
-  const [existingTabForJoin, setExistingTabForJoin] = useState<CustomerTab | null>(null);
+  const [existingTabForJoin, setExistingTabForJoin] = useState<TabUI | null>(null);
 
   // ── PIN security ──
   const [pinInput, setPinInput]           = useState('');
@@ -94,10 +154,12 @@ function TablePageInner() {
 
   // ── Tab ──
   const [tabId, setTabId]                 = useState<string | null>(null);
-  const [tab, setTab]                     = useState<CustomerTab | null>(null);
+  const [tab, setTab]                     = useState<TabUI | null>(null);
 
-  // ── Co-diners at this table ──
+  // ── Co-diners at this table (from Supabase tab_devices) ──
   const [codiners, setCodiners]           = useState<{ customerName: string; joinedAt: string }[]>([]);
+  // ── Table capacity (fetched once at init from Supabase tables) ──
+  const [tableCapacity, setTableCapacity] = useState<number>(8); // default 8 until fetched
 
   // ── Menu & cart ──
   const [menu, setMenu]                   = useState<MenuItem[]>([]);
@@ -116,52 +178,75 @@ function TablePageInner() {
   // ── Waiter call cooldown ──
   const [callCooldown, setCallCooldown]   = useState(0);
 
-  // ── Food receipt confirmation ──
+  // ── Food receipt confirmation + "not received" issue tracking ──
   const [disputeOrder, setDisputeOrder]   = useState<Order | null>(null);
+  const [activeIssue, setActiveIssue]     = useState<OrderIssue | null>(null);
+  const [issueMsg, setIssueMsg]           = useState('');
+  const [issueBusy, setIssueBusy]         = useState(false);
+  // confirmedRef: tracks which orders the customer already confirmed ✅ this session
+  // NOT added for "not received" — dialog must re-appear after re-service
   const confirmedRef = useRef<Set<string>>(new Set<string>());
 
-  // ─── Init — device detection ───────────────────────────────────────────────
+  // ─── Init — device detection + async session lookup ──────────────────────
   useEffect(() => {
-    setMenu(getMenu().filter(m => m.available));
-
-    const did = getOrCreateDeviceId();
+    const did = getOrCreateDeviceId();  // device identity — only localStorage usage
     setDeviceId(did);
 
-    // ── STEP 1: Does THIS device already have an active session here? ──────
-    const existing = findActiveDeviceSession(did, tableId);
-    if (existing) {
-      // ✅ Auto-reconnect — no name input needed
-      setTabId(existing.tab.id);
-      setCustomerName(existing.record.customerName);
-      setTab(existing.tab);
-      confirmedRef.current = getConfirmedOrderIds(tableId);
+    void (async () => {
+      // Load menu + table capacity concurrently
+      try {
+        const [menuItems, allTables] = await Promise.all([
+          getMenuApi(),
+          getTablesApi(),
+        ]);
+        setMenu(menuItems.filter(m => m.available));
+        // Find this table's capacity (match by DB id or name/number)
+        const match = allTables.find(
+          (t: ApiTable) => sameTable(t.id, tableId) || sameTable(t.name, tableId),
+        );
+        if (match) setTableCapacity(match.capacity);
+      } catch { setMenu([]); }
 
-      // Restore waiter call cooldown
-      const lastCallAt = getLastWaiterCallTime(tableId);
-      if (lastCallAt) {
-        const elapsed = Math.floor((Date.now() - new Date(lastCallAt).getTime()) / 1000);
-        setCallCooldown(Math.max(0, 60 - elapsed));
-      }
+      // ── STEP 1: Does THIS device already have an active Supabase session? ──
+      // Check tab_devices in Supabase — no localStorage needed.
+      try {
+        const deviceRecord = await getDeviceTabRecord(did);
+        if (deviceRecord && sameTable(deviceRecord.tableId, tableId)) {
+          const tabs   = await getTabsApi();
+          const apiTab = tabs.find(t => t.id === deviceRecord.tabId && t.status !== 'closed');
+          if (apiTab) {
+            setTabId(apiTab.id);
+            setCustomerName(deviceRecord.customerName);
+            setTab(toTabUI(apiTab));
+            // Restore waiter-call cooldown from Supabase
+            const lastCallAt = await getLastWaiterCallAt(apiTab.id).catch(() => null);
+            if (lastCallAt) {
+              const elapsed = Math.floor((Date.now() - new Date(lastCallAt).getTime()) / 1000);
+              setCallCooldown(Math.max(0, 60 - elapsed));
+            }
+            setWelcomeBack(true);
+            setView('tracking');
+            setTimeout(() => setWelcomeBack(false), 3500);
+            return;
+          }
+        }
+      } catch { /* treat as no existing session */ }
 
-      // Show "Welcome back" overlay briefly
-      setWelcomeBack(true);
-      setView('tracking');
-      setTimeout(() => setWelcomeBack(false), 3500);
-      return;
-    }
+      // ── STEP 2: Is there already an OPEN session at this table? ────────────
+      try {
+        const tabs    = await getTabsApi();
+        // sameTable() handles id/name format mismatches: "T04" ≡ "T4" ≡ "tbl_04"
+        const openTab = tabs.find(t => sameTable(t.tableId, tableId) && t.status === 'open');
+        if (openTab) {
+          setExistingTabForJoin(toTabUI(openTab));
+          setView('join');
+          return;
+        }
+      } catch {}
 
-    // ── STEP 2: Is there already an OPEN session at this table (other device)? ──
-    const activeTabs = getActiveTabsForTable(tableId);
-    const openTab = activeTabs.find(t => t.tabStatus === 'open');
-    if (openTab) {
-      // Another customer is already seated — ask this new device to "join"
-      setExistingTabForJoin(openTab);
-      setView('join');
-      return;
-    }
-
-    // ── STEP 3: No session exists — show full landing form ──────────────────
-    setView('landing');
+      // ── STEP 3: No session exists — show landing form ────────────────────
+      setView('landing');
+    })();
   }, [tableId]);
 
   // ─── Cooldown ticker ──────────────────────────────────────────────────────
@@ -171,157 +256,162 @@ function TablePageInner() {
     return () => clearInterval(t);
   }, [callCooldown]);
 
-  // ─── Load co-diners ───────────────────────────────────────────────────────
-  const refreshCodiners = useCallback((tid: string) => {
-    const devs = getDevicesForTab(tid);
-    setCodiners(devs.map(d => ({ customerName: d.customerName, joinedAt: d.joinedAt })));
+  // ─── Load co-diners from Supabase tab_devices ────────────────────────────
+  const refreshCodiners = useCallback(async (tid: string) => {
+    try {
+      const devs = await getTabDevices(tid);
+      setCodiners(devs.map(d => ({ customerName: d.customerName, joinedAt: d.joinedAt })));
+    } catch { /* co-diners are non-critical — silently ignore */ }
   }, []);
 
-  // ─── Periodic refresh ─────────────────────────────────────────────────────
-  const refresh = useCallback(() => {
+  // ─── Periodic refresh (reads from Supabase) ───────────────────────────────
+  const refresh = useCallback(async () => {
     if (!tabId) return;
-    const allTabs = getTabs();
-    const currentTab = allTabs.find(t => t.id === tabId);
-    if (currentTab) {
-      setTab(currentTab);
-      if (currentTab.tabStatus === 'open') syncTabTotal(tabId);
-    }
-    const latestOrders = getOrders();
-    setOrders(latestOrders);
-    refreshCodiners(tabId);
+    try {
+      const [tabs, myOrders] = await Promise.all([
+        getTabsApi(),
+        getOrdersApi({ tabId, activeOnly: true, limit: 50 }),
+      ]);
+      const apiTab = tabs.find(t => t.id === tabId);
+      if (apiTab) setTab(toTabUI(apiTab));  // PIN comes from apiTab.pin (Supabase)
+      setOrders(myOrders);
+      void refreshCodiners(tabId);
 
-    // Check for newly served orders needing food confirmation
-    if (currentTab && currentTab.tabStatus !== 'closed') {
-      const tabOrdrs = currentTab.orderIds
-        .map(oid => latestOrders.find(o => o.id === oid))
-        .filter((o): o is Order => !!o);
-      const served = tabOrdrs.find(
-        o => o.status === 'served' && !confirmedRef.current.has(o.id),
-      );
-      if (served) setDisputeOrder(served);
-    }
+      // ── Check for newly served orders needing food confirmation ──────────────
+      // Also re-show dialog when order is re-served after a "not received" report.
+      // Only skip if customer already confirmed (confirmedRef) — NOT if they reported an issue.
+      if (apiTab && apiTab.status !== 'closed') {
+        // Served orders not yet confirmed → show food receipt dialog
+        const servedUnconfirmed = myOrders.find(
+          (o: Order) => o.status === 'served' && !confirmedRef.current.has(o.id),
+        );
+        if (servedUnconfirmed) {
+          setDisputeOrder(servedUnconfirmed);
+          setActiveIssue(null); // fresh serve — clear stale issue state
+          setIssueMsg('');
+        }
+        // If order returned to served after re_serve_required (staff re-served it)
+        // and we had an active issue, clear the issue banner — dialog handles it
+        if (activeIssue && myOrders.some(o => o.id === activeIssue.orderId && o.status === 'served')) {
+          setIssueMsg('');
+        }
+      }
+    } catch (e) { console.error('[table] refresh error:', e); }
   }, [tabId, refreshCodiners]);
 
   useEffect(() => {
     if (!tabId) return;
-    refresh();
-    const t = setInterval(refresh, 3000);
+    void refresh();
+    const t = setInterval(() => void refresh(), 3000);
     return () => clearInterval(t);
   }, [refresh, tabId]);
 
   // ─── HANDLER: Create new session (first customer at empty table) ───────────
-  function handleStartSession() {
+  async function handleStartSession() {
     const name = nameInput.trim();
     if (!name) { setNameError('Please enter your name'); return; }
     if (name.length < 2) { setNameError('Name must be at least 2 characters'); return; }
 
-    // Validate 4-digit PIN (required for new sessions)
     const pin = pinInput.trim();
     if (!pin) { setPinError('Please set a 4-digit PIN to protect your table'); return; }
     if (!/^\d{4}$/.test(pin)) { setPinError('PIN must be exactly 4 digits'); return; }
 
     const party = Math.max(1, parseInt(partyInput) || 1);
 
-    // Re-check in case another device just created a session
-    const activeTabs = getActiveTabsForTable(tableId);
-    const openTab = activeTabs.find(t => t.tabStatus === 'open');
-    if (openTab) {
-      // Race condition — someone just opened. Switch to join flow.
-      setExistingTabForJoin(openTab);
-      setPinInput('');
-      setPinError('');
-      setView('join');
-      return;
-    }
-
-    // Check if a tab was already opened for this exact name
-    const existingByName = getOpenTabForCustomer(tableId, name);
-    if (existingByName) {
-      // Verify PIN matches existing session
-      if (!verifyTablePin(existingByName.id, pin)) {
-        setPinError('Incorrect PIN for this session. Ask the table host for the PIN.');
-        return;
+    try {
+      // Re-check Supabase: race condition — another device may have just opened
+      const tabs    = await getTabsApi();
+      const raceTab = tabs.find(t => sameTable(t.tableId, tableId) && t.status === 'open');
+      if (raceTab) {
+        setExistingTabForJoin(toTabUI(raceTab));
+        setPinInput(''); setPinError('');
+        setView('join'); return;
       }
-      registerDevice(deviceId, tableId, existingByName.id, name);
-      setTabId(existingByName.id);
-      setCustomerName(name);
-      setTab(existingByName);
-      confirmedRef.current = getConfirmedOrderIds(tableId);
-      setNameError('');
-      setPinError('');
-      setView('tracking');
-      return;
-    }
 
-    // Create brand-new session with PIN
-    const newTab = createTab(tableId, name, party, pin);
-    registerDevice(deviceId, tableId, newTab.id, name);
-    setTabId(newTab.id);
-    setCustomerName(name);
-    setTab(newTab);
-    confirmedRef.current = new Set<string>();
-    setNameError('');
-    setPinError('');
-    setView('menu');
+      // Create the tab in Supabase — PIN stored server-side in customer_tabs.pin
+      const apiTab = await createTabApi({ tableId, customerName: name, partySize: party, pin });
+      // Register this device in Supabase tab_devices (replaces localStorage)
+      await registerTabDevice({ tabId: apiTab.id, deviceId, customerName: name, tableId });
+      setTabId(apiTab.id);
+      setCustomerName(name);
+      // toTabUI reads PIN from apiTab.pin (returned by server) — no localStorage
+      setTab(toTabUI({ ...apiTab, pin }));
+      confirmedRef.current = new Set<string>();
+      setNameError(''); setPinError('');
+      setView('menu');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      console.error('[handleStartSession] failed:', err);
+      setNameError(`Could not create session: ${msg}. Please try again.`);
+    }
   }
 
   // ─── HANDLER: Join existing session (new device at occupied table) ─────────
-  function handleJoinSession() {
+  async function handleJoinSession() {
     const name = nameInput.trim();
     if (!name) { setNameError('Please enter your name'); return; }
     if (name.length < 2) { setNameError('Name must be at least 2 characters'); return; }
 
-    // Re-validate the existing session is still open
-    const activeTabs = getActiveTabsForTable(tableId);
-    const openTab = activeTabs.find(t => t.tabStatus === 'open');
+    if (!existingTabForJoin) { setView('landing'); return; }
+    const joinTab = existingTabForJoin;
 
-    if (!openTab) {
-      // Session closed in the meantime — fall back to creating a new one
-      setExistingTabForJoin(null);
-      setNameInput(name);
-      setView('landing');
-      return;
-    }
-
-    // Verify PIN if the existing session has one set
-    if (openTab.tableSessionPin) {
-      const pin = pinInput.trim();
-      if (!pin) { setPinError('Enter the table PIN (ask the person who started the session)'); return; }
-      if (!verifyTablePin(openTab.id, pin)) {
-        setPinError('Incorrect PIN — ask the table host for the 4-digit PIN');
+    try {
+      // Re-validate the session is still open in Supabase
+      const tabs   = await getTabsApi();
+      const apiTab = tabs.find(t => t.id === joinTab.id && t.status === 'open');
+      if (!apiTab) {
+        // Session closed between page load and join attempt — restart
+        setExistingTabForJoin(null);
+        setNameInput(name);
+        setView('landing');
         return;
       }
-    }
 
-    // Validate and add joiner's party size
-    const joinerParty = Math.max(1, parseInt(joinerPartyInput) || 1);
-    const remaining   = getRemainingCapacity(tableId);
-    if (joinerParty > remaining) {
-      setJoinerPartyError(
-        remaining === 0
-          ? 'This table is full — no more seats available'
-          : `Only ${remaining} seat${remaining !== 1 ? 's' : ''} remaining at this table`,
-      );
-      return;
-    }
-    addPartyToTab(openTab.id, joinerParty);
+      // Verify PIN via Supabase — no localStorage needed.
+      // If the tab has a PIN set, the joiner must enter it.
+      if (apiTab.pin) {
+        const pin = pinInput.trim();
+        if (!pin) { setPinError('Enter the table PIN (ask the person who started the session)'); return; }
+        const valid = await verifyTabPin(joinTab.id, pin);
+        if (!valid) {
+          setPinError('Incorrect PIN — ask the table host for the 4-digit PIN');
+          return;
+        }
+      }
 
-    registerDevice(deviceId, tableId, openTab.id, name);
-    setTabId(openTab.id);
-    setCustomerName(name);
-    // Re-read the tab from storage so occupiedSeats is up to date
-    const refreshedTabs = getTabs();
-    const refreshedTab  = refreshedTabs.find(t => t.id === openTab.id) || openTab;
-    setTab(refreshedTab);
-    confirmedRef.current = getConfirmedOrderIds(tableId);
-    setNameError('');
-    setPinError('');
-    setJoinerPartyError('');
-    setView('menu');
+      // Validate joiner's party size against table capacity from Supabase
+      const joinerParty = Math.max(1, parseInt(joinerPartyInput) || 1);
+      const remaining   = Math.max(0, tableCapacity - (apiTab.partySize ?? 0));
+      if (joinerParty > remaining) {
+        setJoinerPartyError(
+          remaining === 0
+            ? 'This table is full — no more seats available'
+            : `Only ${remaining} seat${remaining !== 1 ? 's' : ''} remaining at this table`,
+        );
+        return;
+      }
+      // Update party_size in Supabase (replaces addPartyToTab localStorage)
+      await updateTabApi(joinTab.id, { partySize: (apiTab.partySize ?? 0) + joinerParty });
+
+      // Register device in Supabase tab_devices (replaces registerDevice localStorage)
+      await registerTabDevice({ tabId: joinTab.id, deviceId, customerName: name, tableId });
+      setTabId(joinTab.id);
+      setCustomerName(name);
+      setTab(toTabUI(apiTab));
+      confirmedRef.current = new Set<string>();
+      setNameError('');
+      setPinError('');
+      setJoinerPartyError('');
+      setView('menu');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      console.error('[handleJoinSession] failed:', err);
+      setNameError(`Could not join session: ${msg}. Please try again.`);
+    }
   }
 
   // ─── HANDLER: Place order ──────────────────────────────────────────────────
-  function handlePlaceOrder() {
+  async function handlePlaceOrder() {
     if (!tabId || !customerName) return;
     // Block new orders after bill has been requested
     if (tab && tab.tabStatus === 'awaiting_payment') {
@@ -333,65 +423,158 @@ function TablePageInner() {
     if (!entries.length) return;
 
     const menuMap = Object.fromEntries(menu.map(m => [m.id, m]));
-    const items = entries.map(([id, qty]) => {
+    const items   = entries.map(([id, qty]) => {
       const m = menuMap[id];
       return { name: m.name, qty, price: m.price, subtotal: m.price * qty };
     });
     const subtotal = items.reduce((s, i) => s + i.subtotal, 0);
-    const orderNum = getNextOrderNumber();
-    const orderId  = `ORD-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
 
-    const order: Order = {
-      id:             orderId,
-      orderNum,
-      customerName,
-      tableId,
-      type:           'dine-in',
-      items,
-      status:         'awaiting_waiter',
-      total:          subtotal,
-      subtotal,
-      discount:       0,
-      discountReason: '',
-      payment:        'cod',
-      timestamp:      new Date().toISOString(),
-      timeline:       [{ status: 'awaiting_waiter', by: customerName, at: new Date().toISOString() }],
-    };
-
-    addOrder(order);
-    addOrderToTab(tabId, orderId);
-    setCart({});
-    setSpecialNote('');
-    setOrderMsg(`✅ Order #${orderNum} placed! Your waiter will confirm shortly.`);
-    setTimeout(() => setOrderMsg(''), 4000);
-    setView('tracking');
-    refresh();
+    try {
+      // Create order in Supabase — visible immediately to waiter/kitchen/manager
+      const order = await createOrderApi({
+        type:         'dine-in',
+        customerName,
+        tableId,
+        tabId,
+        items,
+        subtotal,
+        total: subtotal,
+        source: 'table-qr',
+      });
+      setCart({});
+      setSpecialNote('');
+      setOrderMsg(`✅ Order #${order.orderNum ?? order.id.slice(-4)} placed! Your waiter will confirm shortly.`);
+      setTimeout(() => setOrderMsg(''), 4000);
+      setView('tracking');
+      void refresh();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      console.error('[handlePlaceOrder] failed:', err);
+      setOrderMsg(`❌ Could not place order: ${msg}. Please try again.`);
+      setTimeout(() => setOrderMsg(''), 6000);
+    }
   }
 
   // ─── HANDLER: Request bill ─────────────────────────────────────────────────
-  function handleRequestBill() {
+  async function handleRequestBill() {
     if (!tabId) return;
-    if (requestBill(tabId)) {
+
+    // ── Block billing if any order has an unresolved issue ─────────────────
+    const unresolved = tabOrders.filter(o => o.status === 're_serve_required');
+    if (unresolved.length > 0) {
+      setBillMsg(
+        `🚫 Cannot request bill — ${unresolved.length} order${unresolved.length > 1 ? 's have' : ' has'} an unresolved ` +
+        `"not received" issue. Please wait for re-service and confirm receipt first.`,
+      );
+      setTimeout(() => setBillMsg(''), 6000);
+      return;
+    }
+
+    try {
+      // Update tab status → awaiting_payment — waiter/counter portals see this immediately
+      const updated = await updateTabApi(tabId, { status: 'awaiting_payment' });
+      setTab(toTabUI(updated));
       setBillMsg('🧾 Bill requested! Please proceed to the counter when ready.');
-      refresh();
       setTimeout(() => setBillMsg(''), 5000);
+      void refresh();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      console.error('[handleRequestBill] failed:', err);
+      setBillMsg(`❌ Could not request bill: ${msg}. Please try again.`);
+      setTimeout(() => setBillMsg(''), 6000);
     }
   }
 
   // ─── HANDLER: Call waiter ──────────────────────────────────────────────────
-  function handleCallWaiter() {
+  async function handleCallWaiter() {
     if (!tabId || !tab || callCooldown > 0) return;
-    addWaiterCall(tableId, tabId, customerName);
+    // Persist in Supabase + broadcast to waiter portal (replaces addWaiterCall localStorage)
+    try { await recordWaiterCall({ tabId, tableId, customerName }); } catch { /* non-critical */ }
     setCallCooldown(60);
   }
 
   // ─── HANDLER: Food receipt confirmation ────────────────────────────────────
-  function handleFoodConfirm(received: boolean) {
-    if (!disputeOrder || !tabId) return;
-    if (!received) addFoodReceiptDispute(disputeOrder.id, tabId, tableId, customerName);
-    confirmedRef.current.add(disputeOrder.id);
-    addConfirmedOrderId(tableId, disputeOrder.id);
-    setDisputeOrder(null);
+  async function handleFoodConfirm(received: boolean) {
+    if (!disputeOrder || !tabId || issueBusy) return;
+
+    if (received) {
+      // ── Customer confirmed ✅ ──────────────────────────────────────────────
+      // Mark in confirmedRef so dialog won't re-appear for this order
+      confirmedRef.current.add(disputeOrder.id);
+      setDisputeOrder(null);
+      setIssueMsg('');
+      setActiveIssue(null);
+
+      // If there was an active issue for this order, resolve it now
+      if (activeIssue && activeIssue.orderId === disputeOrder.id) {
+        try {
+          await resolveIssue(activeIssue.id, customerName || 'Customer');
+        } catch { /* non-critical — issue resolves server-side */ }
+      }
+      // Log the confirmation event
+      void createOrderEvent(
+        disputeOrder.id, 'CustomerConfirmed', customerName,
+        'Customer confirmed food received',
+      ).catch(() => {});
+      await refresh();
+    } else {
+      // ── Customer clicked "Not received" ❌ ────────────────────────────────
+      setIssueBusy(true);
+      setIssueMsg('');
+      try {
+        // Check current retry count before reporting
+        const existingIssue = await getIssueForOrder(disputeOrder.id);
+        const currentCount  = existingIssue ? existingIssue.retryCount : 0;
+
+        if (currentCount >= ISSUE_MAX_RETRIES) {
+          // Abuse limit reached — show escalation message, do NOT re-report
+          setDisputeOrder(null);
+          setIssueMsg(
+            `⚠️ This order has been reported ${currentCount} times. ` +
+            `The manager has been notified and will assist you shortly.`,
+          );
+          return;
+        }
+
+        // Report the issue → moves order to re_serve_required, notifies waiter
+        const issue = await reportNotReceived(
+          disputeOrder.id,
+          customerName || 'Customer',
+          'not_received',
+        );
+        setActiveIssue(issue);
+
+        // DO NOT add to confirmedRef — dialog must re-appear after re-service
+        setDisputeOrder(null);
+
+        if (issue.escalated) {
+          setIssueMsg(
+            `🚨 Issue escalated to manager after ${issue.retryCount} reports. ` +
+            `A manager will resolve this personally.`,
+          );
+        } else {
+          setIssueMsg(
+            `⚠️ We've alerted your waiter — they'll re-serve your order shortly. ` +
+            `You'll be asked to confirm once re-served. ` +
+            `(Report ${issue.retryCount}/${ISSUE_MAX_RETRIES})`,
+          );
+        }
+        void refresh();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unknown error';
+        console.error('[handleFoodConfirm] reportNotReceived failed:', err);
+        // Never throw a visible error to customer — show a friendly message
+        setDisputeOrder(null);
+        setIssueMsg(`⚠️ Your waiter has been notified. If you don't receive your food shortly, please call for assistance.`);
+        // Still log the event as a fallback
+        void createOrderEvent(
+          disputeOrder.id, 'FoodDisputed', customerName || 'Customer',
+          `Customer reported food not received — API error: ${msg}`,
+        ).catch(() => {});
+      } finally {
+        setIssueBusy(false);
+      }
+    }
   }
 
   // ─── Cart helpers ──────────────────────────────────────────────────────────
@@ -409,7 +592,8 @@ function TablePageInner() {
   }
 
   // ─── Derived tab data ──────────────────────────────────────────────────────
-  const tabOrders = tab ? orders.filter(o => tab.orderIds.includes(o.id)) : [];
+  // Filter orders that belong to this tab — use tabId field (Supabase FK), NOT orderIds array
+  const tabOrders = tab ? orders.filter(o => o.tabId === tab.id) : [];
   const activeTabOrders = tabOrders.filter(o => !['cancelled', 'void'].includes(o.status));
   const hasUnservedOrders = activeTabOrders.some(
     o => ['awaiting_waiter', 'pending', 'preparing', 'prepared'].includes(o.status),
@@ -436,9 +620,22 @@ function TablePageInner() {
     }));
   })();
 
+  // Tab total — now kept live by the server (updated on every order change)
   const tabTotal    = tab ? (tab.totalAmount || 0) : 0;
   const tabDiscount = tab ? (tab.discount || 0) : 0;
   const billTotal   = Math.max(0, tabTotal - tabDiscount);
+
+  // Per-customer breakdown — MY orders vs the full table total
+  const myOrders    = activeTabOrders.filter(o => o.customerName === customerName);
+  const myTotal     = myOrders.reduce((s, o) => s + (o.total || 0), 0);
+  const othersExist = activeTabOrders.some(o => o.customerName !== customerName);
+
+  // Proportion-based discount share: if admin applied a discount to the tab,
+  // split it pro-rata by how much each customer spent.
+  const myDiscountShare = (tabTotal > 0 && tabDiscount > 0)
+    ? Math.round((myTotal / tabTotal) * tabDiscount)
+    : 0;
+  const myBillTotal = Math.max(0, myTotal - myDiscountShare);
 
   // ══════════════════════════════════════════════════════════════════════════════
   // ─── VIEW: Loading ───────────────────────────────────────────────────────────
@@ -537,7 +734,7 @@ function TablePageInner() {
   if (view === 'join') {
     const existingCustomerName = existingTabForJoin?.customerName || 'someone';
     const guestCount = existingTabForJoin
-      ? getDevicesForTab(existingTabForJoin.id).length
+      ? codiners.length   // fetched from Supabase tab_devices via refreshCodiners
       : 0;
 
     return (
@@ -570,7 +767,9 @@ function TablePageInner() {
 
           {/* Joiner party size */}
           {(() => {
-            const remaining = existingTabForJoin ? getRemainingCapacity(tableId) : 0;
+            const remaining = existingTabForJoin
+              ? Math.max(0, tableCapacity - (existingTabForJoin.partySize ?? 0))
+              : 0;
             return (
               <div style={{ marginBottom: '1rem' }}>
                 <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>
@@ -648,7 +847,7 @@ function TablePageInner() {
               <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.1rem', fontWeight: 900 }}>🍽️ Foodie Lover</div>
               <div style={{ fontSize: '0.68rem', color: '#F9A826' }}>Table {tableId} · {customerName}</div>
             </div>
-            {tab && tab.orderIds.length > 0 && (
+            {tab && tabOrders.length > 0 && (
               <button onClick={() => setView('tracking')} style={{ ...btn('#ffffff20', 'white'), fontSize: '0.75rem', border: '1px solid #ffffff40' }}>
                 📋 My Tab
               </button>
@@ -792,8 +991,10 @@ function TablePageInner() {
 
   // Closed tab → Thank You
   if (tab?.tabStatus === 'closed') {
-    // Clean up device record so next scan shows fresh landing
-    if (deviceId) removeDeviceRecord(deviceId, tableId);
+    // Remove device record from Supabase so next scan shows a fresh landing
+    if (deviceId && tabId) {
+      void removeTabDevice(deviceId, tabId).catch(() => { /* non-critical */ });
+    }
     return (
       <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg,#064e3b,#065f46)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'Poppins,sans-serif', padding: '2rem' }}>
         <div style={{ textAlign: 'center', color: 'white', maxWidth: 360 }}>
@@ -838,21 +1039,61 @@ function TablePageInner() {
       {disputeOrder && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300, padding: '1rem' }}>
           <div style={{ background: 'white', borderRadius: 20, padding: '1.75rem 1.5rem', width: '100%', maxWidth: 360, textAlign: 'center', boxShadow: '0 24px 60px rgba(0,0,0,0.4)' }}>
-            <div style={{ fontSize: '3rem', marginBottom: '0.6rem' }}>🍽️</div>
-            <div style={{ fontWeight: 800, fontSize: '1.05rem', color: '#1A0800', marginBottom: '0.4rem' }}>Did you receive your food?</div>
+            <div style={{ fontSize: '3rem', marginBottom: '0.6rem' }}>
+              {activeIssue ? '🔄' : '🍽️'}
+            </div>
+            <div style={{ fontWeight: 800, fontSize: '1.05rem', color: '#1A0800', marginBottom: '0.4rem' }}>
+              {activeIssue ? 'Did you receive it this time?' : 'Did you receive your food?'}
+            </div>
             <div style={{ fontSize: '0.82rem', color: '#888', marginBottom: '0.25rem' }}>
               Order #{disputeOrder.orderNum || disputeOrder.id.slice(-4)} has been marked as delivered to your table.
             </div>
+            {activeIssue && (
+              <div style={{ fontSize: '0.75rem', background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: 8, padding: '0.4rem 0.6rem', marginBottom: '0.5rem', color: '#92400e' }}>
+                Re-service attempt #{activeIssue.retryCount} of {ISSUE_MAX_RETRIES}
+              </div>
+            )}
             <div style={{ fontSize: '0.75rem', color: '#bbb', marginBottom: '1.5rem' }}>
-              If you didn&apos;t get it, we&apos;ll alert your waiter immediately.
+              {activeIssue
+                ? 'Your waiter has re-served this order. Please confirm if received.'
+                : 'If you didn\'t get it, we\'ll alert your waiter immediately.'}
             </div>
             <div style={{ display: 'flex', gap: '0.6rem' }}>
-              <button onClick={() => handleFoodConfirm(false)} style={{ flex: 1, padding: '0.85rem', borderRadius: 12, background: '#fef2f2', border: '2px solid #ef4444', color: '#ef4444', fontWeight: 800, cursor: 'pointer', fontFamily: 'Poppins,sans-serif' }}>
-                ❌ Not received
+              <button
+                onClick={() => void handleFoodConfirm(false)}
+                disabled={issueBusy}
+                style={{ flex: 1, padding: '0.85rem', borderRadius: 12, background: issueBusy ? '#f3f4f6' : '#fef2f2', border: '2px solid #ef4444', color: '#ef4444', fontWeight: 800, cursor: issueBusy ? 'not-allowed' : 'pointer', fontFamily: 'Poppins,sans-serif', opacity: issueBusy ? 0.6 : 1 }}
+              >
+                {issueBusy ? '⏳ Reporting…' : '❌ Not received'}
               </button>
-              <button onClick={() => handleFoodConfirm(true)} style={{ flex: 1, padding: '0.85rem', borderRadius: 12, background: '#16a34a', border: 'none', color: 'white', fontWeight: 800, cursor: 'pointer', fontFamily: 'Poppins,sans-serif' }}>
+              <button
+                onClick={() => void handleFoodConfirm(true)}
+                disabled={issueBusy}
+                style={{ flex: 1, padding: '0.85rem', borderRadius: 12, background: '#16a34a', border: 'none', color: 'white', fontWeight: 800, cursor: issueBusy ? 'not-allowed' : 'pointer', fontFamily: 'Poppins,sans-serif', opacity: issueBusy ? 0.6 : 1 }}
+              >
                 ✅ Yes, got it!
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Issue status banner (shown after reporting "not received") ── */}
+      {issueMsg && !disputeOrder && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 290, background: issueMsg.startsWith('🚨') ? '#7f1d1d' : '#854d0e', color: 'white', padding: '0.85rem 1rem', display: 'flex', alignItems: 'flex-start', gap: '0.5rem', fontFamily: 'Poppins,sans-serif' }}>
+          <div style={{ flex: 1, fontSize: '0.82rem', fontWeight: 600, lineHeight: 1.4 }}>{issueMsg}</div>
+          <button onClick={() => setIssueMsg('')} style={{ background: 'transparent', border: 'none', color: 'white', cursor: 'pointer', fontSize: '1rem', padding: '0 0.25rem', flexShrink: 0 }}>✕</button>
+        </div>
+      )}
+
+      {/* ── Re-serve pending indicator (order in re_serve_required state) ── */}
+      {tabOrders.some(o => o.status === 're_serve_required') && !disputeOrder && (
+        <div style={{ background: '#fef3c7', borderBottom: '2px solid #f59e0b', padding: '0.65rem 1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', fontFamily: 'Poppins,sans-serif' }}>
+          <span style={{ fontSize: '1.1rem' }}>⏳</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#92400e' }}>Re-service in progress</div>
+            <div style={{ fontSize: '0.72rem', color: '#b45309' }}>
+              Your waiter is on the way. You&apos;ll be asked to confirm receipt once re-served.
             </div>
           </div>
         </div>
@@ -985,8 +1226,27 @@ function TablePageInner() {
 
             {/* Bill summary */}
             <div style={{ background: 'white', borderRadius: 14, padding: '0.85rem 1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.07)', marginBottom: '0.75rem' }}>
+              {/* Per-customer breakdown when multiple people are at the table */}
+              {othersExist && (
+                <div style={{ background: '#fff5ee', borderRadius: 10, padding: '0.6rem 0.75rem', marginBottom: '0.65rem', border: '1px solid #fed7aa' }}>
+                  <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#92400e', marginBottom: '0.3rem' }}>👤 Your share ({customerName})</div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.84rem', color: '#555', marginBottom: '0.15rem' }}>
+                    <span>Your orders ({myOrders.length})</span>
+                    <span style={{ fontWeight: 700, color: '#E65C00' }}>₹{myTotal}</span>
+                  </div>
+                  {myDiscountShare > 0 && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#16a34a' }}>
+                      <span>Your discount share</span><span>−₹{myDiscountShare}</span>
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 900, fontSize: '0.9rem', color: '#1A0800', borderTop: '1px solid #fed7aa', paddingTop: '0.3rem', marginTop: '0.25rem' }}>
+                    <span>Your total</span><span style={{ color: '#E65C00' }}>₹{myBillTotal}</span>
+                  </div>
+                </div>
+              )}
+
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', color: '#666', marginBottom: '0.2rem' }}>
-                <span>Subtotal ({activeTabOrders.length} order{activeTabOrders.length !== 1 ? 's' : ''})</span>
+                <span>Table subtotal ({activeTabOrders.length} order{activeTabOrders.length !== 1 ? 's' : ''})</span>
                 <span>₹{tabTotal}</span>
               </div>
               {tabDiscount > 0 && (
@@ -995,7 +1255,7 @@ function TablePageInner() {
                 </div>
               )}
               <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 900, fontSize: '1rem', color: '#1A0800', borderTop: '2px solid #f5f0e8', paddingTop: '0.4rem', marginTop: '0.2rem' }}>
-                <span>Total</span><span>₹{billTotal}</span>
+                <span>{othersExist ? 'Table Total' : 'Total'}</span><span>₹{billTotal}</span>
               </div>
             </div>
 
@@ -1029,7 +1289,7 @@ function TablePageInner() {
       </div>
 
       {/* Bottom nav */}
-      {tab && tab.tabStatus !== 'closed' && (
+      {tab && (tab.tabStatus === 'open' || tab.tabStatus === 'awaiting_payment') && (
         <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, background: 'white', boxShadow: '0 -4px 20px rgba(0,0,0,0.1)', padding: '0.6rem 1rem', display: 'flex', gap: '0.5rem', zIndex: 100 }}>
           {tab.tabStatus === 'open' && (
             <button onClick={() => setView('menu')} style={{ ...btn('#E65C00'), flex: 1, padding: '0.7rem', borderRadius: 10, fontSize: '0.85rem' }}>

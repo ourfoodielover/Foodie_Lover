@@ -1495,3 +1495,41 @@ export function getExpenseStats(): ExpenseStats {
 
   return { todayTotal, weekTotal, monthTotal, todayCount, weekCount, monthCount, byCategory };
 }
+
+
+// ─── WhatsApp Config ────────────────────────────────────────────────────────
+// Stored in localStorage so admins can update it without a deploy.
+
+const WHATSAPP_KEY = 'fl_whatsapp_number';
+
+/** Get the configured WhatsApp phone number (e.g. "919876543210"). */
+export function getWhatsappNumber(): string {
+  if (typeof window === 'undefined') return '';
+  return localStorage.getItem(WHATSAPP_KEY) ?? '';
+}
+
+/** Persist the WhatsApp phone number. */
+export function saveWhatsappNumber(number: string): void {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(WHATSAPP_KEY, number.replace(/\D/g, ''));
+}
+
+/**
+ * Build a WhatsApp click-to-chat URL for an order.
+ * Returns '' if no WhatsApp number is configured.
+ */
+export function buildWhatsappOrderUrl(order: {
+  id: string;
+  orderNum?: number;
+  customerName: string;
+  total: number;
+  type: string;
+}): string {
+  const num = getWhatsappNumber();
+  if (!num) return '';
+  const label = order.type === 'delivery' ? 'Delivery' : order.type === 'pickup' ? 'Pickup' : 'Dine-In';
+  const text = encodeURIComponent(
+    `Hi! Your ${label} order #${order.orderNum ?? order.id.slice(-6)} for ₹${order.total} is ready. Thank you for choosing Foodie Lover! 🍽️`
+  );
+  return `https://wa.me/${num}?text=${text}`;
+}

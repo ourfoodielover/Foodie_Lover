@@ -1,7 +1,8 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { loginDelivery } from '@/lib/auth';
+import { saveSession, getSession, AuthSession, SESSION_TTL_MS } from '@/lib/auth';
+import { lookupStaffByUsername } from '@/lib/api';
 
 export default function DeliveryLoginPage() {
   const router = useRouter();
@@ -10,17 +11,36 @@ export default function DeliveryLoginPage() {
   const [error,    setError]    = useState('');
   const [loading,  setLoading]  = useState(false);
 
-  function handleLogin() {
+  useEffect(() => {
+    if (getSession('delivery')) router.replace('/delivery');
+  }, [router]);
+
+  async function handleLogin() {
     if (!username.trim()) { setError('Please enter your username'); return; }
     if (!pin.trim())      { setError('Please enter your PIN');      return; }
     setLoading(true);
-    const session = loginDelivery(username.trim(), pin.trim());
-    setLoading(false);
-    if (!session) {
-      setError('Invalid username or PIN. Ask admin to create / check your account.');
-      return;
+    setError('');
+    try {
+      const staff = await lookupStaffByUsername(username.trim(), 'delivery');
+      if (!staff || !staff.active || staff.pin !== pin.trim()) {
+        setError('Invalid username or PIN. Ask admin to create / check your account.');
+        return;
+      }
+      const s: AuthSession = {
+        accountId: staff.id,
+        role:      'delivery',
+        name:      staff.name,
+        username:  staff.username ?? username.trim(),
+        loginAt:   new Date().toISOString(),
+        expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
+      };
+      saveSession(s);
+      router.replace('/delivery');
+    } catch {
+      setError('Could not connect to server. Please try again.');
+    } finally {
+      setLoading(false);
     }
-    router.replace('/delivery');
   }
 
   const inp: React.CSSProperties = {
@@ -32,8 +52,7 @@ export default function DeliveryLoginPage() {
 
   return (
     <div style={{
-      minHeight: '100vh',
-      background: 'linear-gradient(135deg,#0f172a,#1e293b)',
+      minHeight: '100vh', background: 'linear-gradient(135deg,#0f172a,#1e293b)',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       fontFamily: 'Poppins,sans-serif', padding: '1rem',
     }}>
@@ -48,38 +67,20 @@ export default function DeliveryLoginPage() {
           </div>
         </div>
 
-        {/* Username */}
         <div style={{ marginBottom: '0.85rem' }}>
-          <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.4rem' }}>
-            Username
-          </label>
-          <input
-            value={username}
-            onChange={e => { setUsername(e.target.value); setError(''); }}
-            onKeyDown={e => e.key === 'Enter' && handleLogin()}
-            placeholder="e.g. ravi"
-            autoFocus
-            autoComplete="username"
-            style={inp}
-          />
+          <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.4rem' }}>Username</label>
+          <input value={username} onChange={e => { setUsername(e.target.value); setError(''); }}
+            onKeyDown={e => e.key === 'Enter' && handleLogin()} placeholder="e.g. ravi"
+            autoFocus autoComplete="username" style={inp} />
         </div>
 
-        {/* PIN */}
         <div style={{ marginBottom: '1rem' }}>
-          <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.4rem' }}>
-            PIN
-          </label>
-          <input
-            type="password"
-            inputMode="numeric"
-            value={pin}
+          <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.4rem' }}>PIN</label>
+          <input type="password" inputMode="numeric" value={pin}
             onChange={e => { setPin(e.target.value.replace(/\D/g, '')); setError(''); }}
-            onKeyDown={e => e.key === 'Enter' && handleLogin()}
-            placeholder="••••"
-            maxLength={6}
-            autoComplete="current-password"
-            style={{ ...inp, letterSpacing: '0.4em', textAlign: 'center' }}
-          />
+            onKeyDown={e => e.key === 'Enter' && handleLogin()} placeholder="••••"
+            maxLength={6} autoComplete="current-password"
+            style={{ ...inp, letterSpacing: '0.4em', textAlign: 'center' }} />
         </div>
 
         {error && (
@@ -88,15 +89,10 @@ export default function DeliveryLoginPage() {
           </div>
         )}
 
-        <button
-          onClick={handleLogin}
-          disabled={loading}
-          style={{
-            width: '100%', background: loading ? '#94a3b8' : '#0f172a', color: 'white', border: 'none',
+        <button onClick={handleLogin} disabled={loading}
+          style={{ width: '100%', background: loading ? '#94a3b8' : '#0f172a', color: 'white', border: 'none',
             padding: '0.8rem', borderRadius: 12, fontWeight: 700, fontSize: '0.95rem',
-            cursor: loading ? 'not-allowed' : 'pointer', fontFamily: 'Poppins,sans-serif',
-          }}
-        >
+            cursor: loading ? 'not-allowed' : 'pointer', fontFamily: 'Poppins,sans-serif' }}>
           {loading ? '⏳ Checking…' : '🛵 Start Delivery Shift'}
         </button>
 

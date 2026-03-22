@@ -1,43 +1,25 @@
 // ─── Foodie Lover — Auth System ───────────────────────────────────────────────
-// Role-based session management using localStorage.
-// No backend required — all state is local.
+// Session management using localStorage for session TOKENS only.
+// All PIN verification is done server-side via Supabase (see /api/settings,
+// /api/staff routes). localStorage is ONLY used to persist the session token
+// between page reloads — never for business data.
+//
+// Login flows:
+//   admin/login   → GET /api/settings { owner_pin }  → verify → saveSession()
+//   kitchen/login → GET /api/settings { kitchen_pin } → verify → saveSession()
+//   manager/login → GET /api/settings { manager_pin } → verify → saveSession()
+//   waiter/login  → GET /api/staff (lookup by username + pin) → saveSession()
+//   delivery/login → GET /api/staff (lookup by username + pin) → saveSession()
 
 export type Role = 'admin' | 'kitchen' | 'waiter' | 'manager' | 'delivery';
 
-export interface StaffAccount {
-  id:        string;
-  username:  string;
-  pin:       string;   // 4–6 digit PIN
-  role:      'waiter'; // Only waiters have individual accounts
-  name:      string;   // Display name
-  active:    boolean;
-  createdAt: string;
-}
-
-export interface DeliveryAccount {
-  id:        string;
-  username:  string;
-  pin:       string;   // 4–6 digit PIN
-  role:      'delivery';
-  name:      string;   // Display name
-  active:    boolean;
-  createdAt: string;
-}
-
 export interface AuthSession {
-  accountId?: string;  // Set for waiter individual accounts
+  accountId?: string;  // Set for waiter/delivery individual accounts
   role:       Role;
   name:       string;
   username:   string;
   loginAt:    string;
   expiresAt:  string;
-}
-
-// ─── Security recovery types ──────────────────────────────────────────────────
-export interface SecuritySetup {
-  question: string;
-  answerHash: string;  // lowercased + trimmed answer stored as-is (no real hashing — localStorage only)
-  setupAt: string;
 }
 
 // ─── localStorage keys ────────────────────────────────────────────────────────
@@ -49,16 +31,8 @@ const SESSION_KEY: Record<Role, string> = {
   delivery: 'fl_session_delivery',
 };
 
-const KEYS = {
-  kitchenPin:        'fl_kitchen_pin',
-  managerPin:        'fl_manager_pin',
-  staffAccounts:     'fl_staff_accounts',
-  deliveryAccounts:  'fl_delivery_accounts',
-  securitySetup:     'fl_admin_security',
-};
-
 // Sessions expire after 8 hours of inactivity
-const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+export const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 
 // ─── Storage helpers ──────────────────────────────────────────────────────────
 function ls_get<T>(key: string, fallback: T): T {
@@ -74,106 +48,6 @@ function ls_get<T>(key: string, fallback: T): T {
 function ls_set<T>(key: string, val: T): void {
   if (typeof window === 'undefined') return;
   localStorage.setItem(key, JSON.stringify(val));
-}
-
-// ─── PINs ─────────────────────────────────────────────────────────────────────
-export const getKitchenPin  = (): string    => ls_get<string>(KEYS.kitchenPin, '0000');
-export const saveKitchenPin = (p: string)   => ls_set(KEYS.kitchenPin, p);
-export const getManagerPin  = (): string    => ls_get<string>(KEYS.managerPin, '9999');
-export const saveManagerPin = (p: string)   => ls_set(KEYS.managerPin, p);
-
-// ─── Staff Accounts ───────────────────────────────────────────────────────────
-export const getStaffAccounts  = (): StaffAccount[] =>
-  ls_get<StaffAccount[]>(KEYS.staffAccounts, []);
-export const saveStaffAccounts = (a: StaffAccount[]) =>
-  ls_set(KEYS.staffAccounts, a);
-
-export function createStaffAccount(
-  name:     string,
-  username: string,
-  pin:      string,
-): StaffAccount | { error: string } {
-  const accounts = getStaffAccounts();
-  if (accounts.some(a => a.username.toLowerCase() === username.toLowerCase().trim())) {
-    return { error: 'Username already exists' };
-  }
-  if (pin.length < 4) return { error: 'PIN must be at least 4 digits' };
-
-  const account: StaffAccount = {
-    id:        `STAFF-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
-    username:  username.trim(),
-    pin:       pin.trim(),
-    role:      'waiter',
-    name:      name.trim(),
-    active:    true,
-    createdAt: new Date().toISOString(),
-  };
-  accounts.push(account);
-  saveStaffAccounts(accounts);
-  return account;
-}
-
-export function deleteStaffAccount(id: string): void {
-  saveStaffAccounts(getStaffAccounts().filter(a => a.id !== id));
-}
-
-export function toggleStaffAccount(id: string): void {
-  saveStaffAccounts(
-    getStaffAccounts().map(a => a.id === id ? { ...a, active: !a.active } : a),
-  );
-}
-
-export function updateStaffPin(id: string, newPin: string): void {
-  saveStaffAccounts(
-    getStaffAccounts().map(a => a.id === id ? { ...a, pin: newPin } : a),
-  );
-}
-
-// ─── Delivery Accounts ────────────────────────────────────────────────────────
-export const getDeliveryAccounts  = (): DeliveryAccount[] =>
-  ls_get<DeliveryAccount[]>(KEYS.deliveryAccounts, []);
-export const saveDeliveryAccounts = (a: DeliveryAccount[]) =>
-  ls_set(KEYS.deliveryAccounts, a);
-
-export function createDeliveryAccount(
-  name:     string,
-  username: string,
-  pin:      string,
-): DeliveryAccount | { error: string } {
-  const accounts = getDeliveryAccounts();
-  if (accounts.some(a => a.username.toLowerCase() === username.toLowerCase().trim())) {
-    return { error: 'Username already exists' };
-  }
-  if (pin.length < 4) return { error: 'PIN must be at least 4 digits' };
-
-  const account: DeliveryAccount = {
-    id:        `DEL-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
-    username:  username.trim(),
-    pin:       pin.trim(),
-    role:      'delivery',
-    name:      name.trim(),
-    active:    true,
-    createdAt: new Date().toISOString(),
-  };
-  accounts.push(account);
-  saveDeliveryAccounts(accounts);
-  return account;
-}
-
-export function deleteDeliveryAccount(id: string): void {
-  saveDeliveryAccounts(getDeliveryAccounts().filter(a => a.id !== id));
-}
-
-export function toggleDeliveryAccount(id: string): void {
-  saveDeliveryAccounts(
-    getDeliveryAccounts().map(a => a.id === id ? { ...a, active: !a.active } : a),
-  );
-}
-
-export function updateDeliveryPin(id: string, newPin: string): void {
-  saveDeliveryAccounts(
-    getDeliveryAccounts().map(a => a.id === id ? { ...a, pin: newPin } : a),
-  );
 }
 
 // ─── Session management ───────────────────────────────────────────────────────
@@ -196,86 +70,9 @@ export function clearSession(role: Role): void {
   localStorage.removeItem(SESSION_KEY[role]);
 }
 
-// ─── Login functions ──────────────────────────────────────────────────────────
-export function loginAdmin(pin: string, ownerPin: string): AuthSession | null {
-  if (pin !== ownerPin) return null;
-  const s: AuthSession = {
-    role: 'admin', name: 'Admin', username: 'admin',
-    loginAt:   new Date().toISOString(),
-    expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
-  };
-  saveSession(s);
-  return s;
-}
-
-export function loginKitchen(pin: string): AuthSession | null {
-  if (pin !== getKitchenPin()) return null;
-  const s: AuthSession = {
-    role: 'kitchen', name: 'Kitchen Staff', username: 'kitchen',
-    loginAt:   new Date().toISOString(),
-    expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
-  };
-  saveSession(s);
-  return s;
-}
-
-export function loginWaiter(username: string, pin: string): AuthSession | null {
-  const account = getStaffAccounts().find(
-    a =>
-      a.username.toLowerCase() === username.toLowerCase().trim() &&
-      a.pin === pin.trim() &&
-      a.active,
-  );
-  if (!account) return null;
-  const s: AuthSession = {
-    accountId: account.id,
-    role:      'waiter',
-    name:      account.name,
-    username:  account.username,
-    loginAt:   new Date().toISOString(),
-    expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
-  };
-  saveSession(s);
-  return s;
-}
-
-export function loginManager(pin: string): AuthSession | null {
-  if (pin !== getManagerPin()) return null;
-  const s: AuthSession = {
-    role: 'manager', name: 'Manager', username: 'manager',
-    loginAt:   new Date().toISOString(),
-    expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
-  };
-  saveSession(s);
-  return s;
-}
-
-/**
- * Delivery login — validates username + PIN against stored delivery accounts.
- * Returns null if credentials are invalid or the account is inactive.
- */
-export function loginDelivery(username: string, pin: string): AuthSession | null {
-  const account = getDeliveryAccounts().find(
-    a =>
-      a.username.toLowerCase() === username.toLowerCase().trim() &&
-      a.pin === pin.trim() &&
-      a.active,
-  );
-  if (!account) return null;
-  const s: AuthSession = {
-    accountId: account.id,
-    role:      'delivery',
-    name:      account.name,
-    username:  account.username,
-    loginAt:   new Date().toISOString(),
-    expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
-  };
-  saveSession(s);
-  return s;
-}
-
-// ─── Security Question (Admin PIN Recovery) ───────────────────────────────────
-
+// ─── Security Questions (Admin PIN Recovery — UI display list only) ───────────
+// Note: The actual answer is verified server-side via /api/settings.
+// This list is only used to populate the <select> dropdown in admin settings.
 export const SECURITY_QUESTIONS = [
   "What is the name of your first pet?",
   "What was the name of your first school?",
@@ -286,29 +83,3 @@ export const SECURITY_QUESTIONS = [
   "What city were you born in?",
   "What was the name of your childhood best friend?",
 ];
-
-export function getSecuritySetup(): SecuritySetup | null {
-  return ls_get<SecuritySetup | null>(KEYS.securitySetup, null);
-}
-
-export function saveSecuritySetup(question: string, answer: string): void {
-  const setup: SecuritySetup = {
-    question,
-    answerHash: answer.toLowerCase().trim(),
-    setupAt:    new Date().toISOString(),
-  };
-  ls_set(KEYS.securitySetup, setup);
-}
-
-export function verifySecurityAnswer(answer: string): boolean {
-  const setup = getSecuritySetup();
-  if (!setup) return false;
-  return setup.answerHash === answer.toLowerCase().trim();
-}
-
-/** Reset the admin PIN after successful security-question verification. */
-export function resetAdminPinWithSecurity(newPin: string, answer: string): boolean {
-  if (!verifySecurityAnswer(answer)) return false;
-  // savePin is in storage.ts — we import it at call-site to avoid circular deps
-  return true; // caller must call savePin(newPin) after this returns true
-}
