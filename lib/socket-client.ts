@@ -1,5 +1,10 @@
-// ─── Foodie Lover — Socket.io Client ─────────────────────────────────────────
-// Singleton socket connection + React hook for real-time updates
+// ─── DEPRECATED — DO NOT USE ──────────────────────────────────────────────────
+// Socket.io has been fully replaced by Supabase Realtime broadcast channels.
+// Use lib/realtime-client.ts and the useRealtime() hook instead.
+//
+// This file is kept only as a reference. socket.io and socket.io-client have
+// been removed from package.json. Importing this file will throw at runtime.
+// ─────────────────────────────────────────────────────────────────────────────
 'use client';
 
 import { useEffect, useRef, useCallback } from 'react';

@@ -2,7 +2,7 @@
 // PATCH /api/orders/[id]  — update order (status / discount / payment / items)
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId, rowToOrder, broadcast } from '@/lib/supabase-server';
-import { enqueueReceiptEmail } from '@/lib/email-server';
+import { enqueueReceiptEmail, sendReceiptEmail } from '@/lib/email-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -225,16 +225,23 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       await sb.from('customer_tabs').update({ total: liveTotal }).eq('id', order.tabId);
     }
 
-    // ── Receipt email (via queue for reliable delivery + retry) ──────────────
-    // Enqueue when order reaches 'completed' — the background worker sends it
-    // within 1 minute with up to 3 attempts + exponential backoff.
-    // enqueueReceiptEmail is idempotent — safe to call multiple times.
+    // ── Receipt email — immediate send with queue fallback ───────────────────
+    // Attempt an immediate send first so the customer gets the email right away
+    // without waiting for the hourly cron sweep.
+    // If the immediate send fails (e.g. Resend transient error), fall back to
+    // enqueueReceiptEmail() which retries up to 3× with exponential backoff.
     const isNowComplete =
       body.status === 'completed' || body.action === 'customer_confirm';
 
     if (isNowComplete && order.customerEmail) {
-      enqueueReceiptEmail(id).catch(err =>
-        console.error(`[PATCH /api/orders/[id]] enqueue receipt failed for ${id}:`, err),
+      sendReceiptEmail(id).then(result => {
+        if (!result.sent) {
+          console.warn(`[PATCH /api/orders/[id]] immediate email failed for ${id}: ${result.reason} — queuing for retry`);
+          return enqueueReceiptEmail(id);
+        }
+        console.info(`[PATCH /api/orders/[id]] receipt sent for ${id}: ${result.messageId}`);
+      }).catch(err =>
+        console.error(`[PATCH /api/orders/[id]] email error for ${id}:`, err),
       );
     }
 
