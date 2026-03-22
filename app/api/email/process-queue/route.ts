@@ -1,7 +1,13 @@
-// GET /api/email/process-queue — background worker: process the email retry queue
+// GET /api/email/process-queue — hourly cleanup sweep for the email retry queue
 //
-// Called automatically every minute by Vercel Cron (configured in vercel.json).
-// Can also be triggered manually for testing or emergency processing.
+// Architecture note:
+//   Receipt emails are sent IMMEDIATELY at the point of order/tab completion
+//   (see PATCH /api/orders/[id] and PATCH /api/tabs/[id]).  This route is a
+//   safety-net that retries any sends that failed transiently (e.g. Resend API
+//   blip, cold-start timeout).  It runs once per hour via Vercel Cron.
+//
+// Vercel Hobby plan supports cron schedules no more frequent than hourly.
+// Schedule: "0 * * * *" (top of every hour) — see vercel.json.
 //
 // Security: accepts requests with Authorization: Bearer CRON_SECRET
 // or from localhost. Vercel Cron automatically includes the CRON_SECRET header.
