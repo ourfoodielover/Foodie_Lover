@@ -226,10 +226,10 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     }
 
     // ── Receipt email — immediate send with queue fallback ───────────────────
-    // Attempt an immediate send first so the customer gets the email right away
-    // without waiting for the hourly cron sweep.
-    // If the immediate send fails (e.g. Resend transient error), fall back to
-    // enqueueReceiptEmail() which retries up to 3× with exponential backoff.
+    // Send immediately so the customer gets the receipt right away.
+    // If the Resend call fails transiently, fall back to enqueueReceiptEmail()
+    // so an admin can flush the retry queue manually via /api/email/process-queue.
+    // No cron dependency — the POS flow never blocks on email delivery.
     const isNowComplete =
       body.status === 'completed' || body.action === 'customer_confirm';
 
