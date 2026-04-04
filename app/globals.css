@@ -1,0 +1,286 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --primary: #E65C00;
+  --secondary: #F9A826;
+  --dark-bg: #1A0800;
+  --light-bg: #FFF5EB;
+  --accent: #C0392B;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: 'Poppins', sans-serif;
+  background: linear-gradient(135deg, #faf8f3, #f5f0e8);
+  min-height: 100vh;
+  margin: 0;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Playfair Display', serif;
+}
+
+/* Status badges */
+.badge {
+  padding: 0.25rem 0.75rem;
+  border-radius: 15px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+.badge-pending   { background: #fef3c7; color: #d97706; }
+.badge-preparing { background: #dbeafe; color: #2563eb; }
+.badge-prepared  { background: #ede9fe; color: #7c3aed; }
+.badge-served    { background: #cffafe; color: #0891b2; }
+.badge-completed { background: #dcfce7; color: #16a34a; }
+.badge-dine-in   { background: #fff7ed; color: #ea580c; }
+.badge-pickup    { background: #f0fdf4; color: #16a34a; }
+
+/* Modal overlay */
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.6);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+.modal-overlay.show { display: flex; }
+
+/* ─── Login Page ─────────────────────────────────────────────────────────── */
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #1A0800, #2D0F00);
+  padding: 1rem;
+}
+
+.login-card {
+  background: white;
+  border-radius: 20px;
+  padding: 2.5rem;
+  width: 100%;
+  max-width: 400px;
+  box-shadow: 0 30px 80px rgba(0,0,0,0.4);
+  text-align: center;
+}
+
+.login-icon {
+  font-size: 3rem;
+  margin-bottom: 0.5rem;
+}
+
+.login-title {
+  font-family: 'Playfair Display', serif;
+  font-size: 1.5rem;
+  font-weight: 900;
+  color: #1A0800;
+  margin: 0 0 0.25rem;
+}
+
+.login-subtitle {
+  font-size: 0.82rem;
+  color: #888;
+  margin: 0 0 1.75rem;
+}
+
+.login-input {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border: 2px solid #e5e7eb;
+  border-radius: 10px;
+  font-family: 'Poppins', sans-serif;
+  font-size: 0.95rem;
+  margin-bottom: 1rem;
+  text-align: center;
+  letter-spacing: 4px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.login-input:focus { border-color: #E65C00; }
+.login-input-text {
+  letter-spacing: 0;
+  text-align: left;
+}
+
+.login-btn {
+  width: 100%;
+  background: #E65C00;
+  color: white;
+  border: none;
+  padding: 0.85rem;
+  border-radius: 10px;
+  font-weight: 700;
+  font-size: 1rem;
+  font-family: 'Poppins', sans-serif;
+  cursor: pointer;
+  margin-bottom: 0.75rem;
+  transition: background 0.2s;
+}
+.login-btn:hover { background: #C0392B; }
+.login-btn:disabled { background: #bbb; cursor: not-allowed; }
+
+.login-back {
+  font-size: 0.8rem;
+  color: #888;
+  text-decoration: none;
+  display: inline-block;
+  margin-top: 0.25rem;
+  cursor: pointer;
+}
+.login-back:hover { color: #E65C00; }
+
+.login-error {
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  padding: 0.6rem;
+  font-size: 0.82rem;
+  margin-bottom: 1rem;
+}
+
+/* ─── Role Selector (landing /login page) ───────────────────────────────── */
+.role-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+
+.role-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1.25rem 0.75rem;
+  border-radius: 14px;
+  border: 2px solid #e5e7eb;
+  background: white;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-decoration: none;
+  color: inherit;
+}
+.role-card:hover {
+  border-color: #E65C00;
+  box-shadow: 0 4px 16px rgba(230,92,0,0.15);
+  transform: translateY(-2px);
+}
+.role-card-icon { font-size: 2rem; }
+.role-card-label {
+  font-weight: 700;
+  font-size: 0.88rem;
+  color: #1A0800;
+}
+.role-card-desc {
+  font-size: 0.72rem;
+  color: #888;
+  text-align: center;
+}
+
+/* ─── Mobile Responsive: Header ─────────────────────────────────────────── */
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
+/* ─── Mobile Responsive: Grid layouts ───────────────────────────────────── */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.orders-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 1rem;
+}
+
+.menu-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+/* ─── Mobile Responsive: Filter tabs ────────────────────────────────────── */
+.filter-tabs {
+  display: flex;
+  gap: 0.4rem;
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.filter-tabs::-webkit-scrollbar { display: none; }
+
+/* ─── Scrollable containers ──────────────────────────────────────────────── */
+.scroll-x {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ─── Mobile breakpoints ─────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .orders-grid {
+    grid-template-columns: 1fr;
+  }
+  .menu-grid {
+    grid-template-columns: 1fr;
+  }
+  .role-grid {
+    grid-template-columns: 1fr;
+  }
+  .login-card {
+    padding: 2rem 1.5rem;
+  }
+  /* Hide secondary text in compact headers */
+  .header-secondary { display: none; }
+}
+
+@media (max-width: 480px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.6rem;
+  }
+  .login-card {
+    padding: 1.75rem 1.25rem;
+    border-radius: 16px;
+  }
+}
+
+/* ─── Animations ─────────────────────────────────────────────────────────── */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.animate-slide-in { animation: slideIn 0.2s ease; }
+
+/* ─── Utility ────────────────────────────────────────────────────────────── */
+.text-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -1,0 +1,222 @@
+// Foodie Lover POS — Prisma Schema
+// Production backend for Next.js 15 + TypeScript restaurant POS system
+// Designed to work with SQLite (dev) and PostgreSQL (prod)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Core Restaurant & Staff
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Restaurant {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  // Relations
+  staffMembers Staff[]
+  tables       Table[]
+  menuItems    MenuItem[]
+  orders       Order[]
+  tabs         CustomerTab[]
+  shifts       ShiftLog[]
+  expenses     Expense[]
+
+  @@index([name])
+}
+
+model Staff {
+  id           String   @id @default(cuid())
+  restaurantId String
+  name         String
+  username     String
+  role         String   // 'kitchen', 'waiter', 'manager', 'delivery', 'admin'
+  pin          String   // 4-6 digit PIN
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  shifts     ShiftLog[]
+
+  @@unique([restaurantId, username])
+  @@index([restaurantId])
+}
+
+model ShiftLog {
+  id             String   @id @default(cuid())
+  staffId        String
+  restaurantId   String
+  shiftStart     DateTime
+  shiftEnd       DateTime?
+  ordersServed   Int      @default(0)
+  revenueHandled Float    @default(0)
+  createdAt      DateTime @default(now())
+
+  staff      Staff      @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([staffId])
+  @@index([restaurantId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Menu & Tables
+// ─────────────────────────────────────────────────────────────────────────────
+
+model MenuItem {
+  id           String   @id @default(cuid())
+  restaurantId String
+  category     String
+  name         String
+  description  String   @default("")
+  price        Float
+  image        String   @default("")
+  badge        String   @default("") // 'bestseller', 'popular', 'chef', 'famous', 'new'
+  available    Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  orderItems OrderItem[]
+
+  @@unique([restaurantId, name])
+  @@index([restaurantId])
+  @@index([category])
+}
+
+model Table {
+  id           String   @id @default(cuid())
+  restaurantId String
+  name         String   // Table 1, Table 2, etc.
+  capacity     Int      @default(4)
+  active       Boolean  @default(true)
+  status       String   @default("available") // 'available', 'occupied', 'reserved'
+  createdAt    DateTime @default(now())
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  tabs       CustomerTab[]
+
+  @@unique([restaurantId, name])
+  @@index([restaurantId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Orders & Tabs
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Order {
+  id                String   @id @default(cuid())
+  restaurantId      String
+  orderNumber       Int      @default(0)
+  type              String   // 'dine-in', 'pickup', 'delivery'
+  tableId           String?
+  customerName      String
+  customerEmail     String?
+  phone             String?
+  status            String   // 'awaiting_waiter', 'pending', 'preparing', 'prepared', 'served', 'out_for_delivery', 'delivered', 'completed', 'cancelled', 'void'
+  subtotal          Float    @default(0)
+  tax               Float    @default(0)
+  discount          Float    @default(0)
+  discountReason    String   @default("")
+  tip               Float    @default(0)
+  total             Float    @default(0)
+  paymentMethod     String   @default("cod") // 'cod', 'gpay', 'phonepe', 'paytm', 'card', 'upi'
+  trackingToken     String?  @unique
+  deliveryAddress   String?
+  deliveryPerson    String?
+  cancelReason      String?
+  source            String   @default("dine-in") // 'dine-in', 'online', 'delivery'
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  tabId           String?
+  restaurant  Restaurant   @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  items       OrderItem[]
+  events      OrderEvent[]
+  tab         CustomerTab? @relation(fields: [tabId], references: [id])
+  @@index([tabId])
+
+  @@index([restaurantId])
+  @@index([status])
+  @@index([type])
+  @@index([trackingToken])
+}
+
+model OrderItem {
+  id        String   @id @default(cuid())
+  orderId   String
+  name      String
+  qty       Int      @default(1)
+  price     Float    @default(0)
+  subtotal  Float    @default(0)
+  createdAt DateTime @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+}
+
+model OrderEvent {
+  id        String   @id @default(cuid())
+  orderId   String
+  eventType String   // 'OrderPlaced', 'KitchenAccepted', 'Preparing', 'Prepared', 'Served', 'OrderPickedUp', 'OutForDelivery', 'Delivered', 'CustomerConfirmed', 'Cancelled', 'Voided'
+  performedBy String @default("system")
+  note      String   @default("")
+  createdAt DateTime @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([eventType])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Customer Tabs (Dine-in billing)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model CustomerTab {
+  id            String   @id @default(cuid())
+  restaurantId  String
+  tableId       String?
+  customerName  String
+  partySize     Int      @default(1)
+  tabStatus     String   @default("open") // 'open', 'awaiting_payment', 'closed'
+  totalAmount   Float    @default(0)
+  discount      Float    @default(0)
+  paymentMethod String   @default("cod")
+  createdAt     DateTime @default(now())
+  closedAt      DateTime?
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  table      Table?     @relation(fields: [tableId], references: [id])
+  orders     Order[]
+
+  @@index([restaurantId])
+  @@index([tabStatus])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Expenses & Analytics
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Expense {
+  id           String   @id @default(cuid())
+  restaurantId String
+  category     String
+  description  String
+  amount       Float
+  date         String   // ISO date YYYY-MM-DD
+  addedBy      String   @default("system")
+  createdAt    DateTime @default(now())
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId])
+  @@index([date])
+}
