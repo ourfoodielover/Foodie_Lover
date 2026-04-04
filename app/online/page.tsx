@@ -1,4 +1,6 @@
 'use client';
+
+export const dynamic = 'force-dynamic';
 import { useState, useEffect, useRef } from 'react';
 import { getMenu, createOrder, lookupOrderByContact, MenuItem } from '@/lib/api';
 import { safeApiCall } from '@/lib/safe-api';

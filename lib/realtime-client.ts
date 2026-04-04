@@ -4,7 +4,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { supabase } from '@/lib/supabase';
+import { getSupabaseClient } from '@/lib/supabase';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 
 export type RealtimeEventHandlers = {
@@ -49,7 +49,10 @@ export function useRealtime(
   useEffect(() => {
     if (!restaurantId) return;
 
-    const channel = supabase.channel(`restaurant:${restaurantId}`, {
+    // Resolve the singleton client inside the effect so it is never called
+    // at module-load time (which would execute during next build).
+    const sb = getSupabaseClient();
+    const channel = sb.channel(`restaurant:${restaurantId}`, {
       config: { broadcast: { ack: false } },
     });
 
@@ -84,7 +87,7 @@ export function useRealtime(
 
     channelRef.current = channel;
     return () => {
-      supabase.removeChannel(channel);
+      sb.removeChannel(channel);
       channelRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
