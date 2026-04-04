@@ -19,6 +19,7 @@
     "react-dom": "19.2.3",
     "recharts": "^2.10.3",
     "resend": "^3.0.0",
+    "socket.io-client": "^4.8.3",
     "uuid": "^9.0.1"
   },
   "devDependencies": {
@@ -27,6 +28,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/recharts": "^1.8.29",
+    "@types/socket.io-client": "^1.4.36",
     "@types/uuid": "^9.0.7",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
