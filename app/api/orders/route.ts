@@ -2,6 +2,7 @@
 // POST /api/orders   — create order
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId, nextOrderNum, rowToOrder, broadcast } from '@/lib/supabase-server';
+import { sendOrderConfirmationEmail } from '@/lib/email-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -269,6 +270,16 @@ export async function POST(req: NextRequest) {
 
     const order = rowToOrder(full, full.order_items ?? [], full.order_events ?? []);
     await broadcast(rid, 'order_created', order);
+
+    // ── Order confirmation email — fire-and-forget, never blocks the response ─
+    // Only sends if the order has a customer_email (online / delivery / pickup
+    // orders typically do; dine-in table-QR orders typically don't).
+    if (body.customerEmail) {
+      sendOrderConfirmationEmail(id).catch(err =>
+        console.error('[POST /api/orders] confirmation email error:', err),
+      );
+    }
+
     return NextResponse.json(order, { status: 201 });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

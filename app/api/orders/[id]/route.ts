@@ -2,7 +2,7 @@
 // PATCH /api/orders/[id]  — update order (status / discount / payment / items)
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId, rowToOrder, broadcast } from '@/lib/supabase-server';
-import { enqueueReceiptEmail, sendReceiptEmail } from '@/lib/email-server';
+import { enqueueReceiptEmail, sendReceiptEmail, sendOrderReadyEmail } from '@/lib/email-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -55,6 +55,9 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     const body = await req.json();
     const rid  = body.restaurantId ?? 'rest_default';
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    // Hoisted so the "ready" and "receipt" email triggers below can read it.
+    // Set to true inside the status block when the transition is a no-op (already in state).
+    let isIdempotent = false;
 
     // ── Status change ────────────────────────────────────────────────────────
     if (body.status) {
@@ -69,7 +72,6 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       // Fetch current status for transition validation
       // Skip transition check for 'void' (manager override) and 're_serve_required' (can reset)
       // Also skip if body.force === true (manager emergency override)
-      let isIdempotent = false;
       if (body.status !== 'void' && !body.force) {
         const { data: current } = await sb
           .from('orders')
@@ -232,6 +234,16 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
         .not('status', 'in', '("cancelled","void")');
       const liveTotal = (tabOrds ?? []).reduce((s: number, o: Record<string, unknown>) => s + Number(o.total), 0);
       await sb.from('customer_tabs').update({ total: liveTotal }).eq('id', order.tabId);
+    }
+
+    // ── "Order ready" notification — fire-and-forget on prepared ────────────
+    // Tells the customer their food is ready for collection (pickup) or
+    // about to be dispatched (delivery).  Dine-in orders skip this because
+    // the waiter brings the food directly; they rarely have a customerEmail.
+    if (!isIdempotent && body.status === 'prepared' && order.customerEmail) {
+      sendOrderReadyEmail(id).catch(err =>
+        console.error(`[PATCH /api/orders/[id]] ready email error for ${id}:`, err),
+      );
     }
 
     // ── Receipt email — immediate send with queue fallback ───────────────────

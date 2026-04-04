@@ -6,8 +6,8 @@
 //   sendReceiptEmail(orderId)    — attempt an immediate send (used by the queue worker)
 // ────────────────────────────────────────────────────────────────────────────
 
-import { Resend } from 'resend';
 import { getServerClient, newId } from '@/lib/supabase-server';
+import { sendEmail } from '@/lib/email';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -170,8 +170,9 @@ function buildReceiptHtml(order: Record<string, unknown>, items: Record<string, 
 </html>`;
 }
 
-// ─── Internal: actually dispatch via Resend ───────────────────────────────────
-// Called only by sendReceiptEmail (and thus by the queue worker).
+// ─── Internal: dispatch via Resend (delegates to lib/email.ts) ───────────────
+// Preserves the same return type used by sendReceiptEmail / sendTabReceiptEmail.
+// Adds the domain-restriction prefix so callers can show actionable UI messages.
 
 async function dispatchViaResend(
   email:    string,
@@ -183,37 +184,18 @@ async function dispatchViaResend(
     return { error: 'RESEND_API_KEY not configured' };
   }
 
-  // IMPORTANT: EMAIL_FROM must be a Resend-verified domain address.
-  // For Resend free-tier testing: set EMAIL_FROM=onboarding@resend.dev
-  // (delivers only to your Resend account's registered email)
-  // For production: set EMAIL_FROM="Foodie Lover <noreply@yourdomain.com>"
-  // after verifying at https://resend.com/domains
-  const from = process.env.EMAIL_FROM ?? 'onboarding@resend.dev';
+  const result = await sendEmail({ to: email, subject, html });
 
-  try {
-    const resend = new Resend(apiKey);
-    const { data, error: sendErr } = await resend.emails.send({ from, to: [email], subject, html });
-    if (sendErr) {
-      // Extract the human-readable message from the Resend error object.
-      // Resend errors have shape: { name, message, statusCode }
-      // Falling back to JSON.stringify produces unreadable noise in the UI.
-      const resendErr = sendErr as unknown as { message?: string; name?: string };
-      const errMsg    = resendErr.message ?? resendErr.name ?? JSON.stringify(sendErr);
-
-      // Detect the free-tier domain restriction error and return a friendlier reason
-      // so callers (and the UI) can show an actionable message.
-      if (errMsg.includes('verify a domain') || errMsg.includes('testing emails')) {
-        return {
-          error: `RESEND_DOMAIN_REQUIRED: ${errMsg}`,
-        };
-      }
-      return { error: errMsg };
+  if ('error' in result) {
+    // Detect the Resend free-tier domain restriction and surface an actionable message.
+    const errMsg = result.error;
+    if (errMsg.includes('verify a domain') || errMsg.includes('testing emails')) {
+      return { error: `RESEND_DOMAIN_REQUIRED: ${errMsg}` };
     }
-    const messageId = (data as { id?: string } | null)?.id ?? 'unknown';
-    return { messageId };
-  } catch (err) {
-    return { error: String(err) };
+    return { error: errMsg };
   }
+
+  return { messageId: result.messageId };
 }
 
 // ─── Build tab-level receipt HTML (orders shown per round with IDs) ───────────
@@ -748,4 +730,205 @@ export async function processEmailQueue(): Promise<{
 
   console.info(`${TAG} Done — processed:${summary.processed} sent:${summary.sent} failed:${summary.failed} retrying:${summary.skipped}`);
   return summary;
+}
+// ─── Transactional notification emails ───────────────────────────────────────
+// Sent at key lifecycle points: order created, order ready (prepared), delivery.
+// These are lightweight in comparison to the full receipt HTML — they confirm
+// an event has happened and give the customer a reference number.
+
+// ─── HTML builders ─────────────────────────────────────────────────────────
+
+function buildConfirmationHtml(order: Record<string, unknown>, items: Record<string, unknown>[]): string {
+  const orderId  = (order.id as string) || '';
+  const orderNum = (order.order_number as number) ?? String(orderId).slice(-6);
+  const custName = (order.customer_name as string) || 'Valued Customer';
+  const total    = Number(order.total) || 0;
+  const typeRaw  = (order.type as string) || 'dine-in';
+  const typeLabel =
+    typeRaw === 'delivery' ? '🚗 Delivery' :
+    typeRaw === 'pickup'   ? '🏪 Pickup'   : '🍽️ Dine-In';
+  const deliveryAddr = (order.delivery_address as string) || '';
+
+  const itemRows = items.map(it => `
+    <tr>
+      <td style="padding:7px 0;border-bottom:1px solid #f0f0f0;font-size:13px;color:#334155">
+        ${String(it.name)} <span style="color:#94a3b8">× ${Number(it.qty) || 1}</span>
+      </td>
+      <td style="padding:7px 0;border-bottom:1px solid #f0f0f0;text-align:right;font-size:13px;color:#334155">
+        ₹${(Number(it.subtotal) || 0).toFixed(2)}
+      </td>
+    </tr>`).join('');
+
+  return `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/></head>
+<body style="font-family:'Segoe UI',Arial,sans-serif;background:#f1f5f9;margin:0;padding:24px 16px">
+  <div style="max-width:520px;margin:0 auto">
+    <div style="background:linear-gradient(135deg,#E65C00,#F9D423);border-radius:16px 16px 0 0;padding:28px;text-align:center">
+      <div style="font-size:32px;margin-bottom:6px">✅</div>
+      <h1 style="margin:0;font-size:22px;font-weight:900;color:white">Order Confirmed!</h1>
+      <p style="margin:6px 0 0;font-size:13px;color:rgba(255,255,255,0.9)">Foodie Lover</p>
+    </div>
+    <div style="background:white;border-radius:0 0 16px 16px;padding:28px;box-shadow:0 4px 24px rgba(0,0,0,0.08)">
+      <p style="font-size:15px;color:#334155;margin:0 0 20px">Hi <strong>${custName}</strong>, we've received your order!</p>
+      <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:14px 18px;margin-bottom:20px">
+        <div style="font-size:11px;font-weight:700;color:#9a3412;text-transform:uppercase;letter-spacing:1px">${typeLabel} — Order #${orderNum}</div>
+        <div style="font-family:monospace;font-size:11px;color:#94a3b8;margin-top:4px">${orderId}</div>
+        ${deliveryAddr ? `<div style="font-size:12px;color:#475569;margin-top:6px">📍 ${deliveryAddr}</div>` : ''}
+      </div>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:18px">
+        <tbody>${itemRows}</tbody>
+      </table>
+      <div style="border-top:2px solid #f1f5f9;padding-top:14px;text-align:right">
+        <span style="font-size:18px;font-weight:900;color:#E65C00">Total: ₹${total.toFixed(2)}</span>
+      </div>
+      <p style="margin:20px 0 0;font-size:13px;color:#64748b;text-align:center">
+        We'll notify you when your order is ready. Keep this email for reference.<br/>
+        <span style="font-family:monospace;font-size:11px;color:#7c3aed">${orderId}</span>
+      </p>
+    </div>
+    <div style="text-align:center;padding:16px;font-size:11px;color:#94a3b8">
+      Thank you for choosing <strong style="color:#E65C00">Foodie Lover</strong>! 🙏
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+function buildOrderReadyHtml(order: Record<string, unknown>): string {
+  const orderId  = (order.id as string) || '';
+  const orderNum = (order.order_number as number) ?? String(orderId).slice(-6);
+  const custName = (order.customer_name as string) || 'Valued Customer';
+  const typeRaw  = (order.type as string) || 'pickup';
+  const isDelivery = typeRaw === 'delivery';
+  const icon     = isDelivery ? '🛵' : '🏪';
+  const headline = isDelivery ? 'Your order is on its way!' : 'Your order is ready for pickup!';
+  const message  = isDelivery
+    ? 'Our delivery team will bring your order to you shortly.'
+    : 'Please come to the counter to collect your order.';
+
+  return `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/></head>
+<body style="font-family:'Segoe UI',Arial,sans-serif;background:#f1f5f9;margin:0;padding:24px 16px">
+  <div style="max-width:520px;margin:0 auto">
+    <div style="background:linear-gradient(135deg,#16a34a,#22c55e);border-radius:16px 16px 0 0;padding:28px;text-align:center">
+      <div style="font-size:40px;margin-bottom:6px">${icon}</div>
+      <h1 style="margin:0;font-size:22px;font-weight:900;color:white">${headline}</h1>
+      <p style="margin:6px 0 0;font-size:13px;color:rgba(255,255,255,0.9)">Foodie Lover</p>
+    </div>
+    <div style="background:white;border-radius:0 0 16px 16px;padding:28px;box-shadow:0 4px 24px rgba(0,0,0,0.08)">
+      <p style="font-size:15px;color:#334155;margin:0 0 20px">Hi <strong>${custName}</strong>,</p>
+      <p style="font-size:14px;color:#475569;margin:0 0 24px">${message}</p>
+      <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:10px;padding:14px 18px;text-align:center">
+        <div style="font-size:11px;font-weight:700;color:#16a34a;text-transform:uppercase;letter-spacing:1px">Order #${orderNum}</div>
+        <div style="font-family:monospace;font-size:11px;color:#94a3b8;margin-top:4px">${orderId}</div>
+      </div>
+    </div>
+    <div style="text-align:center;padding:16px;font-size:11px;color:#94a3b8">
+      Thank you for choosing <strong style="color:#E65C00">Foodie Lover</strong>! 🙏
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+// ─── Public: sendOrderConfirmationEmail ──────────────────────────────────────
+/**
+ * sendOrderConfirmationEmail(orderId)
+ *
+ * Sent immediately after order creation to acknowledge the customer's order.
+ * Only fires if the order has a customer_email.
+ * Fire-and-forget from POST /api/orders — never blocks the API response.
+ */
+export async function sendOrderConfirmationEmail(orderId: string): Promise<void> {
+  const TAG = `[email/confirmation orderId=${orderId}]`;
+  const sb  = getServerClient();
+
+  try {
+    const { data: raw, error: fetchErr } = await sb
+      .from('orders')
+      .select('*, order_items(*)')
+      .eq('id', orderId)
+      .single();
+
+    if (fetchErr || !raw) {
+      console.warn(`${TAG} Order not found — skipping confirmation`);
+      return;
+    }
+
+    const email = raw.customer_email as string | null;
+    if (!email) {
+      console.info(`${TAG} No customer_email — skipping`);
+      return;
+    }
+
+    const orderNum = (raw.order_number as number) ?? String(raw.id).slice(-6);
+    const items    = (raw.order_items as Record<string, unknown>[]) ?? [];
+    const html     = buildConfirmationHtml(raw as Record<string, unknown>, items);
+    const subject  = `Order Confirmed — #${orderNum} 🍽️`;
+
+    console.info(`${TAG} Sending confirmation to ${email}`);
+    const result = await sendEmail({ to: email, subject, html });
+
+    if ('error' in result) {
+      console.error(`${TAG} Failed: ${result.error}`);
+    } else {
+      console.info(`${TAG} ✅ Sent — messageId: ${result.messageId}`);
+    }
+  } catch (err) {
+    console.error(`${TAG} Unexpected error:`, err);
+  }
+}
+
+// ─── Public: sendOrderReadyEmail ─────────────────────────────────────────────
+/**
+ * sendOrderReadyEmail(orderId)
+ *
+ * Sent when order status transitions to 'prepared'.
+ * Tells the customer their food is ready (for pickup) or on its way (delivery).
+ * Only fires if the order has a customer_email.
+ * Fire-and-forget from PATCH /api/orders/[id] — never blocks the API response.
+ */
+export async function sendOrderReadyEmail(orderId: string): Promise<void> {
+  const TAG = `[email/ready orderId=${orderId}]`;
+  const sb  = getServerClient();
+
+  try {
+    const { data: raw, error: fetchErr } = await sb
+      .from('orders')
+      .select('id, order_number, customer_name, customer_email, type')
+      .eq('id', orderId)
+      .single();
+
+    if (fetchErr || !raw) {
+      console.warn(`${TAG} Order not found — skipping ready notification`);
+      return;
+    }
+
+    const email = raw.customer_email as string | null;
+    if (!email) {
+      console.info(`${TAG} No customer_email — skipping`);
+      return;
+    }
+
+    const orderNum  = (raw.order_number as number) ?? String(raw.id).slice(-6);
+    const typeRaw   = (raw.type as string) || 'pickup';
+    const isDelivery = typeRaw === 'delivery';
+    const subject   = isDelivery
+      ? `Your Foodie Lover Order #${orderNum} is On Its Way! 🛵`
+      : `Your Foodie Lover Order #${orderNum} is Ready! 🏪`;
+    const html      = buildOrderReadyHtml(raw as Record<string, unknown>);
+
+    console.info(`${TAG} Sending ready notification to ${email}`);
+    const result = await sendEmail({ to: email, subject, html });
+
+    if ('error' in result) {
+      console.error(`${TAG} Failed: ${result.error}`);
+    } else {
+      console.info(`${TAG} ✅ Sent — messageId: ${result.messageId}`);
+    }
+  } catch (err) {
+    console.error(`${TAG} Unexpected error:`, err);
+  }
 }
