@@ -110,6 +110,7 @@ export default function OnlineOrderPage() {
         subtotal:        cartTotal,
         total:           cartTotal,
         deliveryAddress: form.type === 'delivery' ? form.address.trim() : undefined,
+        paymentMethod:   form.payment,
         source:          'online',
       };
 

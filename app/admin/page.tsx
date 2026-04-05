@@ -103,6 +103,9 @@ export default function AdminPage() {
   // ── Issue analytics state ──
   const [todayIssues,    setTodayIssues]    = useState<OrderIssue[]>([]);
 
+  // ── Closed tabs count (for EOD report) ──
+  const [closedTabsCount, setClosedTabsCount] = useState(0);
+
   // ── Staff management state ──
   const [staffAccounts, setStaffAccounts] = useState<StaffMember[]>([]);
   const [staffForm,  setStaffForm]  = useState({ name: '', username: '', pin: '' });
@@ -227,6 +230,8 @@ export default function AdminPage() {
         return na - nb;
       });
       setLiveTables(computed);
+      // Store closed-tab count for EOD report completedTabs metric
+      setClosedTabsCount(closedTabs.length);
     } catch (e) {
       console.error('[Admin] Failed to load live tables from Supabase:', e);
     }
@@ -304,8 +309,10 @@ export default function AdminPage() {
 
   // ─── Today stats ──────────────────────────────────────────────────────────
   const todayStr      = new Date().toDateString();
-  const todayOrders   = orders.filter(o => new Date(o.timestamp).toDateString()===todayStr && o.status!=='cancelled');
-  const todayRevenue  = todayOrders.reduce((s,o)=>s+(o.total||0),0);
+  // todayOrders: all non-cancelled, non-void orders for today (used for counts + discount totals)
+  const todayOrders   = orders.filter(o => new Date(o.timestamp).toDateString()===todayStr && !['cancelled','void'].includes(o.status));
+  // todayRevenue: only COMPLETED orders — money actually collected, not in-progress
+  const todayRevenue  = orders.filter(o => new Date(o.timestamp).toDateString()===todayStr && o.status==='completed').reduce((s,o)=>s+(o.total||0),0);
   const todayDiscount = todayOrders.reduce((s,o)=>s+(o.discount||0),0);
   const todayCancel   = orders.filter(o => o.status === 'cancelled' && new Date(o.timestamp).toDateString()===todayStr);
   // Active tables: count of tables with status 'occupied' from live Supabase data.
@@ -429,7 +436,9 @@ export default function AdminPage() {
       return true; // 'all'
     });
   }
-  const periodOrders = filterByPeriod(orders, salesTab);
+  // Exclude cancelled and void orders from Sales Report — they don't represent real revenue.
+  // filterByPeriod scopes to the selected time window; we then strip non-revenue statuses.
+  const periodOrders = filterByPeriod(orders, salesTab).filter(o => !['cancelled','void'].includes(o.status));
   const pTotal  = periodOrders.reduce((s,o)=>s+(o.total||0),0);
   const pGross  = periodOrders.reduce((s,o)=>s+(o.subtotal||o.total||0),0);
   const pDisc   = periodOrders.reduce((s,o)=>s+(o.discount||0),0);
@@ -483,7 +492,10 @@ export default function AdminPage() {
   if (todayDiscTotal>2000) alerts.push(`⚠️ Today's total discounts: ₹${todayDiscTotal} — above normal threshold`);
 
   // ─── Filtered orders for table ────────────────────────────────────────────
-  const filteredOrders = (orderFilter==='all' ? orders : orders.filter(o=>o.status===orderFilter)).slice(-60).reverse();
+  // orders from getOrders() is already newest-first (API uses order('created_at', { ascending: false })).
+  // Previously used .slice(-60).reverse() which grabbed the OLDEST 60 then flipped them — now fixed to
+  // take the most-recent 60 directly with .slice(0, 60) (no reverse needed).
+  const filteredOrders = (orderFilter==='all' ? orders : orders.filter(o=>o.status===orderFilter)).slice(0, 60);
   const menuItems      = menuFilter==='All' ? menu : menu.filter(m=>m.category===menuFilter);
 
   // ─── Nav button ───────────────────────────────────────────────────────────
@@ -845,7 +857,7 @@ export default function AdminPage() {
                 const done = todayOrdsFull.filter(o => o.status === 'completed');
                 return done.length > 0 ? Math.round(done.reduce((s,o)=>s+(o.total||0),0)/done.length) : 0;
               })(),
-              completedTabs: 0, // requires separate query — shown as 0 for now
+              completedTabs: closedTabsCount, // fetched in refresh() via getTabsApi('closed', today)
               discountsTotal:Math.round(todayOrdsFull.reduce((s,o)=>s+(o.discount||0),0)),
               voidedOrders:  todayOrdsFull.filter(o => o.status === 'void').length,
               topItems: (() => {
@@ -941,8 +953,21 @@ export default function AdminPage() {
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'1rem',flexWrap:'wrap',gap:'0.5rem'}}>
               <h2 style={{fontFamily:"'Playfair Display',serif",fontSize:'1.05rem',fontWeight:700,color:'#1A0800',margin:0}}>🧾 All Orders</h2>
               <div style={{display:'flex',gap:'0.35rem',flexWrap:'wrap'}}>
-                {['all','pending','preparing','prepared','served','completed','cancelled'].map(s=>(
-                  <button key={s} onClick={()=>setOrderFilter(s)} style={{...tabB(orderFilter===s),padding:'0.28rem 0.7rem',fontSize:'0.72rem',textTransform:'capitalize'}}>{s}</button>
+                {[
+                  {k:'all',            l:'All'},
+                  {k:'awaiting_waiter',l:'Awaiting Waiter'},
+                  {k:'pending',        l:'In Queue'},
+                  {k:'preparing',      l:'Preparing'},
+                  {k:'prepared',       l:'Ready'},
+                  {k:'served',         l:'Served'},
+                  {k:'out_for_delivery',l:'Out for Delivery'},
+                  {k:'delivered',      l:'Delivered'},
+                  {k:'re_serve_required',l:'Re-Serve'},
+                  {k:'completed',      l:'Completed'},
+                  {k:'cancelled',      l:'Cancelled'},
+                  {k:'void',           l:'Void'},
+                ].map(({k,l})=>(
+                  <button key={k} onClick={()=>setOrderFilter(k)} style={{...tabB(orderFilter===k),padding:'0.28rem 0.7rem',fontSize:'0.72rem'}}>{l}</button>
                 ))}
               </div>
             </div>
@@ -988,7 +1013,7 @@ export default function AdminPage() {
                             <td style={{padding:'0.5rem 0.65rem'}}><span style={{fontSize:'0.7rem',fontWeight:700,padding:'0.12rem 0.45rem',borderRadius:10,background:(STATUS_COLOR[order.status]||'#888')+'22',color:STATUS_COLOR[order.status]||'#888',textTransform:'capitalize'}}>{order.status}</span></td>
                             <td style={{padding:'0.5rem 0.65rem',color:'#999',whiteSpace:'nowrap'}}>{t}</td>
                             <td style={{padding:'0.5rem 0.65rem',whiteSpace:'nowrap',display:'flex',gap:'0.25rem'}}>
-                              {!isc&&nxt&&<button onClick={()=>advance(order.id)} style={{...btn('#f97316'),padding:'0.18rem 0.5rem',fontSize:'0.7rem'}}>▶{nxt}</button>}
+                              {!isc&&nxt&&<button onClick={()=>advance(order.id)} style={{...btn('#f97316'),padding:'0.18rem 0.5rem',fontSize:'0.7rem'}}>▶ {STATUS_LABEL_MAP[nxt]||nxt}</button>}
                               {!isc&&order.status!=='completed'&&<button onClick={()=>{setCancelModal({open:true,orderId:order.id});setCancelReason('');}} style={{...btn('#ef4444'),padding:'0.18rem 0.45rem',fontSize:'0.7rem'}}>✕</button>}
                               {!isc&&<button onClick={()=>{setDiscountModal({open:true,orderId:order.id});setDiscAmt('');setDiscNote('');setPinInput('');setPinMsg('');}} style={{...btn('#8b5cf6'),padding:'0.18rem 0.45rem',fontSize:'0.7rem'}}>🏷</button>}
                             </td>
