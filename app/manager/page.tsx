@@ -59,10 +59,16 @@ export default function ManagerPage() {
   const [tabBillMsg, setTabBillMsg]           = useState('');
   const [tabCloseConfirm, setTabCloseConfirm] = useState(false);
 
-  // Email receipt
+  // Email receipt (post-close manual send — shown after tab is already closed)
   const [receiptEmail, setReceiptEmail] = useState('');
   const [receiptMsg,   setReceiptMsg]   = useState('');
   const [sendingEmail, setSendingEmail] = useState(false);
+
+  // Pre-close email modal (intercepts "Collect & Close Tab" button)
+  const [showPreCloseModal, setShowPreCloseModal] = useState(false);
+  const [preCloseEmail,     setPreCloseEmail]     = useState('');
+  const [preCloseSending,   setPreCloseSending]   = useState(false);
+  const [preCloseMsg,       setPreCloseMsg]       = useState('');
 
   // Split billing
   const [splitBill, setSplitBill]             = useState<SplitBillData | null>(null);
@@ -198,8 +204,38 @@ export default function ManagerPage() {
       }
     }
     setTabCloseConfirm(false);
+
+    // Show email modal before actually closing tab.
+    // Pre-fill with stored email if available (captured at tab open).
+    setPreCloseEmail(selTab.email ?? '');
+    setPreCloseMsg('');
+    setShowPreCloseModal(true);
+  }
+
+  // ── Actually perform the tab close (called from pre-close modal) ──────────
+  async function doCloseTab(emailToSend: string | null) {
+    if (!selTab) return;
+    setPreCloseSending(true);
+    setPreCloseMsg('');
     try {
       await closeTab(selTab.id, tabPayMethod, selTab.discount || 0, selTab.discountReason);
+
+      // If an email was provided, attempt to send receipt (fire-and-forget; never blocks close)
+      if (emailToSend && emailToSend.includes('@')) {
+        try {
+          const result = await sendEmailReceipt({ tabId: selTab.id }, emailToSend);
+          if (result.sent) {
+            console.info('[manager] pre-close receipt sent to', emailToSend);
+          } else {
+            console.warn('[manager] pre-close receipt not sent:', result.reason);
+          }
+        } catch (emailErr) {
+          // Non-fatal: tab is already closed; log and continue
+          console.error('[manager] pre-close receipt error:', emailErr);
+        }
+      }
+
+      setShowPreCloseModal(false);
       setTabBillMsg('✅ Payment collected! Tab closed.');
       await refresh();
       setTimeout(() => {
@@ -212,8 +248,9 @@ export default function ManagerPage() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
       console.error('[manager] closeTab failed:', err);
-      setTabBillMsg(`❌ Could not close tab: ${msg}. Please try again.`);
-      setTimeout(() => setTabBillMsg(''), 5000);
+      setPreCloseMsg(`❌ Could not close tab: ${msg}. Please try again.`);
+    } finally {
+      setPreCloseSending(false);
     }
   }
 
@@ -1112,6 +1149,69 @@ export default function ManagerPage() {
                 </div>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Pre-close Email Modal ─────────────────────────────────────────────── */}
+      {/* Shown when manager clicks "Collect & Close Tab" — intercepts to offer   */}
+      {/* sending a receipt email BEFORE the tab is actually closed.              */}
+      {showPreCloseModal && selTab && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}
+          onClick={e => { if (e.target === e.currentTarget && !preCloseSending) setShowPreCloseModal(false); }}
+        >
+          <div style={{ background: 'white', borderRadius: 20, padding: '1.75rem', width: '100%', maxWidth: 400, boxShadow: '0 20px 60px rgba(0,0,0,0.35)', fontFamily: 'Poppins,sans-serif' }}>
+            {/* Header */}
+            <div style={{ textAlign: 'center', marginBottom: '1.25rem' }}>
+              <div style={{ fontSize: '2.25rem', marginBottom: '0.35rem' }}>📧</div>
+              <div style={{ fontWeight: 900, fontSize: '1.1rem', color: '#1A0800' }}>Send Receipt?</div>
+              <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.2rem' }}>
+                Optionally email a receipt before closing the tab.
+              </div>
+            </div>
+
+            {/* Email input — pre-filled from tab if available */}
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ fontSize: '0.75rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.3rem' }}>
+                Customer Email <span style={{ fontWeight: 400, color: '#aaa' }}>(optional)</span>
+              </label>
+              <input
+                type="email"
+                placeholder="customer@email.com"
+                value={preCloseEmail}
+                onChange={e => setPreCloseEmail(e.target.value)}
+                disabled={preCloseSending}
+                style={{ width: '100%', boxSizing: 'border-box', padding: '0.65rem 0.85rem', border: '2px solid #e5e7eb', borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '0.9rem', outline: 'none' }}
+              />
+            </div>
+
+            {preCloseMsg && (
+              <div style={{ marginBottom: '0.75rem', fontSize: '0.78rem', fontWeight: 600, color: preCloseMsg.includes('✅') ? '#16a34a' : '#dc2626', background: preCloseMsg.includes('✅') ? '#f0fdf4' : '#fef2f2', borderRadius: 8, padding: '0.5rem 0.75rem' }}>
+                {preCloseMsg}
+              </div>
+            )}
+
+            {/* Action buttons */}
+            <button
+              onClick={() => void doCloseTab(preCloseEmail.trim() || null)}
+              disabled={preCloseSending}
+              style={{ width: '100%', padding: '0.8rem', borderRadius: 12, background: preCloseEmail.includes('@') ? '#16a34a' : '#64748b', color: 'white', border: 'none', fontWeight: 800, fontSize: '0.92rem', cursor: preCloseSending ? 'not-allowed' : 'pointer', fontFamily: 'Poppins,sans-serif', marginBottom: '0.6rem', opacity: preCloseSending ? 0.7 : 1 }}
+            >
+              {preCloseSending
+                ? '⏳ Processing…'
+                : preCloseEmail.includes('@')
+                  ? '📤 Send Receipt & Close Tab'
+                  : '✅ Close Tab'}
+            </button>
+
+            <button
+              onClick={() => { if (!preCloseSending) setShowPreCloseModal(false); }}
+              disabled={preCloseSending}
+              style={{ width: '100%', padding: '0.65rem', borderRadius: 12, background: 'none', color: '#64748b', border: '2px solid #e5e7eb', fontWeight: 700, fontSize: '0.85rem', cursor: preCloseSending ? 'not-allowed' : 'pointer', fontFamily: 'Poppins,sans-serif' }}
+            >
+              Cancel
+            </button>
           </div>
         </div>
       )}

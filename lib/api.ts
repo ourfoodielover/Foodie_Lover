@@ -109,6 +109,7 @@ export interface CustomerTab {
   discountReason?:string;
   paymentMethod:  string;       // 'cod' | 'gpay' | 'card' | etc.
   pin?:           string | null;// 4-digit table session PIN (stored in Supabase)
+  email?:         string | null;// optional customer email captured at tab open
   createdAt:      string;       // mapped from created_at
   closedAt?:      string;       // mapped from closed_at
   orderIds?:      string[];     // optional legacy
@@ -409,11 +410,23 @@ export async function getTabs(status?: string, since?: string): Promise<Customer
 }
 
 export async function createTab(data: {
-  tableId?: string; customerName: string; partySize?: number; pin?: string;
+  tableId?: string; customerName: string; partySize?: number; pin?: string; email?: string;
 }): Promise<CustomerTab> {
   return apiFetch<CustomerTab>('/api/tabs', {
     method: 'POST',
     body:   JSON.stringify({ ...data, restaurantId: rid() }),
+  });
+}
+
+// ─── Feedback ─────────────────────────────────────────────────────────────────
+export async function submitFeedback(data: {
+  orderId:  string;
+  rating:   1 | 2 | 3 | 4 | 5;
+  comment?: string;
+}): Promise<{ ok: boolean; alreadySubmitted?: boolean }> {
+  return apiFetch<{ ok: boolean; alreadySubmitted?: boolean }>('/api/feedback', {
+    method: 'POST',
+    body:   JSON.stringify(data),
   });
 }
 

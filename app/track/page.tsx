@@ -6,6 +6,7 @@ import { useSearchParams } from 'next/navigation';
 import {
   verifyTrackingToken, lookupOrderByContact, customerConfirmDelivery,
   reportNotReceived, getIssueForOrder, ISSUE_MAX_RETRIES,
+  submitFeedback,
   Order, OrderIssue,
 } from '@/lib/api';
 
@@ -116,6 +117,14 @@ function TrackInner() {
   const [notRecvBusy,   setNotRecvBusy]   = useState(false);
   const [notRecvMsg,    setNotRecvMsg]    = useState('');
 
+  // ── Post-completion rating ──
+  // null = no star selected yet (required before submit)
+  const [rating,            setRating]            = useState<1|2|3|4|5|null>(null);
+  const [ratingComment,     setRatingComment]     = useState('');
+  const [ratingBusy,        setRatingBusy]        = useState(false);
+  const [ratingSubmitted,   setRatingSubmitted]   = useState(false);
+  const [ratingMsg,         setRatingMsg]         = useState('');
+
   const showLookupForm = !trackOrderId && !trackToken;
 
   // ── Contact lookup submit ──────────────────────────────────────────────────
@@ -136,6 +145,30 @@ function TrackInner() {
       setLookupError('Something went wrong. Please try again.');
     } finally {
       setLookupLoading(false);
+    }
+  }
+
+  // ── Rating submit ──────────────────────────────────────────────────────────
+  async function handleRatingSubmit() {
+    if (!order || rating === null) return;
+    setRatingBusy(true);
+    setRatingMsg('');
+    try {
+      const res = await submitFeedback({
+        orderId: order.id,
+        rating,
+        comment: ratingComment.trim() || undefined,
+      });
+      if (res.ok) {
+        setRatingSubmitted(true);
+        setRatingMsg('✅ Thank you for your feedback!');
+      } else {
+        setRatingMsg('❌ Could not save feedback. Please try again.');
+      }
+    } catch {
+      setRatingMsg('❌ Something went wrong. Please try again.');
+    } finally {
+      setRatingBusy(false);
     }
   }
 
@@ -585,6 +618,87 @@ function TrackInner() {
             <div style={{ fontSize: '2rem', marginBottom: '0.35rem' }}>🎉</div>
             <div style={{ fontWeight: 800, color: '#16a34a', fontSize: '1rem' }}>Thank you for confirming!</div>
             <div style={{ fontSize: '0.8rem', color: '#15803d', marginTop: '0.25rem' }}>We hope you enjoyed your meal. See you again! 🍽️</div>
+          </div>
+        )}
+
+        {/* ── Post-completion rating card ────────────────────────────── */}
+        {/* Show after payment completed (pickup/dine-in) OR delivery confirmed */}
+        {(isCompleted || confirmed) && !ratingSubmitted && (
+          <div style={{ background: 'white', borderRadius: 16, padding: '1.25rem', boxShadow: '0 4px 20px rgba(0,0,0,0.08)', marginBottom: '1.25rem', border: '2px solid #fde68a' }}>
+            <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
+              <div style={{ fontSize: '1.75rem', marginBottom: '0.3rem' }}>⭐</div>
+              <div style={{ fontWeight: 800, color: '#1A0800', fontSize: '0.95rem' }}>How was your experience?</div>
+              <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: '0.2rem' }}>Tap a star to rate</div>
+            </div>
+
+            {/* Star buttons — no default, explicit click required */}
+            <div style={{ display: 'flex', justifyContent: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
+              {([1, 2, 3, 4, 5] as const).map(n => (
+                <button
+                  key={n}
+                  onClick={() => setRating(n)}
+                  style={{
+                    background: 'none',
+                    border:     'none',
+                    cursor:     'pointer',
+                    fontSize:   rating !== null && n <= rating ? '2.25rem' : '1.9rem',
+                    opacity:    rating !== null && n <= rating ? 1 : 0.35,
+                    transition: 'all 0.1s ease',
+                    lineHeight: 1,
+                    padding:    '0 0.1rem',
+                  }}
+                  aria-label={`Rate ${n} star${n !== 1 ? 's' : ''}`}
+                >
+                  ⭐
+                </button>
+              ))}
+            </div>
+
+            {/* Selected rating label */}
+            {rating !== null && (
+              <div style={{ textAlign: 'center', fontSize: '0.78rem', fontWeight: 700, color: '#E65C00', marginBottom: '0.75rem' }}>
+                {rating === 1 ? 'Poor' : rating === 2 ? 'Fair' : rating === 3 ? 'Good' : rating === 4 ? 'Great' : 'Excellent!'} ({rating}/5)
+              </div>
+            )}
+
+            {/* Optional comment */}
+            <textarea
+              value={ratingComment}
+              onChange={e => setRatingComment(e.target.value)}
+              placeholder="Any comments? (optional)"
+              maxLength={500}
+              rows={2}
+              style={{ width: '100%', boxSizing: 'border-box', padding: '0.6rem 0.75rem', border: '2px solid #e5e7eb', borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '0.85rem', outline: 'none', resize: 'vertical', marginBottom: '0.75rem' }}
+            />
+
+            <button
+              onClick={() => void handleRatingSubmit()}
+              disabled={rating === null || ratingBusy}
+              style={{
+                width: '100%', padding: '0.75rem', borderRadius: 12,
+                background: rating === null ? '#e5e7eb' : '#E65C00',
+                color:      rating === null ? '#9ca3af' : 'white',
+                border:     'none', fontWeight: 800, fontSize: '0.92rem',
+                cursor:     rating === null || ratingBusy ? 'not-allowed' : 'pointer',
+                fontFamily: 'Poppins,sans-serif',
+                transition: 'background 0.15s',
+              }}
+            >
+              {ratingBusy ? '⏳ Saving…' : rating === null ? 'Select a rating to submit' : '📤 Submit Rating'}
+            </button>
+
+            {ratingMsg && (
+              <div style={{ marginTop: '0.5rem', textAlign: 'center', fontSize: '0.8rem', fontWeight: 600, color: ratingMsg.includes('✅') ? '#16a34a' : '#dc2626' }}>
+                {ratingMsg}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Submitted thank-you */}
+        {ratingSubmitted && (
+          <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 16, padding: '1rem', textAlign: 'center', marginBottom: '1.25rem', fontSize: '0.85rem', color: '#15803d', fontWeight: 700 }}>
+            ⭐ {rating}/5 — {ratingMsg}
           </div>
         )}
 

@@ -142,6 +142,7 @@ function TablePageInner() {
   const [deviceId, setDeviceId]           = useState('');
   const [customerName, setCustomerName]   = useState('');
   const [nameInput, setNameInput]         = useState('');
+  const [emailInput, setEmailInput]       = useState('');
   const [partyInput, setPartyInput]       = useState('2');
   const [nameError, setNameError]         = useState('');
 
@@ -334,7 +335,14 @@ function TablePageInner() {
       }
 
       // Create the tab in Supabase — PIN stored server-side in customer_tabs.pin
-      const apiTab = await createTabApi({ tableId, customerName: name, partySize: party, pin });
+      const emailTrimmed = emailInput.trim();
+      const apiTab = await createTabApi({
+        tableId,
+        customerName: name,
+        partySize:    party,
+        pin,
+        email:        emailTrimmed || undefined,
+      });
       // Register this device in Supabase tab_devices (replaces localStorage)
       await registerTabDevice({ tabId: apiTab.id, deviceId, customerName: name, tableId });
       setTabId(apiTab.id);
@@ -700,6 +708,20 @@ function TablePageInner() {
             <div style={{ fontSize: '0.68rem', color: '#aaa', marginTop: '0.2rem' }}>
               This PIN prevents others from adding to your bill without permission.
             </div>
+          </div>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>
+              📧 Email <span style={{ fontWeight: 400, color: '#aaa' }}>(optional — for receipt)</span>
+            </label>
+            <input
+              type="email"
+              inputMode="email"
+              value={emailInput}
+              onChange={e => setEmailInput(e.target.value)}
+              placeholder="you@example.com"
+              style={{ width: '100%', boxSizing: 'border-box', padding: '0.7rem 0.9rem', border: '2px solid #e5e7eb', borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '0.9rem', outline: 'none' }}
+            />
           </div>
 
           <div style={{ marginBottom: '1.25rem' }}>
