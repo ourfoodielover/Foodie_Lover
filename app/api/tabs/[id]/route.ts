@@ -24,6 +24,8 @@ function rowToTab(row: Record<string, unknown>) {
     discount:       Number(row.discount) || 0,
     discountReason: row.discount_reason ?? null,
     paymentMethod:  (row.payment_method as string) || 'cod',
+    pin:            (row.pin as string) || null,
+    email:          (row.customer_email as string | null) ?? null,
     createdAt:      row.created_at,
     closedAt:       row.closed_at ?? null,
   };
@@ -88,6 +90,16 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
         return NextResponse.json({ error: closeErr.message }, { status: 500 });
       }
 
+      // ── Capture orders that will be newly completed BEFORE the status update ──
+      // We do this BEFORE the update so we know exactly which orders transition
+      // from non-completed → completed. This prevents duplicate PaymentCompleted
+      // events for orders that were already in 'completed' state beforehand.
+      const { data: ordersToComplete } = await sb
+        .from('orders')
+        .select('id')
+        .eq('tab_id', id)
+        .not('status', 'in', '("cancelled","void","completed")');
+
       // Mark all non-cancelled/void tab orders as completed
       const { error: ordersErr } = await sb.from('orders')
         .update({ status: 'completed', updated_at: new Date().toISOString() })
@@ -98,19 +110,15 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
         // Non-fatal: tab is already closed, continue with events + broadcast
       }
 
-      // ── Write PaymentCompleted event for every order being completed ────────
+      // ── Write PaymentCompleted event only for newly-completed orders ────────
       // CRITICAL: the dine-in tracking page uses order_events to light up steps.
       // Without this event, the final "Completed" step stays grey even though
       // the payment was collected and the order is done.
-      const { data: completingOrders } = await sb
-        .from('orders')
-        .select('id')
-        .eq('tab_id', id)
-        .not('status', 'in', '("cancelled","void")');
-
-      if (completingOrders && completingOrders.length > 0) {
+      // Using ordersToComplete (captured pre-update) avoids duplicate events for
+      // orders that were already completed before this tab close.
+      if (ordersToComplete && ordersToComplete.length > 0) {
         await sb.from('order_events').insert(
-          completingOrders.map(o => ({
+          ordersToComplete.map(o => ({
             id:           newId('EV'),
             order_id:     o.id,
             event_type:   'PaymentCompleted',

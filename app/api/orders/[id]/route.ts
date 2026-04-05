@@ -155,20 +155,30 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     if (body.itemStatus && (body.itemId || body.itemIndex !== undefined)) {
       if (body.itemId) {
         // Direct ID update (fast path)
-        await sb.from('order_items')
+        const { error: itemErr } = await sb.from('order_items')
           .update({ item_status: body.itemStatus })
           .eq('id', body.itemId);
+        if (itemErr) {
+          console.error('[PATCH /api/orders/[id]] item status update (by id) error:', itemErr.message, '| itemId:', body.itemId);
+        }
       } else {
         // Index-based update: fetch items sorted by created_at, pick by index
-        const { data: items } = await sb
+        const { data: items, error: fetchItemsErr } = await sb
           .from('order_items')
           .select('id')
           .eq('order_id', id)
           .order('created_at', { ascending: true });
-        if (items && items[body.itemIndex]) {
-          await sb.from('order_items')
+        if (fetchItemsErr) {
+          console.error('[PATCH /api/orders/[id]] item fetch error:', fetchItemsErr.message);
+        } else if (items && items[body.itemIndex]) {
+          const { error: itemErr } = await sb.from('order_items')
             .update({ item_status: body.itemStatus })
             .eq('id', items[body.itemIndex].id);
+          if (itemErr) {
+            console.error('[PATCH /api/orders/[id]] item status update (by index) error:', itemErr.message, '| index:', body.itemIndex);
+          }
+        } else {
+          console.warn('[PATCH /api/orders/[id]] item index out of bounds:', body.itemIndex, '| total items:', items?.length ?? 0);
         }
       }
     }

@@ -66,6 +66,7 @@ function WaiterPageInner() {
   const [filter, setFilter]           = useState<'active' | 'served' | 'all'>('active');
   const [selOrder, setSelOrder]       = useState<Order | null>(null);
   const [actionMsg, setActionMsg]     = useState('');
+  const [actionBusy, setActionBusy]   = useState(false);   // prevents double-click on Accept/Serve/Cancel
   const [cancelReason, setCancelReason] = useState('');
   const [showCancelFor, setShowCancelFor] = useState<string | null>(null);
   const [fetchError, setFetchError]     = useState('');
@@ -254,15 +255,20 @@ function WaiterPageInner() {
 
   // ── Actions ───────────────────────────────────────────────────────────────
   async function accept(order: Order) {
+    if (actionBusy) return;
+    setActionBusy(true);
     try {
       await updateOrderStatus(order.id, 'pending', session?.name || 'Waiter');
       setActionMsg('✅ Order accepted and sent to kitchen');
       setTimeout(() => setActionMsg(''), 2500);
       await refresh();
     } catch (e) { console.error(e); }
+    finally { setActionBusy(false); }
   }
 
   async function markServed(order: Order) {
+    if (actionBusy) return;
+    setActionBusy(true);
     try {
       if (order.type === 'delivery') {
         // ── Delivery: hand off to delivery person ──────────────────────────────
@@ -288,10 +294,12 @@ function WaiterPageInner() {
       setSelOrder(null);
       await refresh();
     } catch (e) { console.error(e); }
+    finally { setActionBusy(false); }
   }
 
   async function handleCancel(order: Order) {
-    if (!cancelReason.trim()) return;
+    if (!cancelReason.trim() || actionBusy) return;
+    setActionBusy(true);
     try {
       await updateOrderStatus(order.id, 'cancelled', session?.name || 'Waiter', { cancelReason });
       setActionMsg('Order cancelled');
@@ -301,6 +309,7 @@ function WaiterPageInner() {
       setSelOrder(null);
       await refresh();
     } catch (e) { console.error(e); }
+    finally { setActionBusy(false); }
   }
 
   async function handleResolveDispute(orderId: string) {
@@ -743,14 +752,15 @@ function WaiterPageInner() {
               {(canAccept || canServe) && (
                 <div style={{ padding: '0 0.75rem 0.6rem', display: 'flex', gap: '0.4rem' }} onClick={e => e.stopPropagation()}>
                   {canAccept && (
-                    <button onClick={() => accept(order)} style={{ ...btn('#f59e0b', '#1A0800'), flex: 1, fontSize: '0.76rem', padding: '0.4rem 0.5rem' }}>
+                    <button disabled={actionBusy} onClick={() => accept(order)} style={{ ...btn('#f59e0b', '#1A0800'), flex: 1, fontSize: '0.76rem', padding: '0.4rem 0.5rem', opacity: actionBusy ? 0.6 : 1 }}>
                       ✅ Accept
                     </button>
                   )}
                   {canServe && (
                     <button
+                      disabled={actionBusy}
                       onClick={() => markServed(order)}
-                      style={{ ...btn(order.type === 'delivery' ? '#2563eb' : order.type === 'pickup' ? '#16a34a' : '#8b5cf6'), flex: 1, fontSize: '0.76rem', padding: '0.4rem 0.5rem' }}
+                      style={{ ...btn(order.type === 'delivery' ? '#2563eb' : order.type === 'pickup' ? '#16a34a' : '#8b5cf6'), flex: 1, fontSize: '0.76rem', padding: '0.4rem 0.5rem', opacity: actionBusy ? 0.6 : 1 }}
                     >
                       {order.type === 'delivery' ? '📦 Hand to Delivery'
                        : order.type === 'pickup'   ? '🏪 Ready for Pickup'
@@ -825,7 +835,7 @@ function WaiterPageInner() {
                         style={{ width: '100%', boxSizing: 'border-box', padding: '0.5rem 0.7rem', border: '2px solid #fecaca', borderRadius: 8, fontFamily: 'Poppins,sans-serif', fontSize: '0.82rem', marginBottom: '0.5rem' }}
                       />
                       <div style={{ display: 'flex', gap: '0.4rem' }}>
-                        <button onClick={() => handleCancel(selOrder)} style={{ ...btn('#ef4444'), flex: 1, fontSize: '0.8rem' }}>Confirm Cancel</button>
+                        <button disabled={actionBusy} onClick={() => handleCancel(selOrder)} style={{ ...btn('#ef4444'), flex: 1, fontSize: '0.8rem', opacity: actionBusy ? 0.6 : 1 }}>Confirm Cancel</button>
                         <button onClick={() => { setShowCancelFor(null); setCancelReason(''); }} style={{ ...btn('#e5e7eb', '#555'), flex: 1, fontSize: '0.8rem' }}>Keep Order</button>
                       </div>
                     </div>
@@ -838,14 +848,15 @@ function WaiterPageInner() {
             {(selOrder.status === 'awaiting_waiter' || selOrder.status === 'prepared') && (
               <div style={{ padding: '0.85rem 1.25rem', borderTop: '2px solid #f5f0e8', background: 'white' }}>
                 {selOrder.status === 'awaiting_waiter' && (
-                  <button onClick={() => { accept(selOrder); setSelOrder(null); }} style={{ ...btn('#f59e0b', '#1A0800'), width: '100%', padding: '0.75rem', fontSize: '0.95rem', borderRadius: 12 }}>
-                    ✅ Accept & Send to Kitchen
+                  <button disabled={actionBusy} onClick={() => { accept(selOrder); setSelOrder(null); }} style={{ ...btn('#f59e0b', '#1A0800'), width: '100%', padding: '0.75rem', fontSize: '0.95rem', borderRadius: 12, opacity: actionBusy ? 0.6 : 1 }}>
+                    {actionBusy ? '⏳ Processing…' : '✅ Accept & Send to Kitchen'}
                   </button>
                 )}
                 {selOrder.status === 'prepared' && (
                   <button
+                    disabled={actionBusy}
                     onClick={() => markServed(selOrder)}
-                    style={{ ...btn(selOrder.type === 'delivery' ? '#2563eb' : selOrder.type === 'pickup' ? '#16a34a' : '#8b5cf6'), width: '100%', padding: '0.75rem', fontSize: '0.95rem', borderRadius: 12 }}
+                    style={{ ...btn(selOrder.type === 'delivery' ? '#2563eb' : selOrder.type === 'pickup' ? '#16a34a' : '#8b5cf6'), width: '100%', padding: '0.75rem', fontSize: '0.95rem', borderRadius: 12, opacity: actionBusy ? 0.6 : 1 }}
                   >
                     {selOrder.type === 'delivery' ? '📦 Hand to Delivery Person'
                      : selOrder.type === 'pickup'   ? '🏪 Ready — Customer to Counter'
