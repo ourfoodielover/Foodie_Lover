@@ -35,7 +35,9 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
   pending:           ['preparing', 'cancelled'],
   preparing:         ['prepared', 'cancelled'],
   prepared:          ['served', 'out_for_delivery', 'completed', 'cancelled'],
-  served:            ['completed', 're_serve_required', 'cancelled'],
+  // served → out_for_delivery: delivery portal picks up orders that are in 'served'
+  // state (backward compat for re-serve flow and any dine-in→delivery handoff edge cases)
+  served:            ['completed', 're_serve_required', 'cancelled', 'out_for_delivery'],
   re_serve_required: ['preparing', 'out_for_delivery', 'served', 're_serve_required'],
   out_for_delivery:  ['delivered', 're_serve_required'],
   delivered:         ['completed', 're_serve_required'],

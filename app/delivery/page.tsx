@@ -12,7 +12,7 @@ import { getSession, clearSession, AuthSession } from '@/lib/auth';
 
 const STATUS_LABEL: Record<string, string> = {
   prepared:           '✅ Ready for Pickup',
-  served:             '✅ Ready for Pickup',   // waiter handed it off — same action for delivery
+  served:             '🔄 Re-Dispatch Ready',  // re-serve scenario: food ready, dispatch again
   out_for_delivery:   '🛵 Out for Delivery',
   delivered:          '📦 Delivered',
   re_serve_required:  '🚨 Re-Delivery Required',
@@ -74,14 +74,19 @@ export default function DeliveryPage() {
   useRealtime(
     process.env.NEXT_PUBLIC_RESTAURANT_ID ?? 'rest_default',
     {
-      order_ready:            () => { refresh(); }, // kitchen marked prepared — show in ready list
-      order_served:           () => { refresh(); }, // backward compat (old flow)
-      order_out_for_delivery: () => { refresh(); }, // waiter handed off — show in en route
-      order_delivered:        () => { refresh(); }, // delivery person marked delivered
-      order_status_changed:   () => { refresh(); }, // catch-all fallback
-      order_issue_reported:   () => { refresh(); }, // customer reported not received
-      order_issue_escalated:  () => { refresh(); }, // issue auto-escalated
-      order_issue_resolved:   () => { refresh(); }, // issue resolved
+      order_ready:              () => { refresh(); }, // kitchen marked prepared — show in ready list
+      order_served:             () => { refresh(); }, // backward compat (old flow)
+      order_out_for_delivery:   () => { refresh(); }, // waiter handed off — show in en route
+      order_delivered:          () => { refresh(); }, // delivery person marked delivered
+      order_status_changed:     () => { refresh(); }, // catch-all (fired on every status change)
+      order_issue_reported:     () => { refresh(); }, // customer reported not received → re_serve_required
+      order_issue_escalated:    () => { refresh(); }, // issue auto-escalated to manager
+      order_issue_resolved:     () => { refresh(); }, // issue resolved after re-delivery
+      // ── Re-delivery dispatched (waiter OR delivery portal clicked Re-Deliver) ──
+      // Fires when startReserving() moves the order to out_for_delivery.
+      // Without this listener, the "Re-Deliver" card disappears from the UI
+      // (optimistic filter) but the "En Route" card only appears after next poll.
+      order_issue_reserving:    () => { refresh(); },
     },
   );
 
@@ -127,8 +132,8 @@ export default function DeliveryPage() {
       await startReserving(issueId, session?.name || 'Delivery');
       setReDeliveryIssues(prev => prev.filter(i => i.id !== issueId));
       setConfirmRedeliv(null);
-      setActionMsg('🛵 Re-delivery started — order moved back to served.');
-      setTimeout(() => setActionMsg(''), 4000);
+      setActionMsg('🛵 Re-delivery dispatched — order is now En Route. Go deliver it and mark as Delivered!');
+      setTimeout(() => setActionMsg(''), 5000);
       await refresh();
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
@@ -423,16 +428,20 @@ export default function DeliveryPage() {
                   ) : confirmPick === order.id ? (
                     <div style={{ background: '#f0fdf4', borderRadius: 10, padding: '0.65rem', border: '1px solid #86efac' }}>
                       <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#15803d', marginBottom: '0.4rem' }}>
-                        Confirm pickup from kitchen?
+                        {order.status === 'served'
+                          ? 'Re-dispatch this order to customer?'
+                          : 'Confirm pickup from kitchen?'}
                       </div>
                       <div style={{ display: 'flex', gap: '0.4rem' }}>
-                        <button onClick={() => doPickup(order.id)} style={{ ...btn('#16a34a'), flex: 1 }}>✅ Yes, Picked Up</button>
+                        <button onClick={() => doPickup(order.id)} style={{ ...btn('#16a34a'), flex: 1 }}>
+                          {order.status === 'served' ? '🛵 Yes, Re-Dispatching' : '✅ Yes, Picked Up'}
+                        </button>
                         <button onClick={() => setConfirmPick(null)} style={{ ...btn('#e5e7eb', '#555'), flex: 1 }}>Cancel</button>
                       </div>
                     </div>
                   ) : (
-                    <button onClick={() => setConfirmPick(order.id)} style={{ ...btn('#16a34a'), width: '100%', padding: '0.65rem', borderRadius: 10, fontSize: '0.88rem' }}>
-                      📦 Pick Up Order
+                    <button onClick={() => setConfirmPick(order.id)} style={{ ...btn(order.status === 'served' ? '#2563eb' : '#16a34a'), width: '100%', padding: '0.65rem', borderRadius: 10, fontSize: '0.88rem' }}>
+                      {order.status === 'served' ? '🛵 Re-Dispatch Order' : '📦 Pick Up Order'}
                     </button>
                   )
                 )}
