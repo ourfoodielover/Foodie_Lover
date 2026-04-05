@@ -54,7 +54,7 @@ const STEPS_PICKUP: TrackStep[] = [
 const STEPS_DELIVERY: TrackStep[] = [
   { eventType: 'OrderPlaced',       label: 'Order Received',          icon: '📋' },
   { eventType: 'Preparing',         label: 'Being Prepared',          icon: '🔥' },
-  { eventType: 'Prepared',          label: 'Ready for Pickup',        icon: '✅' },
+  { eventType: 'Prepared',          label: 'Ready for Dispatch',      icon: '✅' },
   { eventType: 'OutForDelivery',    label: 'Out for Delivery',        icon: '🛵' },
   { eventType: 'Delivered',         label: 'Delivered to Your Door',  icon: '🏠' },
   { eventType: 'CustomerConfirmed', label: 'Delivery Confirmed',      icon: '🎉' },
@@ -178,6 +178,18 @@ function TrackInner() {
     const o = await verifyTrackingToken(trackOrderId, trackToken);
     if (!o) { setNotFound(true); return; }
     setOrder(o);
+
+    // Also load the active issue so re-delivery attempt count survives page refresh
+    // Only relevant for delivery orders in a re-serve state
+    if (
+      o.type === 'delivery' &&
+      (o.status === 're_serve_required' || o.status === 'out_for_delivery' || o.status === 'delivered')
+    ) {
+      const issue = await getIssueForOrder(o.id).catch(() => null);
+      if (issue && issue.status !== 'resolved') {
+        setActiveIssue(issue);
+      }
+    }
   }, [trackOrderId, trackToken]);
 
   useEffect(() => {
@@ -596,17 +608,25 @@ function TrackInner() {
           </div>
         )}
 
-        {/* Re-delivery in progress banner */}
-        {orderType === 'delivery' && order.status === 're_serve_required' && !confirmed && (
+        {/* Re-delivery in progress banner — shown while issue is being actioned */}
+        {/* re_serve_required = waiter hasn't clicked Re-Serve yet             */}
+        {/* out_for_delivery (after a re-serve) = delivery person is on the way */}
+        {orderType === 'delivery' && (order.status === 're_serve_required' || (isOutForDeliv && activeIssue)) && !confirmed && (
           <div style={{ background: '#fef3c7', border: '2px solid #f59e0b', borderRadius: 16, padding: '1.25rem', marginBottom: '1.25rem', textAlign: 'center' }}>
-            <div style={{ fontSize: '2rem', marginBottom: '0.35rem' }}>⏳</div>
-            <div style={{ fontWeight: 800, color: '#92400e', fontSize: '1rem', marginBottom: '0.25rem' }}>Re-delivery in progress</div>
+            <div style={{ fontSize: '2rem', marginBottom: '0.35rem' }}>
+              {order.status === 're_serve_required' ? '⏳' : '🛵'}
+            </div>
+            <div style={{ fontWeight: 800, color: '#92400e', fontSize: '1rem', marginBottom: '0.25rem' }}>
+              {order.status === 're_serve_required' ? 'Re-delivery being arranged…' : 'Re-delivery on the way!'}
+            </div>
             <div style={{ fontSize: '0.8rem', color: '#b45309' }}>
-              Your delivery person has been notified. Your order will be re-delivered shortly.
+              {order.status === 're_serve_required'
+                ? 'Your delivery person has been notified. They will re-deliver your order shortly.'
+                : 'Your delivery person is heading back to you. Please confirm receipt when they arrive.'}
             </div>
             {activeIssue && (
               <div style={{ fontSize: '0.72rem', color: '#92400e', marginTop: '0.4rem' }}>
-                Attempt {activeIssue.retryCount}/{ISSUE_MAX_RETRIES}
+                Re-delivery attempt {activeIssue.retryCount}/{ISSUE_MAX_RETRIES}
               </div>
             )}
           </div>

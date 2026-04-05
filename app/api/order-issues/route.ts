@@ -237,11 +237,22 @@ export async function PATCH(req: NextRequest) {
 
     const issue = updated as Record<string, unknown>;
 
-    // ── If resolving: move order back to 'served' (customer must re-confirm) ──
+    // ── Re-serve: move order back to correct in-progress status ─────────────
     if (body.status === 'reserving') {
-      // Staff started re-service — order moves back to served
+      // Fetch the order type FIRST — the re-serve target status differs by type:
+      //   delivery  → out_for_delivery  (delivery portal picks it up; person re-delivers → delivered → customer confirms)
+      //   dine-in / pickup → served     (waiter physically brings it to table/counter → customer confirms)
+      const { data: orderRow } = await sb
+        .from('orders')
+        .select('type')
+        .eq('id', issue.order_id as string)
+        .single();
+
+      const isDeliveryOrder = (orderRow?.type as string | null) === 'delivery';
+      const reServeStatus   = isDeliveryOrder ? 'out_for_delivery' : 'served';
+
       await sb.from('orders')
-        .update({ status: 'served', updated_at: new Date().toISOString() })
+        .update({ status: reServeStatus, updated_at: new Date().toISOString() })
         .eq('id', issue.order_id);
 
       await sb.from('order_events').insert({
@@ -249,10 +260,12 @@ export async function PATCH(req: NextRequest) {
         order_id:     issue.order_id,
         event_type:   'ReServing',
         performed_by: (body.resolvedBy as string) ?? 'Staff',
-        note:         'Staff re-serving order after "not received" report',
+        note:         isDeliveryOrder
+          ? 'Delivery re-dispatched after "not received" report'
+          : 'Staff re-serving order after "not received" report',
       });
 
-      // Fetch full order for broadcast
+      // Fetch full order for broadcast (after status update)
       const { data: fullOrder } = await sb
         .from('orders')
         .select('*, order_items(*), order_events(*)')
@@ -263,8 +276,13 @@ export async function PATCH(req: NextRequest) {
         issue:  rowToIssue(issue),
         order:  fullOrder,
       });
-      // Also fire order_served so customer tracking page updates
-      await broadcast(rid, 'order_served', fullOrder);
+      // Fire the right event so every portal updates:
+      // - delivery → order_status_changed wakes up delivery portal (it polls out_for_delivery orders)
+      // - dine-in/pickup → order_served wakes up waiter portal
+      await broadcast(rid, 'order_status_changed', fullOrder);
+      if (!isDeliveryOrder) {
+        await broadcast(rid, 'order_served', fullOrder);
+      }
     }
 
     if (body.status === 'resolved') {
