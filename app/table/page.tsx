@@ -164,8 +164,9 @@ function TablePageInner() {
 
   // ── Co-diners at this table (from Supabase tab_devices) ──
   const [codiners, setCodiners]           = useState<{ customerName: string; joinedAt: string }[]>([]);
-  // ── Table capacity (fetched once at init from Supabase tables) ──
+  // ── Table capacity + display name (fetched once at init from Supabase tables) ──
   const [tableCapacity, setTableCapacity] = useState<number>(8); // default 8 until fetched
+  const [tableName, setTableName]         = useState<string>(''); // human-readable display name (e.g. "T3")
 
   // ── Menu & cart ──
   const [menu, setMenu]                   = useState<MenuItem[]>([]);
@@ -210,7 +211,7 @@ function TablePageInner() {
         const match = allTables.find(
           (t: ApiTable) => sameTable(t.id, tableId) || sameTable(t.name, tableId),
         );
-        if (match) setTableCapacity(match.capacity);
+        if (match) { setTableCapacity(match.capacity); setTableName(match.name || tableId); }
       } catch { setMenu([]); }
 
       // ── STEP 1: Does THIS device already have an active Supabase session? ──
@@ -674,7 +675,7 @@ function TablePageInner() {
           <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
             <div style={{ fontSize: '3rem', marginBottom: '0.4rem' }}>🍽️</div>
             <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.6rem', fontWeight: 900, color: '#1A0800' }}>Foodie Lover</div>
-            <div style={{ color: '#888', fontSize: '0.82rem', marginTop: '0.2rem' }}>Table {tableId}</div>
+            <div style={{ color: '#888', fontSize: '0.82rem', marginTop: '0.2rem' }}>Table {tableName || tableId}</div>
           </div>
 
           <div style={{ marginBottom: '1rem' }}>
@@ -769,7 +770,7 @@ function TablePageInner() {
         <div style={{ background: 'white', borderRadius: 20, padding: '2rem 1.75rem', width: '100%', maxWidth: 400, boxShadow: '0 20px 60px rgba(0,0,0,0.4)' }}>
           <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
             <div style={{ fontSize: '2.5rem', marginBottom: '0.4rem' }}>🤝</div>
-            <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.4rem', fontWeight: 900, color: '#1A0800' }}>Join Table {tableId}</div>
+            <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.4rem', fontWeight: 900, color: '#1A0800' }}>Join Table {tableName || tableId}</div>
             <div style={{ color: '#888', fontSize: '0.82rem', marginTop: '0.35rem', lineHeight: 1.5 }}>
               <span style={{ fontWeight: 700, color: '#E65C00' }}>{existingCustomerName}</span> already has an open session here.
               {guestCount > 1 && <span> ({guestCount} people at this table)</span>}
@@ -872,7 +873,7 @@ function TablePageInner() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
               <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.1rem', fontWeight: 900 }}>🍽️ Foodie Lover</div>
-              <div style={{ fontSize: '0.68rem', color: '#F9A826' }}>Table {tableId} · {customerName}</div>
+              <div style={{ fontSize: '0.68rem', color: '#F9A826' }}>Table {tableName || tableId} · {customerName}</div>
             </div>
             {tab && tabOrders.length > 0 && (
               <button onClick={() => setView('tracking')} style={{ ...btn('#ffffff20', 'white'), fontSize: '0.75rem', border: '1px solid #ffffff40' }}>
@@ -964,7 +965,7 @@ function TablePageInner() {
           <button onClick={() => setView('menu')} style={{ background: 'none', border: 'none', color: 'white', fontSize: '1.4rem', cursor: 'pointer', lineHeight: 1 }}>←</button>
           <div>
             <div style={{ fontWeight: 800, fontSize: '1rem' }}>🛒 Your Cart</div>
-            <div style={{ fontSize: '0.68rem', color: '#F9A826' }}>Table {tableId} · {customerName}</div>
+            <div style={{ fontSize: '0.68rem', color: '#F9A826' }}>Table {tableName || tableId} · {customerName}</div>
           </div>
         </div>
 
@@ -1037,7 +1038,7 @@ function TablePageInner() {
             </div>
           )}
           <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#6ee7b7', background: 'rgba(255,255,255,0.08)', borderRadius: 10, padding: '0.5rem 1rem', display: 'inline-block' }}>
-            Bill Paid: ₹{billTotal} · Table {tableId}
+            Bill Paid: ₹{billTotal} · Table {tableName || tableId}
           </div>
           <div style={{ marginTop: '1.5rem', fontSize: '1.5rem' }}>⭐⭐⭐⭐⭐</div>
           <div style={{ fontSize: '0.72rem', color: '#6ee7b7', marginTop: '0.4rem' }}>Scan QR again to start a new order</div>
@@ -1057,7 +1058,7 @@ function TablePageInner() {
             <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.6rem', fontWeight: 900, color: '#6ee7b7', marginBottom: '0.35rem' }}>
               Welcome back, {customerName}!
             </div>
-            <div style={{ fontSize: '0.88rem', color: '#a7f3d0' }}>Reconnecting to your order at Table {tableId}…</div>
+            <div style={{ fontSize: '0.88rem', color: '#a7f3d0' }}>Reconnecting to your order at Table {tableName || tableId}…</div>
           </div>
         </div>
       )}
@@ -1131,7 +1132,7 @@ function TablePageInner() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.1rem', fontWeight: 900 }}>🍽️ My Tab</div>
-            <div style={{ fontSize: '0.68rem', color: '#F9A826' }}>Table {tableId} · {customerName}</div>
+            <div style={{ fontSize: '0.68rem', color: '#F9A826' }}>Table {tableName || tableId} · {customerName}</div>
           </div>
           {tab?.tabStatus === 'open' && (
             <button onClick={() => setView('menu')} style={{ ...btn('#F9A826', '#1A0800'), fontSize: '0.75rem', padding: '0.4rem 0.8rem' }}>

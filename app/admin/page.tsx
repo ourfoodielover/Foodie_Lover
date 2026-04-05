@@ -1005,7 +1005,7 @@ export default function AdminPage() {
                               {order.type==='dine-in'?`Table ${order.tableId}`:order.deliveryAddress?<span title={order.deliveryAddress}>📍 {order.deliveryAddress.slice(0,22)}{order.deliveryAddress.length>22?'…':''}</span>:'—'}
                             </td>
                             <td style={{padding:'0.5rem 0.65rem',fontWeight:600}}>{order.customerName}</td>
-                            <td style={{padding:'0.5rem 0.65rem',textAlign:'center'}}>{order.items?.length||0}</td>
+                            <td style={{padding:'0.5rem 0.65rem',textAlign:'center'}}>{(order.items||[]).reduce((s:number,it:any)=>s+(it.qty||1),0)||0}</td>
                             <td style={{padding:'0.5rem 0.65rem'}}>₹{order.subtotal||order.total}</td>
                             <td style={{padding:'0.5rem 0.65rem',color:'#16a34a',fontWeight:700}}>{(order.discount||0)>0?`-₹${order.discount}`:'—'}</td>
                             <td style={{padding:'0.5rem 0.65rem',fontWeight:800}}>₹{order.total}</td>
