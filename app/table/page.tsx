@@ -123,7 +123,10 @@ function sameTable(a: string | undefined | null, b: string | undefined | null): 
 // ─── Inner component ──────────────────────────────────────────────────────────
 function TablePageInner() {
   const searchParams = useSearchParams();
-  const tableId = (searchParams.get('table') || searchParams.get('tableId') || 'T01').toUpperCase();
+  // Keep the raw value from the URL — Supabase IDs like TBL_timestamp_abc123 are
+  // case-sensitive.  toUpperCase() was corrupting lowercase suffixes (e.g. "66agg9"
+  // → "66AGG9") so the exact-match query in /api/tabs could never find the row.
+  const tableId = searchParams.get('table') || searchParams.get('tableId') || 'T01';
 
   // ── View ──
   // 'loading'  = checking device ID / active sessions (brief spinner)
