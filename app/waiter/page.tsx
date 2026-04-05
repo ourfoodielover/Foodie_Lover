@@ -130,8 +130,12 @@ function WaiterPageInner() {
         at:           c.at,
       })));
 
-      // ── Active re-serve issues (order_issues table, status open/reserving/escalated) ──
-      setReServeIssues(issues);
+      // ── Active re-serve issues (order_issues table, status open/escalated) ──
+      // 'reserving' is intentionally excluded: the waiter already clicked Re-Serve
+      // and is physically bringing the food. Nothing more to do until the customer
+      // confirms receipt or re-disputes — at that point the status changes and the
+      // banner either disappears (resolved) or re-appears (open again after retry).
+      setReServeIssues(issues.filter(i => i.status !== 'reserving'));
 
       // ── Derive legacy food disputes from order timeline events ────────────
       // (kept for backward compat — new flow uses order_issues table)
