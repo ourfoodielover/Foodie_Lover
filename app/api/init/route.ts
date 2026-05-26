@@ -32,11 +32,16 @@ export async function GET() {
     );
 
     // ── 3. Seed default restaurant settings (PINs, tax rate, etc.) ───────────
-    // Without these, kitchen/manager login and billing calculations break.
-    const defaultSettings = [
-      { key: 'kitchen_pin',          value: '1111' },
-      { key: 'manager_pin',          value: '2222' },
-      { key: 'admin_pin',            value: '0000' },
+    // PINs are read from Vercel environment variables (ADMIN_PIN, KITCHEN_PIN,
+    // MANAGER_PIN). If env vars are not set, PIN rows are NOT seeded — the login
+    // pages will show "PIN not configured" until the admin sets them in Supabase
+    // or in Vercel env vars and re-runs /api/init.
+    // Non-secret settings always seed with safe defaults.
+    const adminPin   = process.env.ADMIN_PIN   ?? null;
+    const kitchenPin = process.env.KITCHEN_PIN ?? null;
+    const managerPin = process.env.MANAGER_PIN ?? null;
+
+    const defaultSettings: { key: string; value: string }[] = [
       { key: 'tax_rate',             value: '5'    },
       { key: 'service_charge',       value: '0'    },
       { key: 'currency',             value: 'INR'  },
@@ -47,6 +52,10 @@ export async function GET() {
       { key: 'waiter_call_cooldown', value: '120'  },
       { key: 'receipt_email_from',   value: ''     },
     ];
+    // Only seed PINs when env vars are explicitly set
+    if (adminPin)   defaultSettings.push({ key: 'admin_pin',   value: adminPin });
+    if (kitchenPin) defaultSettings.push({ key: 'kitchen_pin', value: kitchenPin });
+    if (managerPin) defaultSettings.push({ key: 'manager_pin', value: managerPin });
     await sb.from('restaurant_settings').upsert(
       defaultSettings.map(s => ({
         id:            `RS_${s.key}`,

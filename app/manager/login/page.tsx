@@ -4,7 +4,6 @@ export const dynamic = 'force-dynamic';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { saveSession, getSession, AuthSession, SESSION_TTL_MS } from '@/lib/auth';
-import { getSettings } from '@/lib/api';
 
 export default function ManagerLoginPage() {
   const router  = useRouter();
@@ -21,10 +20,16 @@ export default function ManagerLoginPage() {
     setBusy(true);
     setError('');
     try {
-      const settings  = await getSettings();
-      const storedPin = settings.manager_pin ?? '9999';
-      if (pin !== storedPin) {
-        setError('Incorrect manager PIN. Contact your admin.');
+      // PIN is verified server-side — never sent back to the browser
+      const res    = await fetch('/api/auth/verify-pin', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ role: 'manager', pin: pin.trim() }),
+      });
+      const result = await res.json() as { ok: boolean; error?: string };
+
+      if (!result.ok) {
+        setError(result.error ?? 'Incorrect manager PIN. Contact your admin.');
         setPin('');
       } else {
         const s: AuthSession = {
@@ -64,7 +69,7 @@ export default function ManagerLoginPage() {
           {busy ? '⏳ Signing In…' : '🔓 Open Counter'}
         </button>
         <div style={{ fontSize: '0.72rem', color: '#bbb', marginBottom: '0.75rem' }}>
-          Default PIN: <strong>9999</strong> (Admin can change under Staff Settings)
+          Contact your admin if you don&apos;t have the PIN.
         </div>
         <button className="login-back" onClick={() => router.push('/')}>
           ← Back to role selector

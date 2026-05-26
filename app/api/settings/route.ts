@@ -5,6 +5,12 @@ import { getServerClient } from '@/lib/supabase-server';
 
 export const dynamic = 'force-dynamic';
 
+// Keys that must NEVER be sent to the browser — PIN values and security answers
+// are verified server-side only via /api/auth/verify-pin and /api/auth/recover-pin.
+const SECRET_KEYS = new Set([
+  'admin_pin', 'kitchen_pin', 'manager_pin', 'security_answer',
+]);
+
 function errMsg(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (typeof err === 'object' && err !== null && 'message' in err)
@@ -20,6 +26,11 @@ export async function GET(req: NextRequest) {
     const rid = url.searchParams.get('restaurantId') ?? 'rest_default';
     const key = url.searchParams.get('key');
 
+    // Block direct fetches of secret keys
+    if (key && SECRET_KEYS.has(key)) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+
     let query = sb.from('restaurant_settings')
       .select('key, value')
       .eq('restaurant_id', rid);
@@ -33,9 +44,11 @@ export async function GET(req: NextRequest) {
       const row = (data ?? [])[0];
       return NextResponse.json({ value: row?.value ?? null });
     }
-    // Return all settings as { key: value } map
+    // Return all settings as { key: value } map, excluding secret keys
     const map: Record<string, string> = {};
-    (data ?? []).forEach(r => { map[r.key] = r.value; });
+    (data ?? []).forEach(r => {
+      if (!SECRET_KEYS.has(r.key)) map[r.key] = r.value;
+    });
     return NextResponse.json(map);
   } catch (err) {
     console.error('[GET /api/settings]', err);

@@ -4,7 +4,7 @@ export const dynamic = 'force-dynamic';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { saveSession, getSession, AuthSession, SESSION_TTL_MS } from '@/lib/auth';
-import { getSettings, saveSetting } from '@/lib/api';
+import { getSettings } from '@/lib/api';
 
 type View = 'login' | 'forgot' | 'reset-success';
 
@@ -18,6 +18,7 @@ export default function AdminLoginPage() {
   const [busy,  setBusy]  = useState(false);
 
   // Forgot PIN form — security question loaded from Supabase on mount
+  // Only the question text is fetched to the client — the answer stays server-side
   const [securityQuestion, setSecurityQuestion] = useState('');
   const [answer,  setAnswer]  = useState('');
   const [newPin1, setNewPin1] = useState('');
@@ -27,6 +28,7 @@ export default function AdminLoginPage() {
 
   useEffect(() => {
     if (getSession('admin')) { router.replace('/admin'); return; }
+    // Only fetch the question text (not the answer — that stays server-side)
     getSettings().then(s => {
       if (s.security_question) setSecurityQuestion(s.security_question);
     }).catch(() => {/* ignore */});
@@ -38,10 +40,16 @@ export default function AdminLoginPage() {
     setBusy(true);
     setError('');
     try {
-      const settings  = await getSettings();
-      const storedPin = settings.admin_pin ?? '1234';
-      if (pin !== storedPin) {
-        setError('Incorrect PIN. Please try again.');
+      // PIN is verified server-side — never returned to the browser
+      const res    = await fetch('/api/auth/verify-pin', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ role: 'admin', pin: pin.trim() }),
+      });
+      const result = await res.json() as { ok: boolean; error?: string };
+
+      if (!result.ok) {
+        setError(result.error ?? 'Incorrect PIN. Please try again.');
         setPin('');
       } else {
         const s: AuthSession = {
@@ -60,6 +68,8 @@ export default function AdminLoginPage() {
   }
 
   // ── Security question recovery ────────────────────────────────────────────────
+  // The answer is sent to the server for comparison — it is NEVER returned.
+  // If correct, the server updates the PIN and returns { ok: true }.
   async function handleRecovery() {
     if (recBusy) return;
     setRecErr('');
@@ -68,13 +78,16 @@ export default function AdminLoginPage() {
     if (newPin1 !== newPin2) { setRecErr('PINs do not match.'); return; }
     setRecBusy(true);
     try {
-      const settings = await getSettings();
-      const stored   = settings.security_answer ?? '';
-      if (!stored || stored !== answer.toLowerCase().trim()) {
-        setRecErr('❌ Incorrect answer. Please try again.');
+      const res    = await fetch('/api/auth/recover-pin', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ answer: answer.trim(), newPin: newPin1 }),
+      });
+      const result = await res.json() as { ok: boolean; error?: string };
+      if (!result.ok) {
+        setRecErr(`❌ ${result.error ?? 'Incorrect answer. Please try again.'}`);
         return;
       }
-      await saveSetting('admin_pin', newPin1);
       setView('reset-success');
     } catch {
       setRecErr('❌ Server error. Please try again.');
@@ -161,9 +174,6 @@ export default function AdminLoginPage() {
         <button className="login-btn" onClick={handleLogin} disabled={busy || !pin.trim()}>
           {busy ? '⏳ Signing In…' : '🔓 Login as Admin'}
         </button>
-        <div style={{ fontSize:'0.72rem', color:'#bbb', marginBottom:'0.5rem' }}>
-          Default PIN: <strong>1234</strong> (change in Admin → Staff → Settings)
-        </div>
         <button onClick={() => { setView('forgot'); setError(''); setPin(''); }}
           style={{ background:'none', border:'none', color:'#E65C00', fontSize:'0.82rem', fontWeight:600, cursor:'pointer', fontFamily:'Poppins,sans-serif', marginBottom:'0.5rem' }}>
           🔑 Forgot PIN?
