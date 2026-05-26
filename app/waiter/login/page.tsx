@@ -89,7 +89,7 @@ export default function WaiterLoginPage() {
         <div style={{ fontSize: '0.72rem', color: '#bbb', marginBottom: '0.75rem' }}>
           Staff accounts are created by your Admin
         </div>
-        <button className="login-back" onClick={() => router.push('/login')}>
+        <button className="login-back" onClick={() => router.push('/')}>
           ← Back to role selector
         </button>
       </div>

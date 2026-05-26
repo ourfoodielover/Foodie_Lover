@@ -179,11 +179,14 @@ function TrackInner() {
     if (!o) { setNotFound(true); return; }
     setOrder(o);
 
-    // Also load the active issue so re-delivery attempt count survives page refresh
-    // Only relevant for delivery orders in a re-serve state
+    // Also load the active issue so retry attempt count survives page refresh.
+    // Relevant for delivery orders (out_for_delivery / delivered / re_serve_required)
+    // AND pickup orders (served / re_serve_required — staff must bring to counter again).
     if (
-      o.type === 'delivery' &&
-      (o.status === 're_serve_required' || o.status === 'out_for_delivery' || o.status === 'delivered')
+      (o.type === 'delivery' &&
+        (o.status === 're_serve_required' || o.status === 'out_for_delivery' || o.status === 'delivered')) ||
+      (o.type === 'pickup' &&
+        (o.status === 're_serve_required' || o.status === 'served'))
     ) {
       const issue = await getIssueForOrder(o.id).catch(() => null);
       if (issue && issue.status !== 'resolved') {
@@ -253,6 +256,50 @@ function TrackInner() {
       loadData();
     } catch (err) {
       console.error('[track] handleDeliveryNotReceived failed:', err);
+      setNotRecvMsg(`⚠️ Your issue has been logged. Please contact the restaurant directly if not resolved.`);
+    } finally {
+      setNotRecvBusy(false);
+    }
+  }
+
+  // ── "Not received" for pickup tracking ──────────────────────────
+  async function handlePickupNotReceived() {
+    if (!trackOrderId || !order || notRecvBusy) return;
+    setNotRecvBusy(true);
+    setNotRecvMsg('');
+    try {
+      const existingIssue = await getIssueForOrder(trackOrderId);
+      const currentCount  = existingIssue ? existingIssue.retryCount : 0;
+
+      if (currentCount >= ISSUE_MAX_RETRIES) {
+        setNotRecvMsg(
+          `⚠️ This order has been reported ${currentCount} times. ` +
+          `The manager has been alerted and will contact you shortly.`,
+        );
+        return;
+      }
+
+      const issue = await reportNotReceived(
+        trackOrderId,
+        order.customerName || 'Customer',
+        'not_received',
+      );
+      setActiveIssue(issue);
+
+      if (issue.escalated) {
+        setNotRecvMsg(
+          `🚨 Escalated to manager after ${issue.retryCount} reports. ` +
+          `A manager will contact you to resolve this.`,
+        );
+      } else {
+        setNotRecvMsg(
+          `⚠️ Our staff has been notified and will bring your order to the counter shortly. ` +
+          `(Report ${issue.retryCount}/${ISSUE_MAX_RETRIES})`,
+        );
+      }
+      loadData();
+    } catch (err) {
+      console.error('[track] handlePickupNotReceived failed:', err);
       setNotRecvMsg(`⚠️ Your issue has been logged. Please contact the restaurant directly if not resolved.`);
     } finally {
       setNotRecvBusy(false);
@@ -627,6 +674,68 @@ function TrackInner() {
             {activeIssue && (
               <div style={{ fontSize: '0.72rem', color: '#92400e', marginTop: '0.4rem' }}>
                 Re-delivery attempt {activeIssue.retryCount}/{ISSUE_MAX_RETRIES}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── PICKUP: "Not received at counter?" button ─────────────────────── */}
+        {/* Shown when order is at the counter (served) but customer didn't get it */}
+        {orderType === 'pickup' && order.status === 'served' && !isCompleted && (
+          <div style={{ background: 'white', borderRadius: 16, padding: '1.25rem', boxShadow: '0 4px 20px rgba(0,0,0,0.08)', marginBottom: '1.25rem', border: `2px solid ${accentColor}` }}>
+            <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
+              <div style={{ fontSize: '2rem', marginBottom: '0.35rem' }}>
+                {activeIssue ? '🔄' : '🏪'}
+              </div>
+              <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '1rem' }}>
+                {activeIssue ? 'Your order has been re-prepared!' : 'Your order is ready at the counter!'}
+              </div>
+              <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '0.25rem' }}>
+                {activeIssue
+                  ? 'Please check the counter again — our staff has fixed your order.'
+                  : 'Please collect your order from the counter. Is it not there?'}
+              </div>
+              {activeIssue && (
+                <div style={{ fontSize: '0.72rem', background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: 8, padding: '0.35rem 0.6rem', marginTop: '0.5rem', color: '#92400e' }}>
+                  Re-serve attempt #{activeIssue.retryCount} of {ISSUE_MAX_RETRIES}
+                </div>
+              )}
+            </div>
+            <button
+              onClick={() => void handlePickupNotReceived()}
+              disabled={notRecvBusy}
+              style={{
+                width: '100%', background: notRecvBusy ? '#f3f4f6' : '#fef2f2',
+                color: '#ef4444', border: '2px solid #fecaca', padding: '0.75rem',
+                borderRadius: 12, fontWeight: 700, fontSize: '0.9rem',
+                cursor: notRecvBusy ? 'not-allowed' : 'pointer',
+                fontFamily: 'Poppins,sans-serif', opacity: notRecvBusy ? 0.6 : 1,
+              }}
+            >
+              {notRecvBusy ? '⏳…' : '❌ Not received at counter'}
+            </button>
+            {notRecvMsg && (
+              <div style={{ marginTop: '0.75rem', background: notRecvMsg.startsWith('🚨') ? '#fef2f2' : '#fef3c7', borderRadius: 8, padding: '0.6rem', fontSize: '0.78rem', color: notRecvMsg.startsWith('🚨') ? '#ef4444' : '#92400e', fontWeight: 600 }}>
+                {notRecvMsg}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── PICKUP: "Being re-prepared" banner ───────────────────────────── */}
+        {/* Shown after customer reports not received — waiter is fixing it     */}
+        {orderType === 'pickup' && order.status === 're_serve_required' && (
+          <div style={{ background: '#fef3c7', border: '2px solid #f59e0b', borderRadius: 16, padding: '1.25rem', marginBottom: '1.25rem', textAlign: 'center' }}>
+            <div style={{ fontSize: '2rem', marginBottom: '0.35rem' }}>⏳</div>
+            <div style={{ fontWeight: 800, color: '#92400e', fontSize: '1rem', marginBottom: '0.25rem' }}>
+              Re-serve being arranged…
+            </div>
+            <div style={{ fontSize: '0.8rem', color: '#b45309' }}>
+              Our staff has been notified. Your order will be brought to the counter again shortly.
+            </div>
+            {activeIssue && (
+              <div style={{ fontSize: '0.72rem', color: '#92400e', marginTop: '0.4rem' }}>
+                Re-serve attempt {activeIssue.retryCount}/{ISSUE_MAX_RETRIES}
               </div>
             )}
           </div>

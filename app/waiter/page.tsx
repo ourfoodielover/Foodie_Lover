@@ -485,7 +485,9 @@ function WaiterPageInner() {
                   </span>
                   <span style={{ color: '#fda4af', marginLeft: '0.4rem' }}>
                     Order #{order?.orderNum ?? issue.orderId.slice(-4)}
-                    {order?.tableId ? ` · Table ${order.tableId}` : ''}
+                    {order?.type === 'pickup'   ? ' · 🏪 Pickup at counter' :
+                     order?.type === 'delivery' ? ' · 🛵 Delivery' :
+                     order?.tableId             ? ` · Table ${order.tableId}` : ''}
                     {' — '}
                     Attempt {issue.retryCount}/{3}
                   </span>

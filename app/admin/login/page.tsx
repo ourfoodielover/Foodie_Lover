@@ -168,7 +168,7 @@ export default function AdminLoginPage() {
           style={{ background:'none', border:'none', color:'#E65C00', fontSize:'0.82rem', fontWeight:600, cursor:'pointer', fontFamily:'Poppins,sans-serif', marginBottom:'0.5rem' }}>
           🔑 Forgot PIN?
         </button>
-        <button className="login-back" onClick={() => router.push('/login')}>
+        <button className="login-back" onClick={() => router.push('/')}>
           ← Back to role selector
         </button>
       </div>

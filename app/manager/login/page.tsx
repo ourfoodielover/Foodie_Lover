@@ -66,7 +66,7 @@ export default function ManagerLoginPage() {
         <div style={{ fontSize: '0.72rem', color: '#bbb', marginBottom: '0.75rem' }}>
           Default PIN: <strong>9999</strong> (Admin can change under Staff Settings)
         </div>
-        <button className="login-back" onClick={() => router.push('/login')}>
+        <button className="login-back" onClick={() => router.push('/')}>
           ← Back to role selector
         </button>
       </div>
