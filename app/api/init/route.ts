@@ -54,9 +54,10 @@ export async function GET() {
       { onConflict: 'id', ignoreDuplicates: true },
     );
 
-    // PIN settings: read from Vercel env vars and ALWAYS overwrite the DB value.
-    // This means updating ADMIN_PIN / KITCHEN_PIN / MANAGER_PIN in Vercel and
-    // re-deploying (or calling /api/init) immediately takes effect.
+    // PIN settings: seeded from Vercel env vars on FIRST RUN ONLY.
+    // Once a PIN row exists in Supabase, /api/init never touches it again —
+    // all PIN changes after that go through the Admin panel (→ PATCH /api/settings).
+    // This prevents a redeploy from wiping admin-panel PIN changes.
     const adminPin   = process.env.ADMIN_PIN   ?? null;
     const kitchenPin = process.env.KITCHEN_PIN ?? null;
     const managerPin = process.env.MANAGER_PIN ?? null;
@@ -66,16 +67,16 @@ export async function GET() {
     if (kitchenPin) pinSettings.push({ key: 'kitchen_pin', value: kitchenPin });
     if (managerPin) pinSettings.push({ key: 'manager_pin', value: managerPin });
 
+    // ignoreDuplicates: true — only insert if the row doesn't exist yet.
+    // Existing PIN rows are left untouched; admin panel changes are preserved.
     if (pinSettings.length > 0) {
-      // Use restaurant_id,key as the conflict target — matches the actual unique constraint.
-      // ignoreDuplicates omitted (defaults to false) so existing rows are always updated.
       const { error: pinErr } = await sb.from('restaurant_settings').upsert(
         pinSettings.map(s => ({
           restaurant_id: rid,
           key:           s.key,
           value:         s.value,
         })),
-        { onConflict: 'restaurant_id,key' },
+        { onConflict: 'restaurant_id,key', ignoreDuplicates: true },
       );
       if (pinErr) throw new Error(`PIN upsert failed: ${pinErr.message}`);
     }
