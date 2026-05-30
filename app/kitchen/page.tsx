@@ -46,8 +46,51 @@ export default function KitchenPage() {
   const [flashIds, setFlashIds]       = useState<Set<string>>(new Set());
   const [fetchError, setFetchError]   = useState('');
 
-  // Track which order IDs we've already alerted about
+  // Track which order IDs we've already alerted about (in-memory, resets on mount)
   const seenOrderIds = useRef<Set<string>>(new Set());
+  // Track which orders have been announced via TTS (persisted in sessionStorage across hot-reloads)
+  const announcedIds = useRef<Set<string>>(new Set());
+  const [kitchenMuted, setKitchenMuted] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('kitchen_muted') === 'true';
+  });
+  const kitchenMutedRef = useRef(kitchenMuted);
+  kitchenMutedRef.current = kitchenMuted;
+
+  // Load already-announced IDs from sessionStorage on first render
+  useEffect(() => {
+    try {
+      const stored = sessionStorage.getItem('announced_orders');
+      if (stored) {
+        JSON.parse(stored).forEach((id: string) => announcedIds.current.add(id));
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  function toggleMute() {
+    setKitchenMuted(prev => {
+      const next = !prev;
+      localStorage.setItem('kitchen_muted', String(next));
+      kitchenMutedRef.current = next;
+      return next;
+    });
+  }
+
+  function speakOrder(order: Order) {
+    if (kitchenMutedRef.current) return;
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel(); // stop any ongoing speech
+    const orderNum = order.orderNum || order.id.slice(-4);
+    const tableInfo = order.tableId ? `Table ${order.tableId}.` : order.type === 'pickup' ? 'Pickup order.' : 'Delivery order.';
+    const itemLines = (order.items || []).map(item => `${item.name}, Quantity ${item.qty}`).join('. ');
+    const text = `New Order. Order Number ${orderNum}. ${tableInfo} ${itemLines}.`;
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang  = 'en-IN';
+    utterance.rate  = 0.88;
+    utterance.pitch = 1.0;
+    utterance.volume = 1.0;
+    window.speechSynthesis.speak(utterance);
+  }
 
   // ── Auth ────────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -77,6 +120,25 @@ export default function KitchenPage() {
       if (newIds.length > 0 && seenOrderIds.current.size > newIds.length) {
         // Only alert after first load (seenIds already had some)
         playOrderAlert();
+        // TTS — only announce IDs not in sessionStorage (avoids refresh replay)
+        const toAnnounce = newIds.filter(id => !announcedIds.current.has(id));
+        if (toAnnounce.length > 0) {
+          toAnnounce.forEach(id => announcedIds.current.add(id));
+          try { sessionStorage.setItem('announced_orders', JSON.stringify([...announcedIds.current])); } catch { /* ignore */ }
+          // Announce first new order (most urgent); if multiple arrived speak the count
+          const firstOrder = all.find(o => toAnnounce.includes(o.id));
+          if (firstOrder) {
+            if (toAnnounce.length === 1) {
+              speakOrder(firstOrder);
+            } else {
+              // Multiple orders arrived — announce them sequentially with a small delay
+              toAnnounce.forEach((id, i) => {
+                const o = all.find(x => x.id === id);
+                if (o) setTimeout(() => speakOrder(o), i * 4000);
+              });
+            }
+          }
+        }
         setFlashIds(prev => {
           const next = new Set(prev);
           newIds.forEach(id => next.add(id));
@@ -215,6 +277,13 @@ export default function KitchenPage() {
               <div style={{ fontSize: '0.6rem', color: '#666' }}>{s.label}</div>
             </div>
           ))}
+          <button
+            onClick={toggleMute}
+            title={kitchenMuted ? 'Kitchen audio muted — click to unmute' : 'Kitchen audio on — click to mute'}
+            style={{ ...btn(kitchenMuted ? '#ef444420' : '#22c55e20', kitchenMuted ? '#ef4444' : '#22c55e'), border: `1px solid ${kitchenMuted ? '#ef444440' : '#22c55e40'}`, fontSize: '0.72rem' }}
+          >
+            {kitchenMuted ? '🔇 Muted' : '🔊 Audio On'}
+          </button>
           <button onClick={logout} style={{ ...btn('#ffffff15', '#aaa'), border: '1px solid #333', fontSize: '0.72rem' }}>
             🚪 Logout
           </button>
@@ -386,12 +455,21 @@ export default function KitchenPage() {
                   })}
                 </div>
 
-                {/* Action button */}
-                {nextAction && (
-                  <button onClick={() => advanceOrder(order)} style={{ ...btn(nextAction.bg), width: '100%', padding: '0.55rem', borderRadius: 10, fontSize: '0.82rem' }}>
-                    {nextAction.label}
+                {/* Action + Read buttons */}
+                <div style={{ display: 'flex', gap: '0.4rem' }}>
+                  {nextAction && (
+                    <button onClick={() => advanceOrder(order)} style={{ ...btn(nextAction.bg), flex: 1, padding: '0.55rem', borderRadius: 10, fontSize: '0.82rem' }}>
+                      {nextAction.label}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => speakOrder(order)}
+                    title="Read this order aloud"
+                    style={{ ...btn('#374151'), padding: '0.55rem 0.7rem', borderRadius: 10, fontSize: '0.82rem', flexShrink: 0 }}
+                  >
+                    🔊
                   </button>
-                )}
+                </div>
                 {order.status === 'prepared' && (
                   <div style={{
                     background: isDelivery ? '#2563eb20' : isPickup ? '#16a34a20' : '#8b5cf620',

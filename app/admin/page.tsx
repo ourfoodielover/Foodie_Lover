@@ -92,6 +92,10 @@ export default function AdminPage() {
   // modalVariants: separate state for the variants editor inside the menu modal
   // Uses string prices so the input fields can be empty/partial while typing
   const [modalVariants, setModalVariants] = useState<{name:string;price:string}[]>([{name:'',price:''}]);
+  const [imgUploading,   setImgUploading]   = useState(false);
+  const [seedingMenu,    setSeedingMenu]     = useState(false);
+  const [seedMsg,        setSeedMsg]         = useState('');
+  const [csvImportMsg,   setCsvImportMsg]    = useState('');
   const [cancelModal,   setCancelModal]   = useState<{open:boolean;orderId:string}>({open:false,orderId:''});
   const [discountModal, setDiscountModal] = useState<{open:boolean;orderId:string}>({open:false,orderId:''});
 
@@ -464,6 +468,94 @@ export default function AdminPage() {
     } catch (e) {
       alert('Failed to save menu item: ' + (e instanceof Error ? e.message : String(e)));
     }
+  }
+
+  // ─── Image upload ─────────────────────────────────────────────────────────
+  async function uploadMenuImage(file: File) {
+    if (file.size > 5 * 1024 * 1024) { alert('Image must be under 5 MB'); return; }
+    setImgUploading(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const res  = await fetch('/api/menu/upload', { method: 'POST', body: form });
+      const data = await res.json() as { ok: boolean; url?: string; error?: string };
+      if (!res.ok || !data.url) throw new Error(data.error ?? 'Upload failed');
+      setMenuModal(m => ({ ...m, item: { ...m.item, img: data.url } }));
+    } catch (e) {
+      alert('Upload failed: ' + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setImgUploading(false);
+    }
+  }
+
+  // ─── Import complete menu catalog ─────────────────────────────────────────
+  async function importMenuCatalog() {
+    if (!confirm('Add all missing menu items from the complete catalog?\n\nExisting items will NOT be changed.')) return;
+    setSeedingMenu(true);
+    setSeedMsg('');
+    try {
+      const res  = await fetch('/api/menu/seed');
+      const data = await res.json() as { ok: boolean; inserted?: number; skipped?: number; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? 'Seed failed');
+      setSeedMsg(`✅ ${data.inserted} items added, ${data.skipped} already existed.`);
+      void refresh();
+    } catch (e) {
+      setSeedMsg('❌ ' + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setSeedingMenu(false);
+    }
+  }
+
+  // ─── CSV template download ────────────────────────────────────────────────
+  function downloadCsvTemplate() {
+    const rows = [
+      'name,category,description,badge,available,variants,image_url',
+      '"Chicken Dum Biryani","Non Veg Biryani","Authentic Hyderabadi Dum Biryani","bestseller","true","Half:140|Full:260","https://images.unsplash.com/photo-1589302168068-964664d93dc0?w=400"',
+      '"Roti","Indian Breads","Soft whole wheat flatbread baked fresh","","true","Regular:10",""',
+    ];
+    const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = 'menu-import-template.csv'; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // ─── CSV import ───────────────────────────────────────────────────────────
+  async function importMenuFromCsv(file: File) {
+    setCsvImportMsg('⏳ Importing…');
+    try {
+      const text  = await file.text();
+      const lines = text.trim().split('\n').filter(l => l.trim());
+      if (lines.length < 2) { setCsvImportMsg('❌ CSV has no data rows'); return; }
+      const parseRow = (line: string): string[] => {
+        const cols: string[] = []; let cur = '', inQ = false;
+        for (const ch of line) {
+          if (ch === '"') { inQ = !inQ; }
+          else if (ch === ',' && !inQ) { cols.push(cur.trim()); cur = ''; }
+          else { cur += ch; }
+        }
+        cols.push(cur.trim()); return cols;
+      };
+      const header = parseRow(lines[0]).map(h => h.toLowerCase());
+      const idx = (k: string) => header.indexOf(k);
+      if (idx('name') === -1 || idx('category') === -1) { setCsvImportMsg('❌ CSV must have "name" and "category" columns'); return; }
+      let inserted = 0, failed = 0;
+      for (let i = 1; i < lines.length; i++) {
+        const c = parseRow(lines[i]);
+        const name = c[idx('name')] ?? ''; const category = c[idx('category')] ?? '';
+        if (!name || !category) continue;
+        let variants: { name: string; price: number }[] = [];
+        const vStr = c[idx('variants')] ?? '';
+        if (vStr) { variants = vStr.split('|').map(v => { const [n,p] = v.split(':'); return { name: (n??'').trim(), price: parseFloat(p??'0') }; }).filter(v => v.name && !isNaN(v.price) && v.price > 0); }
+        if (!variants.length) variants = [{ name: 'Regular', price: 0 }];
+        try {
+          await saveMenuItemApi({ name, category, desc: c[idx('description')]??'', badge: c[idx('badge')]??'', img: c[idx('image_url')]??'', available: (c[idx('available')]??'true').toLowerCase()!=='false', variants, price: variants[0].price });
+          inserted++;
+        } catch { failed++; }
+      }
+      setCsvImportMsg(`✅ Imported ${inserted} items${failed ? `, ${failed} failed` : ''}.`);
+      void refresh();
+    } catch (e) { setCsvImportMsg('❌ ' + (e instanceof Error ? e.message : String(e))); }
   }
 
   // ─── Sales data ───────────────────────────────────────────────────────────
@@ -1191,12 +1283,23 @@ export default function AdminPage() {
                 <button key={c} onClick={()=>setMenuFilter(c)} style={tabB(menuFilter===c)}>{c}</button>
               ))}
             </div>
-            <div style={{display:'flex',gap:'0.5rem'}}>
-              <button onClick={()=>{if(confirm('Reset all menu items to defaults?\n\nNote: This resets the local copy — Supabase items remain. To reset Supabase data, delete items manually or run the init migration.')){void refresh();}}} style={{...btn('#6b7280'),fontSize:'0.78rem'}}>↺ Reset</button>
+            <div style={{display:'flex',gap:'0.5rem',flexWrap:'wrap' as const}}>
+              <button onClick={importMenuCatalog} disabled={seedingMenu} style={{...btn('#8b5cf6'),fontSize:'0.78rem'}}>{seedingMenu?'⏳ Loading…':'📥 Import Catalog'}</button>
+              <label style={{...btn('#16a34a'),fontSize:'0.78rem',cursor:'pointer' as const,display:'inline-flex',alignItems:'center' as const}}>
+                📤 Import CSV
+                <input type="file" accept=".csv" style={{display:'none'}} onChange={e=>{const f=e.target.files?.[0];if(f){void importMenuFromCsv(f);e.target.value='';}}} />
+              </label>
+              <button onClick={downloadCsvTemplate} style={{...btn('#6b7280'),fontSize:'0.78rem'}}>⬇️ CSV Template</button>
               <button onClick={()=>{setMenuModal({open:true,item:emptyItem(),isEdit:false});setModalVariants([{name:'',price:''}]);}} style={{...btn(),display:'flex',alignItems:'center',gap:'0.35rem'}}><span style={{fontSize:'1.1rem',lineHeight:1}}>＋</span> Add Item</button>
             </div>
           </div>
 
+          {(seedMsg||csvImportMsg) && (
+            <div style={{padding:'0.6rem 0.85rem',borderRadius:8,background:(seedMsg||csvImportMsg).startsWith('✅')?'#dcfce7':'(seedMsg||csvImportMsg).startsWith('⏳')?'#eff6ff':'#fef2f2',color:(seedMsg||csvImportMsg).startsWith('✅')?'#16a34a':(seedMsg||csvImportMsg).startsWith('⏳')?'#2563eb':'#ef4444',fontWeight:700,fontSize:'0.82rem',marginBottom:'0.75rem',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <span>{seedMsg||csvImportMsg}</span>
+              <button onClick={()=>{setSeedMsg('');setCsvImportMsg('');}} style={{background:'none',border:'none',cursor:'pointer',color:'inherit',fontSize:'1.1rem',lineHeight:1,padding:'0 0.2rem'}}>×</button>
+            </div>
+          )}
           {!menuItems.length
             ? <div style={{textAlign:'center',color:'#999',padding:'3rem',background:'white',borderRadius:12}}>No items in this category</div>
             : <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(255px,1fr))',gap:'1rem'}}>
@@ -1984,10 +2087,16 @@ export default function AdminPage() {
                 <button onClick={addVariantRow} style={{width:'100%',background:'#f0fdf4',border:'1px dashed #16a34a',color:'#16a34a',borderRadius:8,cursor:'pointer',padding:'0.4rem',fontSize:'0.8rem',fontWeight:700,fontFamily:'Poppins,sans-serif',marginTop:'0.2rem'}}>＋ Add Variant</button>
               </div>
               <div style={{marginBottom:'1.1rem'}}>
-                <label style={{fontSize:'0.76rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.28rem'}}>Image URL</label>
-                <input value={menuModal.item.img||''} onChange={e=>setMenuModal(m=>({...m,item:{...m.item,img:e.target.value}}))} placeholder="https://images.unsplash.com/…" style={{...inp}} />
+                <label style={{fontSize:'0.76rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.28rem'}}>Image <span style={{fontWeight:400,color:'#999'}}>(paste URL or upload)</span></label>
+                <div style={{display:'flex',gap:'0.4rem',alignItems:'center',marginBottom:'0.35rem'}}>
+                  <input value={menuModal.item.img||''} onChange={e=>setMenuModal(m=>({...m,item:{...m.item,img:e.target.value}}))} placeholder="https://images.unsplash.com/…" style={{...inp,flex:1}} />
+                  <label style={{...btn('#8b5cf6'),cursor:'pointer' as const,whiteSpace:'nowrap' as const,flexShrink:0,fontSize:'0.78rem',opacity:imgUploading?0.6:1,display:'inline-flex',alignItems:'center' as const}}>
+                    {imgUploading?'⏳':'📤 Upload'}
+                    <input type="file" accept="image/*" style={{display:'none'}} disabled={imgUploading} onChange={e=>{const f=e.target.files?.[0];if(f){void uploadMenuImage(f);e.target.value='';}}} />
+                  </label>
+                </div>
                 {menuModal.item.img && (
-                  <div style={{width:'100%',height:'130px',borderRadius:8,overflow:'hidden',marginTop:'0.45rem',background:'#f5f0e8'}}>
+                  <div style={{width:'100%',height:'130px',borderRadius:8,overflow:'hidden',background:'#f5f0e8'}}>
                     <img src={menuModal.item.img} alt="preview" style={{width:'100%',height:'100%',objectFit:'cover'}} onError={e=>{(e.target as HTMLImageElement).style.display='none';}} />
                   </div>
                 )}
