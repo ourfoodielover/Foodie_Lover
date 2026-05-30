@@ -31,7 +31,14 @@ import {
 const STATUS_FLOW_DINE_IN  = ['awaiting_waiter','pending','preparing','prepared','served','completed'] as const;
 const STATUS_FLOW_PICKUP   = ['pending','preparing','prepared','served','completed'] as const;
 const STATUS_FLOW_DELIVERY = ['pending','preparing','prepared','out_for_delivery','delivered','completed'] as const;
-const CATEGORIES  = ['Biryani','Starters','Mains','Breads','Desserts','Drinks'];
+const CATEGORIES  = [
+  'Veg Starters','Non Veg Starters',
+  'Veg Biryani','Non Veg Biryani',
+  'Main Course Veg','Main Course Non Veg',
+  'Tandoori Specials','Rice Items',
+  'Indian Breads','Egg Specials',
+  'Pot Specials','Arabic Mandi',
+];
 const BADGE_LABEL : Record<string,string> = { bestseller:'⭐ Bestseller', popular:'🔥 Popular', chef:"👨‍🍳 Chef's Special", famous:'🏆 Famous', new:'✨ New' };
 const STATUS_COLOR: Record<string,string> = {
   awaiting_waiter:   '#f59e0b', pending:'#f59e0b', preparing:'#3b82f6',
@@ -53,7 +60,7 @@ const card  = (color='#E65C00') => ({ background:'white' as const, borderRadius:
 const tabB  = (active:boolean)  => ({ padding:'0.42rem 1rem', border:`2px solid ${active?'#E65C00':'#ddd'}`, borderRadius:20, background:active?'#E65C00':'white' as const, color:active?'white' as const:'#666' as const, fontWeight:600 as const, cursor:'pointer' as const, fontSize:'0.8rem', fontFamily:'Poppins,sans-serif' });
 const inp   = { width:'100%', padding:'0.6rem 0.75rem', border:'2px solid #e5e7eb', borderRadius:8, fontFamily:'Poppins,sans-serif', fontSize:'0.88rem', outline:'none' as const };
 const btn   = (bg='#E65C00',c='white') => ({ background:bg, color:c, border:'none', padding:'0.55rem 1.1rem', borderRadius:8, fontWeight:700 as const, cursor:'pointer' as const, fontFamily:'Poppins,sans-serif', fontSize:'0.84rem' });
-const emptyItem = ():Partial<MenuItem> => ({ category:'Biryani', name:'', desc:'', price:0, img:'', badge:'', available:true });
+const emptyItem = ():Partial<MenuItem> => ({ category:'Non Veg Biryani', name:'', desc:'', price:0, img:'', badge:'', available:true, variants:[] });
 
 const AnalyticsCharts = lazy(() => import('@/components/AnalyticsCharts'));
 
@@ -82,6 +89,9 @@ export default function AdminPage() {
   // ── Modals ──
   const [selOrder,      setSelOrder]      = useState<Order|null>(null);
   const [menuModal,     setMenuModal]     = useState<{open:boolean;item:Partial<MenuItem>;isEdit:boolean}>({open:false,item:emptyItem(),isEdit:false});
+  // modalVariants: separate state for the variants editor inside the menu modal
+  // Uses string prices so the input fields can be empty/partial while typing
+  const [modalVariants, setModalVariants] = useState<{name:string;price:string}[]>([{name:'',price:''}]);
   const [cancelModal,   setCancelModal]   = useState<{open:boolean;orderId:string}>({open:false,orderId:''});
   const [discountModal, setDiscountModal] = useState<{open:boolean;orderId:string}>({open:false,orderId:''});
 
@@ -413,23 +423,43 @@ export default function AdminPage() {
   }
 
   // ─── Menu CRUD ────────────────────────────────────────────────────────────
+  function addVariantRow() {
+    setModalVariants(v => [...v, {name:'',price:''}]);
+  }
+  function removeVariantRow(idx:number) {
+    setModalVariants(v => v.filter((_,i)=>i!==idx));
+  }
+  function updateVariantRow(idx:number, field:'name'|'price', val:string) {
+    setModalVariants(v => v.map((r,i)=>i===idx?{...r,[field]:val}:r));
+  }
+
   async function saveItem() {
     const it = menuModal.item;
     if (!it.name?.trim()) { alert('Item name required'); return; }
-    if (!it.price||it.price<=0) { alert('Enter valid price'); return; }
+    // Validate variants
+    const filled = modalVariants.filter(v=>v.name.trim()||v.price.trim());
+    if (filled.length === 0) { alert('Add at least one pricing variant'); return; }
+    for (const v of filled) {
+      if (!v.name.trim()) { alert('Each variant needs a name (e.g. Half, Full, Regular)'); return; }
+      const p = parseFloat(v.price);
+      if (isNaN(p)||p<=0) { alert(`Invalid price for variant "${v.name}"`); return; }
+    }
+    const variants = filled.map(v=>({ name:v.name.trim(), price:parseFloat(v.price) }));
+    const price = variants[0].price; // backward compat
     try {
-      // saveMenuItemApi handles both create (no id) and edit (has id) via Supabase
       await saveMenuItemApi({
         id:        menuModal.isEdit ? it.id : undefined,
         name:      it.name     || '',
-        category:  it.category || 'Biryani',
-        price:     it.price    || 0,
+        category:  it.category || CATEGORIES[0],
+        price,
+        variants,
         desc:      it.desc     || '',
         img:       it.img      || '',
         badge:     it.badge    || '',
         available: it.available !== false,
       });
       setMenuModal({open:false,item:emptyItem(),isEdit:false});
+      setModalVariants([{name:'',price:''}]);
       void refresh();
     } catch (e) {
       alert('Failed to save menu item: ' + (e instanceof Error ? e.message : String(e)));
@@ -1163,7 +1193,7 @@ export default function AdminPage() {
             </div>
             <div style={{display:'flex',gap:'0.5rem'}}>
               <button onClick={()=>{if(confirm('Reset all menu items to defaults?\n\nNote: This resets the local copy — Supabase items remain. To reset Supabase data, delete items manually or run the init migration.')){void refresh();}}} style={{...btn('#6b7280'),fontSize:'0.78rem'}}>↺ Reset</button>
-              <button onClick={()=>setMenuModal({open:true,item:emptyItem(),isEdit:false})} style={{...btn(),display:'flex',alignItems:'center',gap:'0.35rem'}}><span style={{fontSize:'1.1rem',lineHeight:1}}>＋</span> Add Item</button>
+              <button onClick={()=>{setMenuModal({open:true,item:emptyItem(),isEdit:false});setModalVariants([{name:'',price:''}]);}} style={{...btn(),display:'flex',alignItems:'center',gap:'0.35rem'}}><span style={{fontSize:'1.1rem',lineHeight:1}}>＋</span> Add Item</button>
             </div>
           </div>
 
@@ -1182,11 +1212,18 @@ export default function AdminPage() {
                       <div style={{fontSize:'0.62rem',color:'#888',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.05em'}}>{item.category}</div>
                       <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:'0.4rem',margin:'0.2rem 0 0.25rem'}}>
                         <div style={{fontWeight:700,fontSize:'0.9rem',color:'#1A0800'}}>{item.name}</div>
-                        <div style={{fontWeight:900,color:'#E65C00',fontSize:'1rem',whiteSpace:'nowrap'}}>₹{item.price}</div>
+                        <div style={{fontWeight:900,color:'#E65C00',fontSize:'0.88rem',whiteSpace:'nowrap'}}>
+                          {item.variants&&item.variants.length>0
+                            ? item.variants.length===1
+                              ? `₹${item.variants[0].price}`
+                              : `₹${item.variants[0].price}–₹${item.variants[item.variants.length-1].price}`
+                            : `₹${item.price}`
+                          }
+                        </div>
                       </div>
                       <div style={{fontSize:'0.73rem',color:'#888',marginBottom:'0.75rem',lineHeight:'1.4'}}>{item.desc}</div>
                       <div style={{display:'flex',gap:'0.35rem'}}>
-                        <button onClick={()=>setMenuModal({open:true,item:{...item},isEdit:true})} style={{...btn('#3b82f6'),padding:'0.3rem 0.75rem',fontSize:'0.75rem',flex:1}}>✏️ Edit</button>
+                        <button onClick={()=>{setMenuModal({open:true,item:{...item},isEdit:true});setModalVariants(item.variants&&item.variants.length>0?item.variants.map(v=>({name:v.name,price:String(v.price)})):[{name:'Regular',price:String(item.price)}]);}} style={{...btn('#3b82f6'),padding:'0.3rem 0.75rem',fontSize:'0.75rem',flex:1}}>✏️ Edit</button>
                         <button onClick={()=>{saveMenuItemApi({id:item.id,available:item.available===false}).then(()=>refresh()).catch(e=>alert(String(e)));}} style={{...btn(item.available===false?'#16a34a':'#6b7280'),padding:'0.3rem 0.65rem',fontSize:'0.75rem'}}>{item.available===false?'✅':'⏸'}</button>
                         <button onClick={()=>{if(confirm(`Delete "${item.name}"?`)){deleteMenuItemApi(item.id).then(()=>refresh()).catch(e=>alert(String(e)));}}} style={{...btn('#ef4444'),padding:'0.3rem 0.6rem',fontSize:'0.75rem'}}>🗑</button>
                       </div>
@@ -1933,8 +1970,18 @@ export default function AdminPage() {
                 <textarea value={menuModal.item.desc||''} onChange={e=>setMenuModal(m=>({...m,item:{...m.item,desc:e.target.value}}))} placeholder="Short appetizing description…" rows={2} style={{...inp,resize:'vertical' as const}} />
               </div>
               <div style={{marginBottom:'0.85rem'}}>
-                <label style={{fontSize:'0.76rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.28rem'}}>Price (₹) *</label>
-                <input type="number" value={menuModal.item.price||''} onChange={e=>setMenuModal(m=>({...m,item:{...m.item,price:parseInt(e.target.value)||0}}))} placeholder="e.g. 280" min="1" style={{...inp}} />
+                <label style={{fontSize:'0.76rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.28rem'}}>Pricing Variants * <span style={{fontWeight:400,color:'#999'}}>(e.g. Half / Full / 1 Piece)</span></label>
+                {modalVariants.map((v,i)=>(
+                  <div key={i} style={{display:'flex',gap:'0.4rem',marginBottom:'0.4rem',alignItems:'center'}}>
+                    <input value={v.name} onChange={e=>updateVariantRow(i,'name',e.target.value)} placeholder="Name (e.g. Half)" style={{...inp,flex:2,padding:'0.45rem 0.6rem'}} />
+                    <div style={{position:'relative',flex:1}}>
+                      <span style={{position:'absolute',left:'0.5rem',top:'50%',transform:'translateY(-50%)',color:'#888',fontSize:'0.82rem'}}>₹</span>
+                      <input type="number" value={v.price} onChange={e=>updateVariantRow(i,'price',e.target.value)} placeholder="0" min="1" style={{...inp,paddingLeft:'1.4rem',padding:'0.45rem 0.4rem 0.45rem 1.4rem'}} />
+                    </div>
+                    {modalVariants.length>1&&<button onClick={()=>removeVariantRow(i)} style={{background:'#fef2f2',border:'1px solid #fca5a5',color:'#ef4444',borderRadius:6,cursor:'pointer',padding:'0.35rem 0.5rem',fontSize:'0.85rem',flexShrink:0}}>🗑</button>}
+                  </div>
+                ))}
+                <button onClick={addVariantRow} style={{width:'100%',background:'#f0fdf4',border:'1px dashed #16a34a',color:'#16a34a',borderRadius:8,cursor:'pointer',padding:'0.4rem',fontSize:'0.8rem',fontWeight:700,fontFamily:'Poppins,sans-serif',marginTop:'0.2rem'}}>＋ Add Variant</button>
               </div>
               <div style={{marginBottom:'1.1rem'}}>
                 <label style={{fontSize:'0.76rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.28rem'}}>Image URL</label>

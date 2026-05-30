@@ -19,6 +19,13 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     if (body.badge     !== undefined) updates.badge       = body.badge;
     if (body.img       !== undefined) updates.img_url     = body.img;
     if (body.available !== undefined) updates.available   = body.available;
+    if (body.variants !== undefined) {
+      updates.variants = body.variants;
+      // Keep price in sync with first variant for backward compat
+      if (Array.isArray(body.variants) && body.variants.length > 0) {
+        updates.price = (body.variants as { name: string; price: number }[])[0].price;
+      }
+    }
     const { error } = await sb.from('menu_items').update(updates).eq('id', id);
     if (error) {
       console.error('[PATCH /api/menu/[id]] Supabase error:', error.message);

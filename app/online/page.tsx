@@ -5,16 +5,34 @@ import { useState, useEffect, useRef } from 'react';
 import { getMenu, createOrder, lookupOrderByContact, MenuItem } from '@/lib/api';
 import { safeApiCall } from '@/lib/safe-api';
 
-const CATEGORIES = ['All', 'Biryani', 'Starters', 'Mains', 'Breads', 'Desserts', 'Drinks'];
+const CATEGORIES = [
+  'All',
+  'Veg Starters','Non Veg Starters',
+  'Veg Biryani','Non Veg Biryani',
+  'Main Course Veg','Main Course Non Veg',
+  'Tandoori Specials','Rice Items',
+  'Indian Breads','Egg Specials',
+  'Pot Specials','Arabic Mandi',
+];
 const BADGE_LABELS: Record<string, string> = {
   bestseller: '⭐ Bestseller', popular: '🔥 Popular',
   chef: "👨‍🍳 Chef's Special", famous: '🏆 Famous', new: '✨ New',
 };
 const MAX_QTY = 20;
 
+interface CartItem {
+  key:          string;   // `${itemId}__${variantName}`
+  itemId:       string;
+  itemName:     string;
+  variantName:  string;   // '' for single-price items
+  variantPrice: number;
+  qty:          number;
+}
+
 export default function OnlineOrderPage() {
   const [menu, setMenu]                 = useState<MenuItem[]>([]);
-  const [cart, setCart]                 = useState<{ item: MenuItem; qty: number }[]>([]);
+  const [cart, setCart]                 = useState<CartItem[]>([]);
+  const [variantModal, setVariantModal] = useState<{open:boolean;item:MenuItem|null;selected:string}>({open:false,item:null,selected:''});
   const [filter, setFilter]             = useState('All');
   const [cartOpen, setCartOpen]         = useState(false);
   const [showCheckout, setShowCheckout] = useState(false);
@@ -59,24 +77,52 @@ export default function OnlineOrderPage() {
   const filtered  = filter === 'All'
     ? menu.filter(m => m.available !== false)
     : menu.filter(m => m.category === filter && m.available !== false);
-  const cartTotal = cart.reduce((s, c) => s + c.item.price * c.qty, 0);
+  const cartTotal = cart.reduce((s, c) => s + c.variantPrice * c.qty, 0);
   const cartCount = cart.reduce((s, c) => s + c.qty, 0);
 
-  function addToCart(item: MenuItem) {
+  function itemCartQty(itemId: string): number {
+    return cart.filter(c => c.itemId === itemId).reduce((s, c) => s + c.qty, 0);
+  }
+
+  function addDirectToCart(item: MenuItem) {
+    // For items with no variants
+    const key = `${item.id}__`;
     setCart(prev => {
-      const ex = prev.find(c => c.item.id === item.id);
+      const ex = prev.find(c => c.key === key);
       if (ex) {
         if (ex.qty >= MAX_QTY) return prev;
-        return prev.map(c => c.item.id === item.id ? { ...c, qty: c.qty + 1 } : c);
+        return prev.map(c => c.key === key ? { ...c, qty: c.qty + 1 } : c);
       }
-      return [...prev, { item, qty: 1 }];
+      return [...prev, { key, itemId: item.id, itemName: item.name, variantName: '', variantPrice: item.price, qty: 1 }];
     });
   }
 
-  function changeQty(id: string, delta: number) {
+  function openVariantPicker(item: MenuItem) {
+    const first = item.variants?.[0]?.name ?? '';
+    setVariantModal({ open: true, item, selected: first });
+  }
+
+  function confirmVariantAdd() {
+    const { item, selected } = variantModal;
+    if (!item || !selected) return;
+    const variant = item.variants?.find(v => v.name === selected);
+    if (!variant) return;
+    const key = `${item.id}__${selected}`;
+    setCart(prev => {
+      const ex = prev.find(c => c.key === key);
+      if (ex) {
+        if (ex.qty >= MAX_QTY) return prev;
+        return prev.map(c => c.key === key ? { ...c, qty: c.qty + 1 } : c);
+      }
+      return [...prev, { key, itemId: item.id, itemName: item.name, variantName: selected, variantPrice: variant.price, qty: 1 }];
+    });
+    setVariantModal({ open: false, item: null, selected: '' });
+  }
+
+  function changeQty(key: string, delta: number) {
     setCart(prev =>
       prev
-        .map(c => c.item.id === id ? { ...c, qty: Math.min(c.qty + delta, MAX_QTY) } : c)
+        .map(c => c.key === key ? { ...c, qty: Math.min(Math.max(0, c.qty + delta), MAX_QTY) } : c)
         .filter(c => c.qty > 0),
     );
   }
@@ -94,11 +140,11 @@ export default function OnlineOrderPage() {
 
     try {
       const items = cart.map(c => ({
-        name:       c.item.name,
-        price:      c.item.price,
+        name:       c.variantName ? `${c.itemName} (${c.variantName})` : c.itemName,
+        price:      c.variantPrice,
         qty:        c.qty,
-        subtotal:   c.item.price * c.qty,
-        menuItemId: c.item.id,
+        subtotal:   c.variantPrice * c.qty,
+        menuItemId: c.itemId,
       }));
 
       const orderData = {
@@ -252,8 +298,10 @@ export default function OnlineOrderPage() {
       {/* Menu grid */}
       <div style={{ padding: '0 1.5rem 6rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(270px,1fr))', gap: '1rem' }}>
         {filtered.map(item => {
-          const inCart = cart.find(c => c.item.id === item.id);
-          const atMax  = inCart && inCart.qty >= MAX_QTY;
+          const hasVariants = item.variants && item.variants.length > 0;
+          const totalQty    = itemCartQty(item.id);
+          const noVarKey    = `${item.id}__`;
+          const noVarEntry  = cart.find(c => c.key === noVarKey);
           return (
             <div key={item.id} style={{ background: 'white', borderRadius: 12, overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.07)', border: '1px solid #e0f2fe' }}>
               {item.img && <img src={item.img} alt={item.name} style={{ width: '100%', height: '150px', objectFit: 'cover' }} />}
@@ -266,17 +314,39 @@ export default function OnlineOrderPage() {
                     </span>
                   )}
                 </div>
-                <div style={{ fontSize: '0.75rem', color: '#888', marginBottom: '0.7rem', lineHeight: 1.4 }}>{item.desc}</div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontWeight: 900, color: O, fontSize: '1rem' }}>₹{item.price}</span>
-                  {inCart ? (
+                <div style={{ fontSize: '0.75rem', color: '#888', marginBottom: '0.5rem', lineHeight: 1.4 }}>{item.desc}</div>
+                {/* Price range */}
+                <div style={{ fontWeight: 900, color: O, fontSize: '0.9rem', marginBottom: '0.5rem' }}>
+                  {hasVariants
+                    ? item.variants!.length === 1
+                      ? `₹${item.variants![0].price}`
+                      : `₹${item.variants![0].price} – ₹${item.variants![item.variants!.length-1].price}`
+                    : `₹${item.price}`
+                  }
+                </div>
+                {/* In-cart variant pills */}
+                {hasVariants && totalQty > 0 && (
+                  <div style={{ marginBottom: '0.4rem', display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
+                    {cart.filter(c => c.itemId === item.id).map(c => (
+                      <span key={c.key} style={{ fontSize: '0.65rem', background: '#eff6ff', color: O, fontWeight: 700, borderRadius: 10, padding: '0.1rem 0.45rem' }}>
+                        {c.variantName} ×{c.qty}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center' }}>
+                  {hasVariants ? (
+                    <button onClick={() => openVariantPicker(item)} style={{ background: O, color: 'white', border: 'none', padding: '0.38rem 0.95rem', borderRadius: 20, fontWeight: 700, cursor: 'pointer', fontSize: '0.8rem', fontFamily: 'Poppins,sans-serif' }}>
+                      {totalQty > 0 ? `+ Add (${totalQty} in cart)` : '+ Add'}
+                    </button>
+                  ) : noVarEntry ? (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                      <button onClick={() => changeQty(item.id, -1)} style={{ width: 28, height: 28, borderRadius: '50%', border: `2px solid ${O}`, background: 'white', color: O, fontWeight: 900, cursor: 'pointer', fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>−</button>
-                      <span style={{ fontWeight: 800, minWidth: 20, textAlign: 'center' }}>{inCart.qty}</span>
-                      <button onClick={() => changeQty(item.id, 1)} disabled={!!atMax} style={{ width: 28, height: 28, borderRadius: '50%', background: atMax ? '#ddd' : O, border: 'none', color: 'white', fontWeight: 900, cursor: atMax ? 'not-allowed' : 'pointer', fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
+                      <button onClick={() => changeQty(noVarKey, -1)} style={{ width: 28, height: 28, borderRadius: '50%', border: `2px solid ${O}`, background: 'white', color: O, fontWeight: 900, cursor: 'pointer', fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>−</button>
+                      <span style={{ fontWeight: 800, minWidth: 20, textAlign: 'center' }}>{noVarEntry.qty}</span>
+                      <button onClick={() => addDirectToCart(item)} disabled={noVarEntry.qty >= MAX_QTY} style={{ width: 28, height: 28, borderRadius: '50%', background: noVarEntry.qty >= MAX_QTY ? '#ddd' : O, border: 'none', color: 'white', fontWeight: 900, cursor: noVarEntry.qty >= MAX_QTY ? 'not-allowed' : 'pointer', fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
                     </div>
                   ) : (
-                    <button onClick={() => addToCart(item)} style={{ background: O, color: 'white', border: 'none', padding: '0.38rem 0.95rem', borderRadius: 20, fontWeight: 700, cursor: 'pointer', fontSize: '0.8rem', fontFamily: 'Poppins,sans-serif' }}>+ Add</button>
+                    <button onClick={() => addDirectToCart(item)} style={{ background: O, color: 'white', border: 'none', padding: '0.38rem 0.95rem', borderRadius: 20, fontWeight: 700, cursor: 'pointer', fontSize: '0.8rem', fontFamily: 'Poppins,sans-serif' }}>+ Add</button>
                   )}
                 </div>
               </div>
@@ -366,15 +436,17 @@ export default function OnlineOrderPage() {
               {!cart.length
                 ? <p style={{ color: '#999', textAlign: 'center', padding: '2rem 0' }}>Your cart is empty</p>
                 : cart.map(c => (
-                  <div key={c.item.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.7rem 0', borderBottom: '1px solid #f0f9ff' }}>
+                  <div key={c.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.7rem 0', borderBottom: '1px solid #f0f9ff' }}>
                     <div>
-                      <div style={{ fontWeight: 600, fontSize: '0.88rem' }}>{c.item.name}</div>
-                      <div style={{ fontSize: '0.75rem', color: '#888' }}>₹{c.item.price} × {c.qty} = <strong>₹{c.item.price * c.qty}</strong></div>
+                      <div style={{ fontWeight: 600, fontSize: '0.88rem' }}>
+                        {c.itemName}{c.variantName ? <span style={{ color: O, fontSize: '0.8rem' }}> ({c.variantName})</span> : ''}
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: '#888' }}>₹{c.variantPrice} × {c.qty} = <strong>₹{c.variantPrice * c.qty}</strong></div>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                      <button onClick={() => changeQty(c.item.id, -1)} style={{ width: 26, height: 26, borderRadius: '50%', border: `2px solid ${O}`, background: 'white', color: O, fontWeight: 900, cursor: 'pointer' }}>−</button>
+                      <button onClick={() => changeQty(c.key, -1)} style={{ width: 26, height: 26, borderRadius: '50%', border: `2px solid ${O}`, background: 'white', color: O, fontWeight: 900, cursor: 'pointer' }}>−</button>
                       <span style={{ fontWeight: 800, minWidth: 18, textAlign: 'center' }}>{c.qty}</span>
-                      <button onClick={() => changeQty(c.item.id, 1)} disabled={c.qty >= MAX_QTY} style={{ width: 26, height: 26, borderRadius: '50%', background: c.qty >= MAX_QTY ? '#ddd' : O, border: 'none', color: 'white', fontWeight: 900, cursor: c.qty >= MAX_QTY ? 'not-allowed' : 'pointer' }}>+</button>
+                      <button onClick={() => changeQty(c.key, 1)} disabled={c.qty >= MAX_QTY} style={{ width: 26, height: 26, borderRadius: '50%', background: c.qty >= MAX_QTY ? '#ddd' : O, border: 'none', color: 'white', fontWeight: 900, cursor: c.qty >= MAX_QTY ? 'not-allowed' : 'pointer' }}>+</button>
                     </div>
                   </div>
                 ))
@@ -471,8 +543,8 @@ export default function OnlineOrderPage() {
               {/* Order summary */}
               <div style={{ background: '#eff6ff', borderRadius: 8, padding: '0.75rem', marginBottom: '1rem' }}>
                 {cart.map(c => (
-                  <div key={c.item.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem', padding: '0.18rem 0' }}>
-                    <span>{c.item.name} × {c.qty}</span><span>₹{c.item.price * c.qty}</span>
+                  <div key={c.key} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem', padding: '0.18rem 0' }}>
+                    <span>{c.itemName}{c.variantName ? ` (${c.variantName})` : ''} × {c.qty}</span><span>₹{c.variantPrice * c.qty}</span>
                   </div>
                 ))}
                 <div style={{ borderTop: `2px solid ${O}`, marginTop: '0.4rem', paddingTop: '0.4rem', display: 'flex', justifyContent: 'space-between', fontWeight: 900, color: O }}>
@@ -484,6 +556,33 @@ export default function OnlineOrderPage() {
                 {isSubmitting ? '⏳ Placing Order…' : `✅ Place Order — ₹${cartTotal}`}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Variant Picker Modal ─────────────────────────────────────────── */}
+      {variantModal.open && variantModal.item && (
+        <div onClick={()=>setVariantModal({open:false,item:null,selected:''})} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:400,display:'flex',alignItems:'flex-end',justifyContent:'center'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:'white',borderRadius:'20px 20px 0 0',width:'100%',maxWidth:480,padding:'1.25rem 1.5rem 2.5rem'}}>
+            <div style={{width:40,height:4,background:'#ddd',borderRadius:2,margin:'0 auto 1rem'}} />
+            <div style={{fontWeight:800,fontSize:'1rem',color:'#1e3a5f',marginBottom:'0.2rem'}}>{variantModal.item.name}</div>
+            <div style={{fontSize:'0.75rem',color:'#888',marginBottom:'1rem'}}>Select your portion size</div>
+            <div style={{display:'flex',flexDirection:'column',gap:'0.5rem',marginBottom:'1.25rem'}}>
+              {variantModal.item.variants?.map(v=>(
+                <label key={v.name} onClick={()=>setVariantModal(m=>({...m,selected:v.name}))} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0.75rem 1rem',border:`2px solid ${variantModal.selected===v.name?O:'#e5e7eb'}`,borderRadius:10,cursor:'pointer',background:variantModal.selected===v.name?'#eff6ff':'white'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:'0.6rem'}}>
+                    <div style={{width:18,height:18,borderRadius:'50%',border:`3px solid ${variantModal.selected===v.name?O:'#ddd'}`,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                      {variantModal.selected===v.name&&<div style={{width:8,height:8,borderRadius:'50%',background:O}} />}
+                    </div>
+                    <span style={{fontWeight:700,fontSize:'0.9rem',color:'#1e3a5f'}}>{v.name}</span>
+                  </div>
+                  <span style={{fontWeight:900,color:O,fontSize:'0.95rem'}}>₹{v.price}</span>
+                </label>
+              ))}
+            </div>
+            <button onClick={confirmVariantAdd} disabled={!variantModal.selected} style={{width:'100%',background:variantModal.selected?O:'#bbb',color:'white',border:'none',padding:'0.85rem',borderRadius:12,fontWeight:700,fontSize:'1rem',cursor:variantModal.selected?'pointer':'not-allowed',fontFamily:'Poppins,sans-serif'}}>
+              Add to Cart {variantModal.selected?`— ₹${variantModal.item.variants?.find(v=>v.name===variantModal.selected)?.price??''}`:''}
+            </button>
           </div>
         </div>
       )}

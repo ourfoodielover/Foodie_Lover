@@ -19,6 +19,7 @@ export interface OrderItem {
   price:      number;
   subtotal:   number;
   itemStatus?: string;
+  variant?:   string;  // e.g. "Half", "Full", "1 Piece" — embedded in name already
 }
 
 export interface Order {
@@ -58,10 +59,11 @@ export interface MenuItem {
   category:  string;
   name:      string;
   desc:      string;
-  price:     number;
+  price:     number;        // = first variant's price (backward compat)
   img:       string;
   badge:     string;
   available: boolean;
+  variants:  { name: string; price: number }[];  // pricing variants
 }
 
 export interface Table {

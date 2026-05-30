@@ -33,6 +33,7 @@ export async function GET(req: NextRequest) {
       badge:     r.badge,
       img:       r.img_url,
       available: r.available,
+      variants:  r.variants ?? [],
     }));
     // Cache: public (CDN) for 60 s, stale-while-revalidate for another 30 s.
     return NextResponse.json(items, {
@@ -50,15 +51,23 @@ export async function POST(req: NextRequest) {
     const sb   = getServerClient();
     const body = await req.json() as Record<string, unknown>;
     const rid  = (body.restaurantId as string | undefined) ?? 'rest_default';
-    if (!body.name || !body.category || body.price === undefined) {
-      return NextResponse.json({ error: 'name, category and price are required' }, { status: 400 });
+    if (!body.name || !body.category) {
+      return NextResponse.json({ error: 'name and category are required' }, { status: 400 });
     }
+    const variants = Array.isArray(body.variants) && body.variants.length > 0
+      ? body.variants
+      : (body.price !== undefined ? [{ name: 'Regular', price: Number(body.price) }] : []);
+    if (variants.length === 0) {
+      return NextResponse.json({ error: 'At least one pricing variant is required' }, { status: 400 });
+    }
+    const price = variants[0].price;
     const id = newId('MI');
     const { error } = await sb.from('menu_items').insert({
       id, restaurant_id: rid,
       name:        body.name,
       category:    body.category,
-      price:       body.price,
+      price,
+      variants,
       description: body.desc ?? body.description ?? null,
       badge:       body.badge ?? null,
       img_url:     body.img  ?? null,
