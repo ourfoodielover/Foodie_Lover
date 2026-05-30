@@ -68,16 +68,16 @@ export async function GET() {
 
     if (pinSettings.length > 0) {
       // ignoreDuplicates: false (default) — always update PIN rows when env vars are set
-      await sb.from('restaurant_settings').upsert(
+      const { error: pinErr } = await sb.from('restaurant_settings').upsert(
         pinSettings.map(s => ({
           id:            `RS_${s.key}`,
           restaurant_id: rid,
           key:           s.key,
           value:         s.value,
-          updated_at:    new Date().toISOString(),
         })),
         { onConflict: 'id' },
       );
+      if (pinErr) throw new Error(`PIN upsert failed: ${pinErr.message}`);
     }
 
     // ── 4. Seed menu items (skip any that already exist by name) ─────────────
@@ -112,6 +112,13 @@ export async function GET() {
       restaurantId: rid,
       name:         existing?.name ?? 'Foodie Lover',
       seeded:       !existing,
+      // Shows which PIN env vars were detected — values never exposed
+      pinsUpdated: pinSettings.map(s => s.key),
+      pinEnvMissing: [
+        !adminPin   && 'ADMIN_PIN',
+        !kitchenPin && 'KITCHEN_PIN',
+        !managerPin && 'MANAGER_PIN',
+      ].filter(Boolean),
     });
   } catch (err) {
     console.error('[GET /api/init] unexpected error:', err);
