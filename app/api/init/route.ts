@@ -67,15 +67,15 @@ export async function GET() {
     if (managerPin) pinSettings.push({ key: 'manager_pin', value: managerPin });
 
     if (pinSettings.length > 0) {
-      // ignoreDuplicates: false (default) — always update PIN rows when env vars are set
+      // Use restaurant_id,key as the conflict target — matches the actual unique constraint.
+      // ignoreDuplicates omitted (defaults to false) so existing rows are always updated.
       const { error: pinErr } = await sb.from('restaurant_settings').upsert(
         pinSettings.map(s => ({
-          id:            `RS_${s.key}`,
           restaurant_id: rid,
           key:           s.key,
           value:         s.value,
         })),
-        { onConflict: 'id' },
+        { onConflict: 'restaurant_id,key' },
       );
       if (pinErr) throw new Error(`PIN upsert failed: ${pinErr.message}`);
     }
