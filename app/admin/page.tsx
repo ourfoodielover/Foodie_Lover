@@ -110,9 +110,10 @@ export default function AdminPage() {
   const [staffAccounts, setStaffAccounts] = useState<StaffMember[]>([]);
   const [staffForm,  setStaffForm]  = useState({ name: '', username: '', pin: '' });
   const [staffMsg,   setStaffMsg]   = useState('');
+  // kitchenPin / managerPin are write-only form fields for setting a NEW pin.
+  // They are never pre-filled with the current value — PINs are never sent to the browser.
   const [kitchenPin, setKitchenPin] = useState('');
   const [managerPin, setManagerPin] = useState('');
-  const [adminDiscountPin, setAdminDiscountPin] = useState('1234');
   const [kitchenPinMsg, setKitchenPinMsg] = useState('');
   const [managerPinMsg, setManagerPinMsg] = useState('');
   const [editPinId,  setEditPinId]  = useState('');
@@ -249,9 +250,7 @@ export default function AdminPage() {
       ]);
       setStaffAccounts(waiters);
       setDeliveryAccounts(deliveryStaff);
-      setKitchenPin(settings.kitchen_pin ?? '0000');
-      setManagerPin(settings.manager_pin ?? '9999');
-      setAdminDiscountPin(settings.admin_pin ?? '1234');
+      // PINs are intentionally NOT loaded into client state — server-side only.
       setSecSetup(settings.security_question
         ? { question: settings.security_question, setupAt: settings.security_setup_at ?? '' }
         : null
@@ -389,7 +388,20 @@ export default function AdminPage() {
       }
     }
 
-    if (pinInput !== adminDiscountPin) { setPinMsg('❌ Wrong PIN'); return; }
+    // Verify admin PIN server-side — PIN never stored in client state
+    setPinMsg('⏳ Verifying…');
+    try {
+      const verifyRes = await fetch('/api/auth/verify-pin', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ role: 'admin', pin: pinInput }),
+      });
+      const verifyResult = await verifyRes.json() as { ok: boolean; error?: string };
+      if (!verifyResult.ok) { setPinMsg(`❌ ${verifyResult.error ?? 'Wrong PIN'}`); return; }
+    } catch {
+      setPinMsg('❌ Could not verify PIN. Try again.');
+      return;
+    }
     try {
       await apiApplyDiscount(discountModal.orderId, amt, discNote||'Owner discount');
       setDiscountModal({open:false,orderId:''}); setDiscAmt(''); setDiscNote(''); setPinInput(''); setPinMsg('');
@@ -503,16 +515,24 @@ export default function AdminPage() {
     <button onClick={()=>setSection(id)} style={{padding:'0.55rem 1.25rem',border:'none',background:section===id?'#E65C00':'transparent',color:section===id?'white':'#bbb',fontWeight:700,cursor:'pointer',fontFamily:'Poppins,sans-serif',fontSize:'0.83rem',borderRadius:6,transition:'all .2s',whiteSpace:'nowrap' as const}}>{label}</button>
   );
 
-  // ── Admin PIN change ─────────────────────────────────────────────────────
+  // ── Admin PIN change — verified server-side via /api/auth/change-pin ───────
   async function changeAdminPin() {
     setAdminPinMsg('');
     if (!adminPinOld) { setAdminPinMsg('❌ Enter your current PIN'); return; }
-    if (adminPinOld !== adminDiscountPin) { setAdminPinMsg('❌ Current PIN is incorrect'); return; }
     if (adminNewPin.length < 4) { setAdminPinMsg('❌ New PIN must be at least 4 digits'); return; }
     if (adminNewPin !== adminNewPin2) { setAdminPinMsg('❌ New PINs do not match'); return; }
+    setAdminPinMsg('⏳ Updating…');
     try {
-      await saveSetting('admin_pin', adminNewPin);
-      setAdminDiscountPin(adminNewPin);
+      const res    = await fetch('/api/auth/change-pin', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ currentPin: adminPinOld, newPin: adminNewPin }),
+      });
+      const result = await res.json() as { ok: boolean; error?: string };
+      if (!result.ok) {
+        setAdminPinMsg(`❌ ${result.error ?? 'Failed to update PIN'}`);
+        return;
+      }
       setAdminPinMsg('✅ Admin PIN updated successfully!');
       setAdminPinOld(''); setAdminNewPin(''); setAdminNewPin2('');
       setTimeout(() => setAdminPinMsg(''), 4000);
@@ -1562,31 +1582,31 @@ export default function AdminPage() {
             <button onClick={saveSecurityQuestion} style={{...btn('#7c3aed')}}>🛡️ {secSetup?'Update':'Save'} Security Question</button>
           </div>
 
-          {/* Kitchen & Manager PINs */}
+          {/* Kitchen & Manager PINs — write-only; current value never shown */}
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'1rem',marginBottom:'1.5rem'}}>
             <div style={card('#3b82f6')}>
               <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:'1rem',fontWeight:700,marginBottom:'0.75rem',color:'#1A0800'}}>🔥 Kitchen PIN</h3>
-              <p style={{fontSize:'0.78rem',color:'#666',marginBottom:'0.75rem'}}>Shared PIN used by all kitchen staff to log in at <code>/kitchen</code></p>
+              <p style={{fontSize:'0.78rem',color:'#666',marginBottom:'0.75rem'}}>Set a new PIN for kitchen staff at <code>/kitchen</code>. Leave blank to keep current.</p>
               <input
                 value={kitchenPin}
                 onChange={e=>setKitchenPin(e.target.value.replace(/\D/g,''))}
-                maxLength={6} type="password" placeholder="••••"
+                maxLength={6} type="password" inputMode="numeric" placeholder="New PIN (4+ digits)"
                 style={{...inp,letterSpacing:'0.4em',textAlign:'center',marginBottom:'0.5rem'}}
               />
               {kitchenPinMsg && <div style={{fontSize:'0.75rem',color:kitchenPinMsg.includes('✅')?'#16a34a':'#ef4444',marginBottom:'0.4rem'}}>{kitchenPinMsg}</div>}
-              <button onClick={saveKitchenPinFn} style={{...btn('#3b82f6'),width:'100%'}}>💾 Save Kitchen PIN</button>
+              <button onClick={saveKitchenPinFn} style={{...btn('#3b82f6'),width:'100%'}}>💾 Set Kitchen PIN</button>
             </div>
             <div style={card('#16a34a')}>
               <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:'1rem',fontWeight:700,marginBottom:'0.75rem',color:'#1A0800'}}>💳 Manager PIN</h3>
-              <p style={{fontSize:'0.78rem',color:'#666',marginBottom:'0.75rem'}}>PIN used by managers to access counter billing at <code>/manager</code></p>
+              <p style={{fontSize:'0.78rem',color:'#666',marginBottom:'0.75rem'}}>Set a new PIN for manager billing at <code>/manager</code>. Leave blank to keep current.</p>
               <input
                 value={managerPin}
                 onChange={e=>setManagerPin(e.target.value.replace(/\D/g,''))}
-                maxLength={6} type="password" placeholder="••••"
+                maxLength={6} type="password" inputMode="numeric" placeholder="New PIN (4+ digits)"
                 style={{...inp,letterSpacing:'0.4em',textAlign:'center',marginBottom:'0.5rem'}}
               />
               {managerPinMsg && <div style={{fontSize:'0.75rem',color:managerPinMsg.includes('✅')?'#16a34a':'#ef4444',marginBottom:'0.4rem'}}>{managerPinMsg}</div>}
-              <button onClick={saveManagerPinFn} style={{...btn('#16a34a'),width:'100%'}}>💾 Save Manager PIN</button>
+              <button onClick={saveManagerPinFn} style={{...btn('#16a34a'),width:'100%'}}>💾 Set Manager PIN</button>
             </div>
           </div>
 
@@ -1973,14 +1993,30 @@ export default function AdminPage() {
 
       {/* ═══════ PIN MANAGER ═══════ */}
       {showPinMgr && (
-        <div className="modal-overlay show" onClick={()=>{setShowPinMgr(false);setNewPin('');setNewPinMsg('');}}>
+        <div className="modal-overlay show" onClick={()=>{setShowPinMgr(false);setNewPin('');setNewPinMsg('');setAdminPinOld('');}}>
           <div onClick={e=>e.stopPropagation()} style={{background:'white',borderRadius:16,width:'100%',maxWidth:350,padding:'1.75rem',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
-            <h3 style={{fontFamily:"'Playfair Display',serif",marginBottom:'0.3rem',fontSize:'1.1rem'}}>🔑 Owner PIN</h3>
-            <p style={{fontSize:'0.8rem',color:'#666',marginBottom:'0.9rem'}}>Used to authorise discounts. Current PIN: <strong>{adminDiscountPin}</strong></p>
+            <h3 style={{fontFamily:"'Playfair Display',serif",marginBottom:'0.3rem',fontSize:'1.1rem'}}>🔑 Change Owner PIN</h3>
+            <p style={{fontSize:'0.8rem',color:'#666',marginBottom:'0.9rem'}}>Used to authorise discounts. Enter your current PIN to change it.</p>
+            <label style={{fontSize:'0.75rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.28rem'}}>Current PIN</label>
+            <input type="password" inputMode="numeric" value={adminPinOld} onChange={e=>setAdminPinOld(e.target.value.replace(/\D/g,''))} placeholder="Current PIN" maxLength={8} style={{...inp,letterSpacing:'0.35em',textAlign:'center' as const,marginBottom:'0.6rem'}} />
             <label style={{fontSize:'0.75rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.28rem'}}>New 4-digit PIN</label>
-            <input type="password" value={newPin} onChange={e=>setNewPin(e.target.value)} placeholder="••••" maxLength={4} style={{...inp,letterSpacing:'0.35em',textAlign:'center' as const,marginBottom:'0.25rem'}} />
-            {newPinMsg && <div style={{fontSize:'0.76rem',color:newPinMsg.includes('✓')?'#16a34a':'#ef4444',marginBottom:'0.5rem'}}>{newPinMsg}</div>}
-            <button onClick={()=>{if(!/^\d{4}$/.test(newPin)){setNewPinMsg('❌ Must be exactly 4 digits');return;} void saveSetting('admin_pin', newPin).then(()=>{setAdminDiscountPin(newPin);setNewPinMsg('✓ PIN updated!');setTimeout(()=>{setShowPinMgr(false);setNewPin('');setNewPinMsg('');},1500);}).catch(e=>setNewPinMsg(`❌ ${e instanceof Error ? e.message : 'Failed to save PIN'}`));}} style={{...btn(),width:'100%',marginTop:'0.5rem'}}>Save PIN</button>
+            <input type="password" inputMode="numeric" value={newPin} onChange={e=>setNewPin(e.target.value.replace(/\D/g,''))} placeholder="New PIN" maxLength={8} style={{...inp,letterSpacing:'0.35em',textAlign:'center' as const,marginBottom:'0.25rem'}} />
+            {newPinMsg && <div style={{fontSize:'0.76rem',color:newPinMsg.includes('✓')||newPinMsg.includes('✅')?'#16a34a':'#ef4444',marginBottom:'0.5rem'}}>{newPinMsg}</div>}
+            <button onClick={async ()=>{
+              if (!adminPinOld) { setNewPinMsg('❌ Enter your current PIN'); return; }
+              if (newPin.length < 4) { setNewPinMsg('❌ New PIN must be at least 4 digits'); return; }
+              setNewPinMsg('⏳ Updating…');
+              try {
+                const res = await fetch('/api/auth/change-pin', {
+                  method: 'POST', headers: {'Content-Type':'application/json'},
+                  body: JSON.stringify({ currentPin: adminPinOld, newPin }),
+                });
+                const result = await res.json() as { ok: boolean; error?: string };
+                if (!result.ok) { setNewPinMsg(`❌ ${result.error ?? 'Failed'}`); return; }
+                setNewPinMsg('✅ PIN updated!');
+                setTimeout(()=>{ setShowPinMgr(false); setNewPin(''); setNewPinMsg(''); setAdminPinOld(''); }, 1500);
+              } catch { setNewPinMsg('❌ Server error'); }
+            }} style={{...btn(),width:'100%',marginTop:'0.5rem'}}>Update PIN</button>
           </div>
         </div>
       )}

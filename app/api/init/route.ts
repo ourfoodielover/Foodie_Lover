@@ -32,16 +32,8 @@ export async function GET() {
     );
 
     // ── 3. Seed default restaurant settings (PINs, tax rate, etc.) ───────────
-    // PINs are read from Vercel environment variables (ADMIN_PIN, KITCHEN_PIN,
-    // MANAGER_PIN). If env vars are not set, PIN rows are NOT seeded — the login
-    // pages will show "PIN not configured" until the admin sets them in Supabase
-    // or in Vercel env vars and re-runs /api/init.
-    // Non-secret settings always seed with safe defaults.
-    const adminPin   = process.env.ADMIN_PIN   ?? null;
-    const kitchenPin = process.env.KITCHEN_PIN ?? null;
-    const managerPin = process.env.MANAGER_PIN ?? null;
-
-    const defaultSettings: { key: string; value: string }[] = [
+    // Non-secret settings: insert once, never overwrite (ignoreDuplicates: true).
+    const nonSecretSettings = [
       { key: 'tax_rate',             value: '5'    },
       { key: 'service_charge',       value: '0'    },
       { key: 'currency',             value: 'INR'  },
@@ -52,12 +44,8 @@ export async function GET() {
       { key: 'waiter_call_cooldown', value: '120'  },
       { key: 'receipt_email_from',   value: ''     },
     ];
-    // Only seed PINs when env vars are explicitly set
-    if (adminPin)   defaultSettings.push({ key: 'admin_pin',   value: adminPin });
-    if (kitchenPin) defaultSettings.push({ key: 'kitchen_pin', value: kitchenPin });
-    if (managerPin) defaultSettings.push({ key: 'manager_pin', value: managerPin });
     await sb.from('restaurant_settings').upsert(
-      defaultSettings.map(s => ({
+      nonSecretSettings.map(s => ({
         id:            `RS_${s.key}`,
         restaurant_id: rid,
         key:           s.key,
@@ -65,6 +53,32 @@ export async function GET() {
       })),
       { onConflict: 'id', ignoreDuplicates: true },
     );
+
+    // PIN settings: read from Vercel env vars and ALWAYS overwrite the DB value.
+    // This means updating ADMIN_PIN / KITCHEN_PIN / MANAGER_PIN in Vercel and
+    // re-deploying (or calling /api/init) immediately takes effect.
+    const adminPin   = process.env.ADMIN_PIN   ?? null;
+    const kitchenPin = process.env.KITCHEN_PIN ?? null;
+    const managerPin = process.env.MANAGER_PIN ?? null;
+
+    const pinSettings: { key: string; value: string }[] = [];
+    if (adminPin)   pinSettings.push({ key: 'admin_pin',   value: adminPin });
+    if (kitchenPin) pinSettings.push({ key: 'kitchen_pin', value: kitchenPin });
+    if (managerPin) pinSettings.push({ key: 'manager_pin', value: managerPin });
+
+    if (pinSettings.length > 0) {
+      // ignoreDuplicates: false (default) — always update PIN rows when env vars are set
+      await sb.from('restaurant_settings').upsert(
+        pinSettings.map(s => ({
+          id:            `RS_${s.key}`,
+          restaurant_id: rid,
+          key:           s.key,
+          value:         s.value,
+          updated_at:    new Date().toISOString(),
+        })),
+        { onConflict: 'id' },
+      );
+    }
 
     // ── 4. Seed menu items (skip any that already exist by name) ─────────────
     // Only insert if restaurant had no items at all (avoids duplicate names)

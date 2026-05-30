@@ -9,9 +9,8 @@ import {
   updateOrderStatus,
   CustomerTab, Order,
   sendEmailReceipt,
-  getSettings,
   getSplitBillForTabApi, createSplitBillApi, markSplitEntryPaidApi, SplitBillData,
-  getActiveIssues, escalateIssue, resolveIssue, OrderIssue,
+  getActiveIssues, resolveIssue, OrderIssue,
 } from '@/lib/api';
 // lib/storage only used for: (none — all data is now Supabase-backed)
 // Keeping this comment to clarify the migration is complete.
@@ -53,8 +52,7 @@ export default function ManagerPage() {
   const [tabDiscNote, setTabDiscNote]         = useState('');
   const [pinInput, setPinInput]               = useState('');
   const [pinMsg, setPinMsg]                   = useState('');
-  // Admin discount PIN loaded from Supabase — replaces getPin() localStorage call
-  const [adminDiscountPin, setAdminDiscountPin] = useState('1234');
+  // PIN is verified server-side — never stored in client state
   const [showDiscForm, setShowDiscForm]       = useState(false);
   const [tabBillMsg, setTabBillMsg]           = useState('');
   const [tabCloseConfirm, setTabCloseConfirm] = useState(false);
@@ -106,15 +104,14 @@ export default function ManagerPage() {
       // Bounded by midnight-today to avoid loading unbounded history.
       const todayMidnight = new Date();
       todayMidnight.setHours(0, 0, 0, 0);
-      const [allTabs, allOrders, settings, issues] = await Promise.all([
+      const [allTabs, allOrders, issues] = await Promise.all([
         getTabs(),
         getOrders({ since: todayMidnight.toISOString(), limit: 200 }),
-        getSettings(),
         getActiveIssues(),
       ]);
       setTabs(allTabs);
       setOrders(allOrders);
-      setAdminDiscountPin(settings.admin_pin ?? '1234');
+      // Admin PIN is NOT loaded into client state — verified server-side only.
       // Only escalated issues go to manager (open ones are waiter/delivery responsibility)
       setEscalatedIssues(issues.filter(i => i.escalated || i.status === 'escalated'));
       setSelTab(prev => {
@@ -167,7 +164,20 @@ export default function ManagerPage() {
     const amt = parseInt(tabDiscAmt, 10);
     if (isNaN(amt) || amt <= 0) { setPinMsg('❌ Enter a valid amount'); return; }
     if (amt > selTab.total) { setPinMsg(`❌ Discount cannot exceed ₹${selTab.total}`); return; }
-    if (pinInput !== adminDiscountPin) { setPinMsg('❌ Wrong admin PIN'); return; }
+    // Verify admin PIN server-side — never stored in client state
+    setPinMsg('⏳ Verifying…');
+    try {
+      const verifyRes = await fetch('/api/auth/verify-pin', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ role: 'admin', pin: pinInput }),
+      });
+      const verifyResult = await verifyRes.json() as { ok: boolean; error?: string };
+      if (!verifyResult.ok) { setPinMsg(`❌ ${verifyResult.error ?? 'Wrong admin PIN'}`); return; }
+    } catch {
+      setPinMsg('❌ Could not verify PIN. Try again.');
+      return;
+    }
     try {
       await applyTabDiscount(selTab.id, amt, tabDiscNote || 'Manager discount');
       setTabDiscAmt(''); setTabDiscNote(''); setPinInput(''); setPinMsg('');
