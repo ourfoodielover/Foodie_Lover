@@ -1147,7 +1147,7 @@ export default function AdminPage() {
                               {order.type==='dine-in'?`Table ${order.tableId}`:order.deliveryAddress?<span title={order.deliveryAddress}>📍 {order.deliveryAddress.slice(0,22)}{order.deliveryAddress.length>22?'…':''}</span>:'—'}
                             </td>
                             <td style={{padding:'0.5rem 0.65rem',fontWeight:600}}>{order.customerName}</td>
-                            <td style={{padding:'0.5rem 0.65rem',textAlign:'center'}}>{(order.items||[]).reduce((s:number,it:any)=>s+(it.qty||1),0)||0}</td>
+                            <td style={{padding:'0.5rem 0.65rem',textAlign:'center'}}>{(order.items||[]).reduce((s:number,it:{qty?:number})=>s+(it.qty||1),0)||0}</td>
                             <td style={{padding:'0.5rem 0.65rem'}}>₹{order.subtotal||order.total}</td>
                             <td style={{padding:'0.5rem 0.65rem',color:'#16a34a',fontWeight:700}}>{(order.discount||0)>0?`-₹${order.discount}`:'—'}</td>
                             <td style={{padding:'0.5rem 0.65rem',fontWeight:800}}>₹{order.total}</td>
@@ -1294,12 +1294,17 @@ export default function AdminPage() {
             </div>
           </div>
 
-          {(seedMsg||csvImportMsg) && (
-            <div style={{padding:'0.6rem 0.85rem',borderRadius:8,background:(seedMsg||csvImportMsg).startsWith('✅')?'#dcfce7':'(seedMsg||csvImportMsg).startsWith('⏳')?'#eff6ff':'#fef2f2',color:(seedMsg||csvImportMsg).startsWith('✅')?'#16a34a':(seedMsg||csvImportMsg).startsWith('⏳')?'#2563eb':'#ef4444',fontWeight:700,fontSize:'0.82rem',marginBottom:'0.75rem',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-              <span>{seedMsg||csvImportMsg}</span>
-              <button onClick={()=>{setSeedMsg('');setCsvImportMsg('');}} style={{background:'none',border:'none',cursor:'pointer',color:'inherit',fontSize:'1.1rem',lineHeight:1,padding:'0 0.2rem'}}>×</button>
-            </div>
-          )}
+          {(seedMsg||csvImportMsg) && (() => {
+            const message  = seedMsg || csvImportMsg;
+            const bgColor  = message.startsWith('✅') ? '#dcfce7' : message.startsWith('⏳') ? '#eff6ff' : '#fef2f2';
+            const txtColor = message.startsWith('✅') ? '#16a34a' : message.startsWith('⏳') ? '#2563eb' : '#ef4444';
+            return (
+              <div style={{padding:'0.6rem 0.85rem',borderRadius:8,background:bgColor,color:txtColor,fontWeight:700,fontSize:'0.82rem',marginBottom:'0.75rem',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <span>{message}</span>
+                <button onClick={()=>{setSeedMsg('');setCsvImportMsg('');}} style={{background:'none',border:'none',cursor:'pointer',color:'inherit',fontSize:'1.1rem',lineHeight:1,padding:'0 0.2rem'}}>×</button>
+              </div>
+            );
+          })()}
           {!menuItems.length
             ? <div style={{textAlign:'center',color:'#999',padding:'3rem',background:'white',borderRadius:12}}>No items in this category</div>
             : <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(255px,1fr))',gap:'1rem'}}>

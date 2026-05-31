@@ -3,6 +3,7 @@
 export const dynamic = 'force-dynamic';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { saveSession, getSession, AuthSession, SESSION_TTL_MS } from '@/lib/auth';
 import { lookupStaffByUsername } from '@/lib/api';
 
@@ -99,7 +100,7 @@ export default function DeliveryLoginPage() {
         </button>
 
         <div style={{ textAlign: 'center', marginTop: '1.25rem' }}>
-          <a href="/" style={{ fontSize: '0.75rem', color: '#888', textDecoration: 'none' }}>← Back to home</a>
+          <Link href="/" style={{ fontSize: '0.75rem', color: '#888', textDecoration: 'none' }}>← Back to home</Link>
         </div>
       </div>
     </div>

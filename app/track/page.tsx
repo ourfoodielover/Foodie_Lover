@@ -3,6 +3,7 @@
 export const dynamic = 'force-dynamic';
 import { useState, useEffect, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 import {
   verifyTrackingToken, lookupOrderByContact, customerConfirmDelivery,
   reportNotReceived, getIssueForOrder, ISSUE_MAX_RETRIES,
@@ -388,7 +389,7 @@ function TrackInner() {
           </div>
 
           <div style={{ textAlign: 'center', marginTop: '0.75rem' }}>
-            <a href="/" style={{ fontSize: '0.73rem', color: '#94a3b8', textDecoration: 'none' }}>← Back to Home</a>
+            <Link href="/" style={{ fontSize: '0.73rem', color: '#94a3b8', textDecoration: 'none' }}>← Back to Home</Link>
           </div>
         </div>
       </div>

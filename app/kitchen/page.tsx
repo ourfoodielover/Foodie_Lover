@@ -41,7 +41,7 @@ export default function KitchenPage() {
   const [authChecked, setAuthChecked] = useState(false);
   const [orders, setOrders]           = useState<Order[]>([]);
   const [clock, setClock]             = useState('');
-  const [tick, setTick]               = useState(0);
+  const [nowMs, setNowMs]             = useState(() => Date.now());
   const [filter, setFilter]           = useState<'all' | 'queued' | 'cooking' | 'ready'>('all');
   const [flashIds, setFlashIds]       = useState<Set<string>>(new Set());
   const [fetchError, setFetchError]   = useState('');
@@ -55,7 +55,8 @@ export default function KitchenPage() {
     return localStorage.getItem('kitchen_muted') === 'true';
   });
   const kitchenMutedRef = useRef(kitchenMuted);
-  kitchenMutedRef.current = kitchenMuted;
+  // Keep the ref in sync with state (must be in an effect, not during render)
+  useEffect(() => { kitchenMutedRef.current = kitchenMuted; }, [kitchenMuted]);
 
   // Load already-announced IDs from sessionStorage on first render
   useEffect(() => {
@@ -170,12 +171,11 @@ export default function KitchenPage() {
     const t1 = setInterval(refresh, 5000);
     const t2 = setInterval(() => {
       setClock(new Date().toLocaleTimeString());
-      setTick(n => n + 1);
+      setNowMs(Date.now());
     }, 1000);
     return () => { clearInterval(t1); clearInterval(t2); };
   }, [refresh, authChecked]);
 
-  void tick;
 
   // ── Socket.io real-time ─────────────────────────────────────────────────────
   useRealtime(
@@ -342,7 +342,7 @@ export default function KitchenPage() {
       {/* Order cards */}
       <div style={{ padding: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(280px,1fr))', gap: '0.85rem' }}>
         {shown.map(order => {
-          const elapsed    = Date.now() - new Date(order.timestamp).getTime();
+          const elapsed    = nowMs - new Date(order.timestamp).getTime();
           const totalSecs  = Math.floor(elapsed / 1000);
           const mins       = Math.floor(totalSecs / 60);
           const secs       = totalSecs % 60;
