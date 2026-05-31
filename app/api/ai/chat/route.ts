@@ -1,27 +1,15 @@
 // POST /api/ai/chat — Foodie AI Ordering Assistant
 //
-// Receives the customer's message, the current cart, and a snapshot of the menu.
-// Returns a natural-language reply PLUS an array of cart actions the frontend
-// should execute.
+// Returns { reply, actions } — frontend executes actions against cart state.
+// OPENAI_API_KEY must be set in Vercel env vars (or .env.local for dev).
 //
-// Action types supported:
-//   ADD_TO_CART      { itemId, itemName, variantName?, variantPrice, quantity }
-//   REMOVE_FROM_CART { itemId, variantName? }
-//   UPDATE_QUANTITY  { itemId, variantName?, quantity }
-//   SHOW_CART        {}
-//   CLEAR_CART       {}
-//   OPEN_CHECKOUT    {}
-//
-// Rules enforced via the system prompt:
-//   - Only reference menu items that actually exist
-//   - Never invent prices
-//   - Ask for variant selection when an item has variants and none was specified
-//   - Respect availability (available: false → skip)
+// Action types: ADD_TO_CART | REMOVE_FROM_CART | UPDATE_QUANTITY |
+//               SHOW_CART | CLEAR_CART | OPEN_CHECKOUT
 
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 
-export const dynamic   = 'force-dynamic';
+export const dynamic    = 'force-dynamic';
 export const maxDuration = 30;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -39,7 +27,7 @@ interface MenuItem {
 }
 
 interface CartItem {
-  key:          string;   // `${itemId}__${variantName}`
+  key:          string;
   itemId:       string;
   itemName:     string;
   variantName:  string;
@@ -56,7 +44,7 @@ interface RequestBody {
   message:  string;
   cart:     CartItem[];
   menu:     MenuItem[];
-  history?: ChatMessage[];  // prior turns for multi-turn context
+  history?: ChatMessage[];
 }
 
 interface CartAction {
@@ -73,12 +61,11 @@ interface AssistantResponse {
   actions: CartAction[];
 }
 
-// ─── System prompt builder ────────────────────────────────────────────────────
+// ─── System prompt ────────────────────────────────────────────────────────────
 
 function buildSystemPrompt(menu: MenuItem[], cart: CartItem[]): string {
   const restaurantName = process.env.RESTAURANT_NAME ?? 'Foodie Lover';
 
-  // Build compact menu representation
   const menuLines = menu
     .filter(m => m.available !== false)
     .map(m => {
@@ -98,7 +85,7 @@ function buildSystemPrompt(menu: MenuItem[], cart: CartItem[]): string {
   const cartTotal = cart.reduce((s, c) => s + c.variantPrice * c.qty, 0);
 
   return `You are the AI ordering assistant for ${restaurantName}, an Indian restaurant.
-Your job is to help customers find food, add items to their cart, and navigate to checkout.
+Help customers find food, add items to cart, and navigate to checkout.
 
 ## MENU (id | name | category | pricing)
 ${menuLines}
@@ -107,21 +94,18 @@ ${menuLines}
 ${cartLines}
 ${cart.length > 0 ? `Cart total: ₹${cartTotal}` : ''}
 
-## RULES — follow these exactly
-1. ONLY reference menu items that appear in the MENU section above.
-2. NEVER invent items, categories, or prices.
-3. If an item has VARIANTS (e.g. Half/Full), and the customer didn't specify one, ASK which variant they want before adding.
-4. If a customer asks to add an item that has variants and they DID specify a matching variant name, add it immediately.
-5. When recommending items, include the item name, variant if relevant, and price.
-6. Be warm, concise, and helpful. Respond in the same language the customer uses.
-7. Never modify the database — only return actions for the frontend to execute.
+## RULES
+1. ONLY use items from the MENU above. Never invent items or prices.
+2. If an item has VARIANTS and the customer didn't specify one, ASK before adding.
+3. If the customer specifies a variant (e.g. "Full"), add it immediately.
+4. For recommendations include name, variant, price.
+5. Respond in the same language as the customer.
+6. Be warm and concise.
 
-## RESPONSE FORMAT
-You MUST respond with valid JSON only — no prose before or after. Schema:
+## RESPONSE FORMAT — valid JSON only, no prose outside JSON
 {
-  "reply": "<natural language reply to show the customer>",
+  "reply": "<reply to show the customer>",
   "actions": [
-    // zero or more actions:
     { "type": "ADD_TO_CART",      "itemId": "...", "itemName": "...", "variantName": "...", "variantPrice": 000, "quantity": 1 },
     { "type": "REMOVE_FROM_CART", "itemId": "...", "variantName": "..." },
     { "type": "UPDATE_QUANTITY",  "itemId": "...", "variantName": "...", "quantity": 2 },
@@ -131,29 +115,42 @@ You MUST respond with valid JSON only — no prose before or after. Schema:
   ]
 }
 
-Only include actions that match what the customer explicitly requested or agreed to.
-If you are asking a clarifying question (e.g. variant selection), return an empty actions array.`;
+Return empty actions array when asking a clarifying question.`;
 }
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
+  // ── Step 1: API key check ─────────────────────────────────────────────────
   const apiKey = process.env.OPENAI_API_KEY;
+
+  console.log('[Foodie AI] OPENAI_API_KEY exists:', !!apiKey);
+  console.log('[Foodie AI] Key prefix:', apiKey ? apiKey.slice(0, 7) + '...' : 'NOT SET');
+  console.log('[Foodie AI] NODE_ENV:', process.env.NODE_ENV);
+
   if (!apiKey) {
+    console.warn('[Foodie AI] OPENAI_API_KEY is not set — returning unconfigured message');
     return NextResponse.json(
-      { reply: 'AI assistant is not configured yet. Please ask staff for help.', actions: [] },
+      { reply: 'AI assistant is not configured yet. Please set OPENAI_API_KEY in your environment variables.', actions: [] },
       { status: 200 },
     );
   }
 
+  // ── Step 2: Parse body ────────────────────────────────────────────────────
   let body: RequestBody;
   try {
     body = await req.json();
-  } catch {
-    return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
+  } catch (parseErr) {
+    console.error('[Foodie AI] Failed to parse request body:', parseErr);
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
   const { message, cart = [], menu = [], history = [] } = body;
+
+  console.log('[Foodie AI] User message:', message);
+  console.log('[Foodie AI] Menu count:', menu.length);
+  console.log('[Foodie AI] Cart count:', cart.length);
+  console.log('[Foodie AI] History turns:', history.length);
 
   if (!message?.trim()) {
     return NextResponse.json({ error: 'message is required' }, { status: 400 });
@@ -162,12 +159,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Message too long (max 500 chars)' }, { status: 400 });
   }
 
+  // ── Step 3: Build OpenAI client + messages ────────────────────────────────
   const client = new OpenAI({ apiKey });
 
-  // Build message array: system + history + new user message
   const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
     { role: 'system', content: buildSystemPrompt(menu, cart) },
-    // Include up to 6 prior turns for context
     ...history.slice(-6).map(m => ({
       role:    m.role as 'user' | 'assistant',
       content: m.content,
@@ -175,47 +171,72 @@ export async function POST(req: NextRequest) {
     { role: 'user', content: message.trim() },
   ];
 
+  const requestPayload = {
+    model:           'gpt-4o-mini',
+    messages,
+    temperature:     0.4,
+    max_tokens:      600,
+    response_format: { type: 'json_object' as const },
+  };
+
+  console.log('[Foodie AI] Calling OpenAI model:', requestPayload.model);
+  console.log('[Foodie AI] Total messages in context:', messages.length);
+  console.log('[Foodie AI] System prompt length (chars):', messages[0].content?.toString().length ?? 0);
+
+  // ── Step 4: Call OpenAI ───────────────────────────────────────────────────
   try {
-    const completion = await client.chat.completions.create({
-      model:       'gpt-4o-mini',   // fast & cheap; switch to gpt-4o for higher accuracy
-      messages,
-      temperature: 0.4,
-      max_tokens:  600,
-      response_format: { type: 'json_object' },
-    });
+    const completion = await client.chat.completions.create(requestPayload);
+
+    console.log('[Foodie AI] ✅ OpenAI responded. Usage:', JSON.stringify(completion.usage));
+    console.log('[Foodie AI] Finish reason:', completion.choices[0]?.finish_reason);
 
     const raw = completion.choices[0]?.message?.content ?? '{}';
+    console.log('[Foodie AI] Raw response:', raw.slice(0, 300));
 
     let parsed: AssistantResponse;
     try {
       parsed = JSON.parse(raw);
-    } catch {
-      // If model returns non-JSON despite format enforcement, return gracefully
-      console.error('[ai/chat] Failed to parse model JSON:', raw);
+    } catch (jsonErr) {
+      console.error('[Foodie AI] JSON parse failed:', jsonErr, '| Raw:', raw);
       return NextResponse.json({
-        reply:   "I'm having trouble processing that. Could you try again?",
+        reply:   "I got a response but couldn't read it. Please try again!",
         actions: [],
       });
     }
 
-    // Validate and sanitise actions before returning to frontend
     const safeActions: CartAction[] = (parsed.actions ?? []).filter(
       (a): a is CartAction => typeof a.type === 'string',
     );
+
+    console.log('[Foodie AI] Actions to execute:', JSON.stringify(safeActions));
 
     return NextResponse.json({
       reply:   parsed.reply ?? '',
       actions: safeActions,
     });
 
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error('[ai/chat] OpenAI error:', msg);
+  } catch (err: unknown) {
+    // ── FULL diagnostic catch — expose exact error details ──────────────────
+    console.error('========== FOODIE AI ERROR ==========');
+    console.error(err);
 
-    // Return graceful degradation — don't break the ordering flow
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const anyErr = err as any;
+
+    if (anyErr?.status)   console.error('[Foodie AI] HTTP status:', anyErr.status);
+    if (anyErr?.message)  console.error('[Foodie AI] Message:', anyErr.message);
+    if (anyErr?.error)    console.error('[Foodie AI] Error object:', JSON.stringify(anyErr.error));
+    if (anyErr?.response) console.error('[Foodie AI] Response:', anyErr.response);
+    if (anyErr?.code)     console.error('[Foodie AI] Code:', anyErr.code);
+    if (anyErr?.type)     console.error('[Foodie AI] Type:', anyErr.type);
+
+    const errorMsg = anyErr?.message ?? String(err);
+    const statusCode: number = typeof anyErr?.status === 'number' ? anyErr.status : 500;
+
+    // Expose debug error in reply so it's visible without Vercel log access
     return NextResponse.json({
-      reply:   "I'm temporarily unavailable. You can still browse the menu and add items directly!",
+      reply:   `⚠️ AI Error [${statusCode}]: ${errorMsg}`,
       actions: [],
-    });
+    }, { status: 200 }); // 200 so frontend shows the message, not a silent failure
   }
 }
