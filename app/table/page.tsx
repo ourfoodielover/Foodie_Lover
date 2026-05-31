@@ -784,6 +784,81 @@ function TablePageInner() {
     : 0;
   const myBillTotal = Math.max(0, myTotal - myDiscountShare);
 
+  // ─── Variant Picker Modal JSX ─────────────────────────────────────────────────
+  // Defined ONCE here (before any early returns) so it can be rendered in ALL
+  // view returns (menu, cart, tracking).  The critical bug was placing this only
+  // in the final return: the menu and cart views have early returns that never
+  // reached it, so tapping "Add" on a variant item was silently ignored.
+  const variantPickerModal = variantModal.open && variantModal.item
+    ? (
+      <div
+        onClick={() => setVariantModal({ open: false, item: null, selected: '' })}
+        style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 300, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}
+      >
+        <div
+          onClick={e => e.stopPropagation()}
+          style={{ background: 'white', borderRadius: '20px 20px 0 0', width: '100%', maxWidth: 480, padding: '1.25rem 1.25rem 2rem', boxShadow: '0 -8px 40px rgba(0,0,0,0.25)' }}
+        >
+          {/* Drag handle */}
+          <div style={{ width: 40, height: 4, background: '#ddd', borderRadius: 2, margin: '0 auto 1rem' }} />
+          <div style={{ fontWeight: 800, fontSize: '0.95rem', color: '#1A0800', marginBottom: '0.2rem' }}>{variantModal.item.name}</div>
+          <div style={{ fontSize: '0.72rem', color: '#888', marginBottom: '1rem' }}>Select your portion size</div>
+
+          {/* Variant options */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.25rem' }}>
+            {variantModal.item.variants?.map(v => (
+              <div
+                key={v.name}
+                onClick={() => setVariantModal(m => ({ ...m, selected: v.name }))}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: '0.75rem 1rem',
+                  border: `2px solid ${variantModal.selected === v.name ? '#E65C00' : '#e5e7eb'}`,
+                  borderRadius: 12, cursor: 'pointer',
+                  background: variantModal.selected === v.name ? '#fff8f5' : 'white',
+                  transition: 'all 0.15s',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                  {/* Radio circle visual */}
+                  <div style={{
+                    width: 20, height: 20, borderRadius: '50%',
+                    border: `3px solid ${variantModal.selected === v.name ? '#E65C00' : '#d1d5db'}`,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                    transition: 'border-color 0.15s',
+                  }}>
+                    {variantModal.selected === v.name && (
+                      <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#E65C00' }} />
+                    )}
+                  </div>
+                  <span style={{ fontWeight: 700, fontSize: '0.9rem', color: '#1A0800' }}>{v.name}</span>
+                </div>
+                <span style={{ fontWeight: 900, color: '#E65C00', fontSize: '0.92rem' }}>₹{v.price}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Add to Cart button */}
+          <button
+            onClick={confirmVariantAdd}
+            disabled={!variantModal.selected}
+            style={{
+              ...btn('#E65C00'), width: '100%', padding: '0.85rem',
+              fontSize: '0.95rem', borderRadius: 12,
+              opacity: variantModal.selected ? 1 : 0.45,
+              cursor: variantModal.selected ? 'pointer' : 'not-allowed',
+              boxShadow: variantModal.selected ? '0 4px 16px rgba(230,92,0,0.35)' : 'none',
+            }}
+          >
+            {variantModal.selected
+              ? `Add to Cart — ₹${variantModal.item.variants?.find(v => v.name === variantModal.selected)?.price ?? ''}`
+              : 'Select a size to add'}
+          </button>
+        </div>
+      </div>
+    )
+    : null;
+
   // ══════════════════════════════════════════════════════════════════════════════
   // ─── VIEW: Loading ───────────────────────────────────────────────────────────
   // ══════════════════════════════════════════════════════════════════════════════
@@ -1088,6 +1163,8 @@ function TablePageInner() {
 
     return (
       <div style={{ minHeight: '100vh', background: 'linear-gradient(180deg,#faf7f2 0%,#f5f0e8 100%)', fontFamily: 'Poppins,sans-serif', paddingBottom: cartCount > 0 ? '100px' : '1rem' }}>
+        {/* Variant picker renders here when on menu view */}
+        {variantPickerModal}
         <style>{`
           @keyframes slideUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
           .menu-card { animation: slideUp 0.25s ease; transition: transform 0.15s, box-shadow 0.15s; }
@@ -1223,6 +1300,8 @@ function TablePageInner() {
 
     return (
       <div style={{ minHeight: '100vh', background: '#faf8f3', fontFamily: 'Poppins,sans-serif', paddingBottom: '100px' }}>
+        {/* Variant picker renders here when on cart view (+ button on existing cart items) */}
+        {variantPickerModal}
         <div style={{ background: 'linear-gradient(135deg,#1A0800,#3D1C00)', color: 'white', padding: '0.9rem 1rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <button onClick={() => setView('menu')} style={{ background: 'none', border: 'none', color: 'white', fontSize: '1.4rem', cursor: 'pointer', lineHeight: 1 }}>←</button>
           <div>
@@ -1315,33 +1394,8 @@ function TablePageInner() {
   return (
     <div style={{ minHeight: '100vh', background: '#faf8f3', fontFamily: 'Poppins,sans-serif', paddingBottom: '80px' }}>
 
-      {/* ── Variant Picker Modal ─────────────────────────────────────────────── */}
-      {variantModal.open && variantModal.item && (
-        <div onClick={()=>setVariantModal({open:false,item:null,selected:''})} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'flex-end',justifyContent:'center'}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:'white',borderRadius:'20px 20px 0 0',width:'100%',maxWidth:480,padding:'1.25rem 1.25rem 2rem'}}>
-            <div style={{width:40,height:4,background:'#ddd',borderRadius:2,margin:'0 auto 1rem'}} />
-            <div style={{fontWeight:800,fontSize:'0.95rem',color:'#1A0800',marginBottom:'0.25rem'}}>{variantModal.item.name}</div>
-            <div style={{fontSize:'0.72rem',color:'#888',marginBottom:'1rem'}}>Select your portion</div>
-            <div style={{display:'flex',flexDirection:'column',gap:'0.5rem',marginBottom:'1.25rem'}}>
-              {variantModal.item.variants?.map(v=>(
-                <label key={v.name} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0.7rem 1rem',border:`2px solid ${variantModal.selected===v.name?'#E65C00':'#e5e7eb'}`,borderRadius:10,cursor:'pointer',background:variantModal.selected===v.name?'#fff8f5':'white'}}>
-                  <div style={{display:'flex',alignItems:'center',gap:'0.6rem'}}>
-                    <div style={{width:18,height:18,borderRadius:'50%',border:`3px solid ${variantModal.selected===v.name?'#E65C00':'#ddd'}`,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-                      {variantModal.selected===v.name&&<div style={{width:8,height:8,borderRadius:'50%',background:'#E65C00'}} />}
-                    </div>
-                    <span style={{fontWeight:700,fontSize:'0.88rem',color:'#1A0800'}} onClick={()=>setVariantModal(m=>({...m,selected:v.name}))}>{v.name}</span>
-                  </div>
-                  <span style={{fontWeight:900,color:'#E65C00',fontSize:'0.9rem'}}>₹{v.price}</span>
-                  <input type="radio" name="variant" checked={variantModal.selected===v.name} onChange={()=>setVariantModal(m=>({...m,selected:v.name}))} style={{display:'none'}} />
-                </label>
-              ))}
-            </div>
-            <button onClick={confirmVariantAdd} disabled={!variantModal.selected} style={{...btn('#E65C00'),width:'100%',padding:'0.8rem',fontSize:'0.95rem',borderRadius:12,opacity:variantModal.selected?1:0.5}}>
-              Add to Cart {variantModal.selected?`— ₹${variantModal.item.variants?.find(v=>v.name===variantModal.selected)?.price??''}`:''}
-            </button>
-          </div>
-        </div>
-      )}
+      {/* Variant picker — shared JSX var, also rendered in menu/cart early returns */}
+      {variantPickerModal}
 
       {/* ── Welcome Back overlay ── */}
       {welcomeBack && (
