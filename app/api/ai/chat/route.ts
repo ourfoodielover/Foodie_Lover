@@ -156,8 +156,40 @@ function extractJSON(raw: string): AssistantResponse {
     try { return JSON.parse(slice); } catch { /* fall through */ }
   }
 
+  // Pass 4: truncated JSON repair — response was cut off before closing braces.
+  // Close any open strings, arrays, and objects so JSON.parse has a chance.
+  if (firstBrace !== -1) {
+    try {
+      const repaired = repairTruncatedJSON(raw.slice(firstBrace));
+      return JSON.parse(repaired);
+    } catch { /* fall through */ }
+  }
+
   // All attempts failed — throw with the raw text for diagnostics
   throw new Error(`Cannot parse JSON from: ${raw.slice(0, 200)}`);
+}
+
+// Closes open strings/arrays/objects in a truncated JSON string
+function repairTruncatedJSON(s: string): string {
+  const stack: string[] = [];
+  let inString = false;
+  let escaped  = false;
+
+  for (const ch of s) {
+    if (escaped) { escaped = false; continue; }
+    if (ch === '\\' && inString) { escaped = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === '{' || ch === '[') stack.push(ch === '{' ? '}' : ']');
+    else if (ch === '}' || ch === ']') stack.pop();
+  }
+
+  let repaired = s.trimEnd();
+  // Close open string first if we're inside one
+  if (inString) repaired += '"';
+  // Close any open arrays/objects in reverse order
+  while (stack.length > 0) repaired += stack.pop();
+  return repaired;
 }
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
@@ -209,7 +241,7 @@ export async function POST(req: NextRequest) {
     systemInstruction: buildSystemPrompt(menu, cart),
     generationConfig: {
       temperature:     0.4,
-      maxOutputTokens: 800,
+      maxOutputTokens: 2048,  // 800 was too low for multi-item recommendations
       responseMimeType: 'application/json',   // forces JSON-only output
     },
     safetySettings: [
