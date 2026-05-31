@@ -1,15 +1,21 @@
-// POST /api/ai/chat — Foodie AI Ordering Assistant
+// POST /api/ai/chat — Foodie AI Ordering Assistant (Google Gemini Flash)
 //
-// Returns { reply, actions } — frontend executes actions against cart state.
-// OPENAI_API_KEY must be set in Vercel env vars (or .env.local for dev).
+// Request:  { message, cart, menu, history? }
+// Response: { reply, actions }
 //
 // Action types: ADD_TO_CART | REMOVE_FROM_CART | UPDATE_QUANTITY |
 //               SHOW_CART | CLEAR_CART | OPEN_CHECKOUT
+//
+// GEMINI_API_KEY must be set in Vercel env vars (or .env.local for dev).
 
 import { NextRequest, NextResponse } from 'next/server';
-import OpenAI from 'openai';
+import {
+  GoogleGenerativeAI,
+  HarmCategory,
+  HarmBlockThreshold,
+} from '@google/generative-ai';
 
-export const dynamic    = 'force-dynamic';
+export const dynamic     = 'force-dynamic';
 export const maxDuration = 30;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -80,12 +86,14 @@ function buildSystemPrompt(menu: MenuItem[], cart: CartItem[]): string {
 
   const cartLines = cart.length === 0
     ? '(empty)'
-    : cart.map(c => `- ${c.itemName}${c.variantName ? ` (${c.variantName})` : ''} ×${c.qty} @ ₹${c.variantPrice}`).join('\n');
+    : cart.map(c =>
+        `- ${c.itemName}${c.variantName ? ` (${c.variantName})` : ''} ×${c.qty} @ ₹${c.variantPrice}`,
+      ).join('\n');
 
   const cartTotal = cart.reduce((s, c) => s + c.variantPrice * c.qty, 0);
 
   return `You are the AI ordering assistant for ${restaurantName}, an Indian restaurant.
-Help customers find food, add items to cart, and navigate to checkout.
+Help customers find food, add items to their cart, and navigate to checkout.
 
 ## MENU (id | name | category | pricing)
 ${menuLines}
@@ -94,19 +102,20 @@ ${menuLines}
 ${cartLines}
 ${cart.length > 0 ? `Cart total: ₹${cartTotal}` : ''}
 
-## RULES
-1. ONLY use items from the MENU above. Never invent items or prices.
-2. If an item has VARIANTS and the customer didn't specify one, ASK before adding.
-3. If the customer specifies a variant (e.g. "Full"), add it immediately.
-4. For recommendations include name, variant, price.
+## STRICT RULES
+1. ONLY use items that appear in the MENU above. Never invent items or prices.
+2. If an item has VARIANTS and the customer did not specify one, ASK which variant they want — do NOT add to cart yet.
+3. If the customer specifies a matching variant name (e.g. "Full", "Half"), add it immediately.
+4. For recommendations, include item name, variant (if applicable), and price.
 5. Respond in the same language as the customer.
-6. Be warm and concise.
+6. Be warm, concise, and helpful.
 
-## RESPONSE FORMAT — valid JSON only, no prose outside JSON
+## RESPONSE FORMAT
+You MUST respond with valid JSON only. No prose before or after. Schema:
 {
-  "reply": "<reply to show the customer>",
+  "reply": "<natural-language reply to show the customer>",
   "actions": [
-    { "type": "ADD_TO_CART",      "itemId": "...", "itemName": "...", "variantName": "...", "variantPrice": 000, "quantity": 1 },
+    { "type": "ADD_TO_CART",      "itemId": "...", "itemName": "...", "variantName": "...", "variantPrice": 0, "quantity": 1 },
     { "type": "REMOVE_FROM_CART", "itemId": "...", "variantName": "..." },
     { "type": "UPDATE_QUANTITY",  "itemId": "...", "variantName": "...", "quantity": 2 },
     { "type": "SHOW_CART" },
@@ -115,28 +124,30 @@ ${cart.length > 0 ? `Cart total: ₹${cartTotal}` : ''}
   ]
 }
 
-Return empty actions array when asking a clarifying question.`;
+- Include only actions the customer explicitly requested or agreed to.
+- When asking a clarifying question, return "actions": [].
+- For ADD_TO_CART, variantName should be "" (empty string) for single-price items.`;
 }
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
-  // ── Step 1: API key check ─────────────────────────────────────────────────
-  const apiKey = process.env.OPENAI_API_KEY;
+  // ── API key check ─────────────────────────────────────────────────────────
+  const apiKey = process.env.GEMINI_API_KEY;
 
-  console.log('[Foodie AI] OPENAI_API_KEY exists:', !!apiKey);
-  console.log('[Foodie AI] Key prefix:', apiKey ? apiKey.slice(0, 7) + '...' : 'NOT SET');
+  console.log('[Foodie AI] GEMINI_API_KEY exists:', !!apiKey);
+  console.log('[Foodie AI] Key prefix:', apiKey ? apiKey.slice(0, 8) + '...' : 'NOT SET');
   console.log('[Foodie AI] NODE_ENV:', process.env.NODE_ENV);
 
   if (!apiKey) {
-    console.warn('[Foodie AI] OPENAI_API_KEY is not set — returning unconfigured message');
+    console.warn('[Foodie AI] GEMINI_API_KEY is not set');
     return NextResponse.json(
-      { reply: 'AI assistant is not configured yet. Please set OPENAI_API_KEY in your environment variables.', actions: [] },
+      { reply: 'AI assistant is not configured yet. Please set GEMINI_API_KEY in your environment variables.', actions: [] },
       { status: 200 },
     );
   }
 
-  // ── Step 2: Parse body ────────────────────────────────────────────────────
+  // ── Parse body ────────────────────────────────────────────────────────────
   let body: RequestBody;
   try {
     body = await req.json();
@@ -159,47 +170,55 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Message too long (max 500 chars)' }, { status: 400 });
   }
 
-  // ── Step 3: Build OpenAI client + messages ────────────────────────────────
-  const client = new OpenAI({ apiKey });
+  // ── Build Gemini client ───────────────────────────────────────────────────
+  const genAI = new GoogleGenerativeAI(apiKey);
 
-  const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-    { role: 'system', content: buildSystemPrompt(menu, cart) },
-    ...history.slice(-6).map(m => ({
-      role:    m.role as 'user' | 'assistant',
-      content: m.content,
-    })),
-    { role: 'user', content: message.trim() },
-  ];
+  const model = genAI.getGenerativeModel({
+    model: 'gemini-2.5-flash',
+    systemInstruction: buildSystemPrompt(menu, cart),
+    generationConfig: {
+      temperature:     0.4,
+      maxOutputTokens: 800,
+      responseMimeType: 'application/json',   // forces JSON-only output
+    },
+    safetySettings: [
+      { category: HarmCategory.HARM_CATEGORY_HARASSMENT,        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+      { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,       threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+      { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+      { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+    ],
+  });
 
-  const requestPayload = {
-    model:           'gpt-4o-mini',
-    messages,
-    temperature:     0.4,
-    max_tokens:      600,
-    response_format: { type: 'json_object' as const },
-  };
+  // ── Build chat history for multi-turn ─────────────────────────────────────
+  // Gemini uses 'user' and 'model' roles (not 'assistant')
+  // Map our AIChatMessage history → Gemini Content[]
+  const geminiHistory = history.slice(-6).map(m => ({
+    role:  m.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: m.content }],
+  }));
 
-  console.log('[Foodie AI] Calling OpenAI model:', requestPayload.model);
-  console.log('[Foodie AI] Total messages in context:', messages.length);
-  console.log('[Foodie AI] System prompt length (chars):', messages[0].content?.toString().length ?? 0);
+  console.log('[Foodie AI] Gemini model: gemini-2.5-flash');
+  console.log('[Foodie AI] History turns sent to Gemini:', geminiHistory.length);
 
-  // ── Step 4: Call OpenAI ───────────────────────────────────────────────────
+  // ── Call Gemini ───────────────────────────────────────────────────────────
   try {
-    const completion = await client.chat.completions.create(requestPayload);
+    const chat = model.startChat({ history: geminiHistory });
+    const result = await chat.sendMessage(message.trim());
+    const raw = result.response.text();
 
-    console.log('[Foodie AI] ✅ OpenAI responded. Usage:', JSON.stringify(completion.usage));
-    console.log('[Foodie AI] Finish reason:', completion.choices[0]?.finish_reason);
+    console.log('[Foodie AI] ✅ Gemini responded');
+    console.log('[Foodie AI] Raw response:', raw.slice(0, 400));
 
-    const raw = completion.choices[0]?.message?.content ?? '{}';
-    console.log('[Foodie AI] Raw response:', raw.slice(0, 300));
-
+    // Parse JSON response
     let parsed: AssistantResponse;
     try {
-      parsed = JSON.parse(raw);
+      // Strip markdown code fences if present (some models still add them)
+      const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
+      parsed = JSON.parse(cleaned);
     } catch (jsonErr) {
       console.error('[Foodie AI] JSON parse failed:', jsonErr, '| Raw:', raw);
       return NextResponse.json({
-        reply:   "I got a response but couldn't read it. Please try again!",
+        reply:   "I got a response but couldn't read it properly. Please try again!",
         actions: [],
       });
     }
@@ -208,7 +227,7 @@ export async function POST(req: NextRequest) {
       (a): a is CartAction => typeof a.type === 'string',
     );
 
-    console.log('[Foodie AI] Actions to execute:', JSON.stringify(safeActions));
+    console.log('[Foodie AI] Actions:', JSON.stringify(safeActions));
 
     return NextResponse.json({
       reply:   parsed.reply ?? '',
@@ -216,8 +235,8 @@ export async function POST(req: NextRequest) {
     });
 
   } catch (err: unknown) {
-    // ── FULL diagnostic catch — expose exact error details ──────────────────
-    console.error('========== FOODIE AI ERROR ==========');
+    // ── Full diagnostic error — visible in chat UI + Vercel logs ─────────────
+    console.error('========== FOODIE AI GEMINI ERROR ==========');
     console.error(err);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -225,18 +244,15 @@ export async function POST(req: NextRequest) {
 
     if (anyErr?.status)   console.error('[Foodie AI] HTTP status:', anyErr.status);
     if (anyErr?.message)  console.error('[Foodie AI] Message:', anyErr.message);
-    if (anyErr?.error)    console.error('[Foodie AI] Error object:', JSON.stringify(anyErr.error));
-    if (anyErr?.response) console.error('[Foodie AI] Response:', anyErr.response);
+    if (anyErr?.errorDetails) console.error('[Foodie AI] Error details:', JSON.stringify(anyErr.errorDetails));
     if (anyErr?.code)     console.error('[Foodie AI] Code:', anyErr.code);
-    if (anyErr?.type)     console.error('[Foodie AI] Type:', anyErr.type);
 
-    const errorMsg = anyErr?.message ?? String(err);
-    const statusCode: number = typeof anyErr?.status === 'number' ? anyErr.status : 500;
+    const errorMsg   = anyErr?.message ?? String(err);
+    const statusCode = typeof anyErr?.status === 'number' ? anyErr.status : 500;
 
-    // Expose debug error in reply so it's visible without Vercel log access
     return NextResponse.json({
       reply:   `⚠️ AI Error [${statusCode}]: ${errorMsg}`,
       actions: [],
-    }, { status: 200 }); // 200 so frontend shows the message, not a silent failure
+    }, { status: 200 });
   }
 }
