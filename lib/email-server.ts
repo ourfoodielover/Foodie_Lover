@@ -28,6 +28,9 @@ export type SendReceiptResult =
 const RETRY_DELAY_MS = [0, 60_000, 5 * 60_000] as const; // ms per retry slot
 const MAX_RETRIES    = 3;
 
+// ─── Brand name (from env so it can be customised without code changes) ────────
+const RESTAURANT_NAME = process.env.RESTAURANT_NAME ?? 'Foodie Lover';
+
 // ─── Build HTML receipt ───────────────────────────────────────────────────────
 
 function buildReceiptHtml(order: Record<string, unknown>, items: Record<string, unknown>[]): string {
@@ -67,7 +70,7 @@ function buildReceiptHtml(order: Record<string, unknown>, items: Record<string, 
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Your Foodie Lover Receipt</title>
+  <title>Your ${RESTAURANT_NAME} Receipt</title>
 </head>
 <body style="font-family:'Segoe UI',Arial,sans-serif;background:#f1f5f9;margin:0;padding:24px 16px">
   <div style="max-width:540px;margin:0 auto">
@@ -76,7 +79,7 @@ function buildReceiptHtml(order: Record<string, unknown>, items: Record<string, 
     <div style="background:linear-gradient(135deg,#E65C00,#F9D423);border-radius:16px 16px 0 0;padding:32px;text-align:center">
       <div style="font-size:36px;margin-bottom:8px">🍽️</div>
       <h1 style="margin:0;font-size:26px;font-weight:900;color:white;letter-spacing:-0.5px;text-shadow:0 1px 3px rgba(0,0,0,0.2)">
-        Foodie Lover
+        ${RESTAURANT_NAME}
       </h1>
       <p style="margin:6px 0 0;font-size:13px;color:rgba(255,255,255,0.9)">Payment Receipt</p>
     </div>
@@ -162,7 +165,7 @@ function buildReceiptHtml(order: Record<string, unknown>, items: Record<string, 
 
     <!-- Footer -->
     <div style="text-align:center;padding:20px;font-size:12px;color:#94a3b8">
-      Thank you for choosing <strong style="color:#E65C00">Foodie Lover</strong>! 🙏<br/>
+      Thank you for choosing <strong style="color:#E65C00">${RESTAURANT_NAME}</strong>! 🙏<br/>
       <span style="font-size:11px">This is an automated receipt — please do not reply to this email.</span>
     </div>
   </div>
@@ -278,7 +281,7 @@ function buildTabReceiptHtml(
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Your Foodie Lover Receipt</title>
+  <title>Your ${RESTAURANT_NAME} Receipt</title>
 </head>
 <body style="font-family:'Segoe UI',Arial,sans-serif;background:#f1f5f9;margin:0;padding:24px 16px">
   <div style="max-width:540px;margin:0 auto">
@@ -286,7 +289,7 @@ function buildTabReceiptHtml(
     <!-- Header -->
     <div style="background:linear-gradient(135deg,#E65C00,#F9D423);border-radius:16px 16px 0 0;padding:32px;text-align:center">
       <div style="font-size:36px;margin-bottom:8px">🍽️</div>
-      <h1 style="margin:0;font-size:26px;font-weight:900;color:white;letter-spacing:-0.5px;text-shadow:0 1px 3px rgba(0,0,0,0.2)">Foodie Lover</h1>
+      <h1 style="margin:0;font-size:26px;font-weight:900;color:white;letter-spacing:-0.5px;text-shadow:0 1px 3px rgba(0,0,0,0.2)">${RESTAURANT_NAME}</h1>
       <p style="margin:6px 0 0;font-size:13px;color:rgba(255,255,255,0.9)">Payment Receipt</p>
     </div>
 
@@ -352,7 +355,7 @@ function buildTabReceiptHtml(
 
     <!-- Footer -->
     <div style="text-align:center;padding:20px;font-size:12px;color:#94a3b8">
-      Thank you for choosing <strong style="color:#E65C00">Foodie Lover</strong>! 🙏<br/>
+      Thank you for choosing <strong style="color:#E65C00">${RESTAURANT_NAME}</strong>! 🙏<br/>
       <span style="font-size:11px">This is an automated receipt — please do not reply to this email.</span>
     </div>
   </div>
@@ -492,7 +495,7 @@ export async function sendReceiptEmail(
     const items: Record<string, unknown>[] = (raw.order_items as Record<string, unknown>[]) ?? [];
     const html     = buildReceiptHtml(raw as Record<string, unknown>, items);
     const orderNum = (raw.order_number as number) ?? String(raw.id).slice(-6);
-    const subject  = `Your Foodie Lover Receipt — Order #${orderNum}`;
+    const subject  = `Your ${RESTAURANT_NAME} Receipt — Order #${orderNum}`;
 
     console.info(`${TAG} Dispatching receipt to ${email}`);
 
@@ -597,8 +600,8 @@ export async function sendTabReceiptEmail(
       (rawTableId ? rawTableId.replace(/^tbl[_-]?0*(\d+)$/i, 'Table $1').replace(/^T0*(\d+)$/, 'Table $1') : '');
     const namePart   = (tab.customer_name as string) || 'Dine-In';
     const subject    = tablePart
-      ? `Your Foodie Lover Receipt — ${namePart} (${tablePart})`
-      : `Your Foodie Lover Receipt — ${namePart}`;
+      ? `Your ${RESTAURANT_NAME} Receipt — ${namePart} (${tablePart})`
+      : `Your ${RESTAURANT_NAME} Receipt — ${namePart}`;
 
     const totalItems = rawOrders.reduce((s, o) => s + ((o.order_items as unknown[]) ?? []).length, 0);
     console.info(`${TAG} Dispatching tab receipt → recipient: ${email} | subject: "${subject}" | orders: ${rawOrders.length} | items: ${totalItems}`);
@@ -777,7 +780,7 @@ function buildConfirmationHtml(order: Record<string, unknown>, items: Record<str
     <div style="background:linear-gradient(135deg,#E65C00,#F9D423);border-radius:16px 16px 0 0;padding:28px;text-align:center">
       <div style="font-size:32px;margin-bottom:6px">✅</div>
       <h1 style="margin:0;font-size:22px;font-weight:900;color:white">Order Confirmed!</h1>
-      <p style="margin:6px 0 0;font-size:13px;color:rgba(255,255,255,0.9)">Foodie Lover</p>
+      <p style="margin:6px 0 0;font-size:13px;color:rgba(255,255,255,0.9)">${RESTAURANT_NAME}</p>
     </div>
     <div style="background:white;border-radius:0 0 16px 16px;padding:28px;box-shadow:0 4px 24px rgba(0,0,0,0.08)">
       <p style="font-size:15px;color:#334155;margin:0 0 20px">Hi <strong>${custName}</strong>, we've received your order!</p>
@@ -798,7 +801,7 @@ function buildConfirmationHtml(order: Record<string, unknown>, items: Record<str
       </p>
     </div>
     <div style="text-align:center;padding:16px;font-size:11px;color:#94a3b8">
-      Thank you for choosing <strong style="color:#E65C00">Foodie Lover</strong>! 🙏
+      Thank you for choosing <strong style="color:#E65C00">${RESTAURANT_NAME}</strong>! 🙏
     </div>
   </div>
 </body>
@@ -825,7 +828,7 @@ function buildOrderReadyHtml(order: Record<string, unknown>): string {
     <div style="background:linear-gradient(135deg,#16a34a,#22c55e);border-radius:16px 16px 0 0;padding:28px;text-align:center">
       <div style="font-size:40px;margin-bottom:6px">${icon}</div>
       <h1 style="margin:0;font-size:22px;font-weight:900;color:white">${headline}</h1>
-      <p style="margin:6px 0 0;font-size:13px;color:rgba(255,255,255,0.9)">Foodie Lover</p>
+      <p style="margin:6px 0 0;font-size:13px;color:rgba(255,255,255,0.9)">${RESTAURANT_NAME}</p>
     </div>
     <div style="background:white;border-radius:0 0 16px 16px;padding:28px;box-shadow:0 4px 24px rgba(0,0,0,0.08)">
       <p style="font-size:15px;color:#334155;margin:0 0 20px">Hi <strong>${custName}</strong>,</p>
@@ -836,7 +839,7 @@ function buildOrderReadyHtml(order: Record<string, unknown>): string {
       </div>
     </div>
     <div style="text-align:center;padding:16px;font-size:11px;color:#94a3b8">
-      Thank you for choosing <strong style="color:#E65C00">Foodie Lover</strong>! 🙏
+      Thank you for choosing <strong style="color:#E65C00">${RESTAURANT_NAME}</strong>! 🙏
     </div>
   </div>
 </body>
@@ -926,8 +929,8 @@ export async function sendOrderReadyEmail(orderId: string): Promise<void> {
     const typeRaw   = (raw.type as string) || 'pickup';
     const isDelivery = typeRaw === 'delivery';
     const subject   = isDelivery
-      ? `Your Foodie Lover Order #${orderNum} is On Its Way! 🛵`
-      : `Your Foodie Lover Order #${orderNum} is Ready! 🏪`;
+      ? `Your ${RESTAURANT_NAME} Order #${orderNum} is On Its Way! 🛵`
+      : `Your ${RESTAURANT_NAME} Order #${orderNum} is Ready! 🏪`;
     const html      = buildOrderReadyHtml(raw as Record<string, unknown>);
 
     console.info(`${TAG} Sending ready notification to ${email}`);

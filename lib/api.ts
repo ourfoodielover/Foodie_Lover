@@ -165,7 +165,7 @@ async function apiFetch<T>(
   path:    string,
   options: RequestInit = {},
 ): Promise<T> {
-  const base = typeof window !== 'undefined' ? '' : 'http://localhost:3000';
+  const base = typeof window !== 'undefined' ? '' : (process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000');
   const url  = `${base}${path}`;
 
   let res: Response;

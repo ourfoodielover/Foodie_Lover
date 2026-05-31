@@ -1121,7 +1121,7 @@ export default function ManagerPage() {
                             } else if (result.reason === 'RESEND_API_KEY not configured') {
                               setReceiptMsg('❌ Email not configured — set RESEND_API_KEY in .env.local');
                             } else if (result.reason?.startsWith('RESEND_DOMAIN_REQUIRED')) {
-                              setReceiptMsg('❌ Resend free tier only allows sending to ourfoodielover@gmail.com. To send to any address, verify a domain at resend.com/domains then update EMAIL_FROM in .env.local');
+                              setReceiptMsg('❌ Resend free tier only allows sending to the verified account email. To send to any address, verify a domain at resend.com/domains then update FROM_EMAIL in your environment variables.');
                             } else {
                               setReceiptMsg(`❌ Could not send: ${result.reason ?? 'Unknown error'}`);
                             }
