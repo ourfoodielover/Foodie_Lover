@@ -174,6 +174,12 @@ function TablePageInner() {
   const [pinInput, setPinInput]           = useState('');
   const [pinError, setPinError]           = useState('');
 
+  // ── Resume-session mode (host returning on a different/cleared device) ──
+  const [resumeMode, setResumeMode]       = useState(false);
+  const [resumePin, setResumePin]         = useState('');
+  const [resumePinError, setResumePinError] = useState('');
+  const [resumeBusy, setResumeBusy]       = useState(false);
+
   // ── Joiner party size ──
   const [joinerPartyInput, setJoinerPartyInput] = useState('1');
   const [joinerPartyError, setJoinerPartyError] = useState('');
@@ -240,26 +246,33 @@ function TablePageInner() {
       // Check tab_devices in Supabase — no localStorage needed.
       try {
         const deviceRecord = await getDeviceTabRecord(did);
-        if (deviceRecord && sameTable(deviceRecord.tableId, tableId)) {
-          const tabs   = await getTabsApi();
-          const apiTab = tabs.find(t => t.id === deviceRecord.tabId && t.status !== 'closed');
-          if (apiTab) {
-            setTabId(apiTab.id);
-            setCustomerName(deviceRecord.customerName);
-            setTab(toTabUI(apiTab));
-            // Restore waiter-call cooldown from Supabase
-            const lastCallAt = await getLastWaiterCallAt(apiTab.id).catch(() => null);
-            if (lastCallAt) {
-              const elapsed = Math.floor((Date.now() - new Date(lastCallAt).getTime()) / 1000);
-              setCallCooldown(Math.max(0, 60 - elapsed));
+        if (deviceRecord) {
+          if (sameTable(deviceRecord.tableId, tableId)) {
+            const tabs   = await getTabsApi();
+            const apiTab = tabs.find(t => t.id === deviceRecord.tabId && t.status !== 'closed');
+            if (apiTab) {
+              setTabId(apiTab.id);
+              setCustomerName(deviceRecord.customerName);
+              setTab(toTabUI(apiTab));
+              // Restore waiter-call cooldown from Supabase
+              const lastCallAt = await getLastWaiterCallAt(apiTab.id).catch(() => null);
+              if (lastCallAt) {
+                const elapsed = Math.floor((Date.now() - new Date(lastCallAt).getTime()) / 1000);
+                setCallCooldown(Math.max(0, 60 - elapsed));
+              }
+              setWelcomeBack(true);
+              setView('tracking');
+              setTimeout(() => setWelcomeBack(false), 3500);
+              return;
             }
-            setWelcomeBack(true);
-            setView('tracking');
-            setTimeout(() => setWelcomeBack(false), 3500);
-            return;
+            // Tab was closed/not found — remove stale device record so we show landing not join
+            void removeTabDevice(did, deviceRecord.tabId).catch(() => {});
+          } else {
+            // Different table — remove stale record (customer changed tables or is elsewhere)
+            void removeTabDevice(did).catch(() => {});
           }
         }
-      } catch { /* treat as no existing session */ }
+      } catch { /* treat as no existing session — fall through */ }
 
       // ── STEP 2: Is there already an OPEN session at this table? ────────────
       try {
@@ -366,8 +379,10 @@ function TablePageInner() {
         pin,
         email:        emailTrimmed || undefined,
       });
-      // Register this device in Supabase tab_devices (replaces localStorage)
-      await registerTabDevice({ tabId: apiTab.id, deviceId, customerName: name, tableId });
+      // Register device — best-effort: tab already created so don't block if this fails
+      void registerTabDevice({ tabId: apiTab.id, deviceId, customerName: name, tableId }).catch(e => {
+        console.warn('[handleStartSession] registerTabDevice failed (non-fatal):', e);
+      });
       setTabId(apiTab.id);
       setCustomerName(name);
       // toTabUI reads PIN from apiTab.pin (returned by server) — no localStorage
@@ -443,6 +458,62 @@ function TablePageInner() {
       const msg = err instanceof Error ? err.message : 'Unknown error';
       console.error('[handleJoinSession] failed:', err);
       setNameError(`Could not join session: ${msg}. Please try again.`);
+    }
+  }
+
+  // ─── HANDLER: Resume session (host returning on cleared/different device) ─────
+  // Customer is the original session host but lost their device record.
+  // They enter their PIN to prove ownership and re-register this device.
+  async function handleResumeSession() {
+    if (!existingTabForJoin) { setView('landing'); return; }
+    const joinTab = existingTabForJoin;
+
+    const pin = resumePin.trim();
+    if (!pin) { setResumePinError('Enter your 4-digit PIN to restore your session'); return; }
+
+    setResumeBusy(true);
+    setResumePinError('');
+    try {
+      const valid = await verifyTabPin(joinTab.id, pin);
+      if (!valid) {
+        setResumePinError('Incorrect PIN — enter the PIN you set when starting this session');
+        setResumeBusy(false);
+        return;
+      }
+
+      // PIN verified — fetch fresh tab data
+      const tabs   = await getTabsApi();
+      const apiTab = tabs.find(t => t.id === joinTab.id && t.status !== 'closed');
+      if (!apiTab) {
+        setResumePinError('This session has already been closed. Please start a new one.');
+        setResumeBusy(false);
+        return;
+      }
+
+      // Re-register this device (best-effort) and restore session state
+      void registerTabDevice({ tabId: joinTab.id, deviceId, customerName: joinTab.customerName, tableId }).catch(() => {});
+
+      setTabId(joinTab.id);
+      setCustomerName(joinTab.customerName);
+      setTab(toTabUI(apiTab));
+      confirmedRef.current = new Set<string>();
+
+      // Restore waiter-call cooldown
+      const lastCallAt = await getLastWaiterCallAt(joinTab.id).catch(() => null);
+      if (lastCallAt) {
+        const elapsed = Math.floor((Date.now() - new Date(lastCallAt).getTime()) / 1000);
+        setCallCooldown(Math.max(0, 60 - elapsed));
+      }
+
+      setWelcomeBack(true);
+      setView('tracking');
+      setTimeout(() => setWelcomeBack(false), 3500);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      console.error('[handleResumeSession] failed:', err);
+      setResumePinError(`Could not restore session: ${msg}. Please try again.`);
+    } finally {
+      setResumeBusy(false);
     }
   }
 
@@ -732,12 +803,23 @@ function TablePageInner() {
   // ══════════════════════════════════════════════════════════════════════════════
   if (view === 'landing') {
     return (
-      <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg,#1A0800,#3D1C00)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', fontFamily: 'Poppins,sans-serif' }}>
-        <div style={{ background: 'white', borderRadius: 20, padding: '2rem 1.75rem', width: '100%', maxWidth: 400, boxShadow: '0 20px 60px rgba(0,0,0,0.4)' }}>
-          <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
-            <div style={{ fontSize: '3rem', marginBottom: '0.4rem' }}>🍽️</div>
-            <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.6rem', fontWeight: 900, color: '#1A0800' }}>Foodie Lover</div>
-            <div style={{ color: '#888', fontSize: '0.82rem', marginTop: '0.2rem' }}>Table {tableName || tableId}</div>
+      <div style={{ minHeight: '100vh', background: 'linear-gradient(160deg,#1A0800 0%,#3D1C00 60%,#1A0800 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', fontFamily: 'Poppins,sans-serif' }}>
+        <style>{`
+          @keyframes fadeIn { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+          .landing-card { animation: fadeIn 0.35s ease; }
+          input:focus { border-color: #E65C00 !important; box-shadow: 0 0 0 3px rgba(230,92,0,0.12); }
+          .party-btn:hover { transform: scale(1.05); }
+        `}</style>
+        <div className="landing-card" style={{ background: 'white', borderRadius: 24, padding: '2rem 1.75rem', width: '100%', maxWidth: 420, boxShadow: '0 24px 80px rgba(0,0,0,0.5)' }}>
+
+          <div style={{ textAlign: 'center', marginBottom: '1.75rem' }}>
+            <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'linear-gradient(135deg,#E65C00,#F9A826)', margin: '0 auto 0.7rem', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2rem', boxShadow: '0 8px 24px rgba(230,92,0,0.35)' }}>
+              🍽️
+            </div>
+            <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.8rem', fontWeight: 900, color: '#1A0800', letterSpacing: '-0.02em' }}>Foodie Lover</div>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', background: '#fff5ee', border: '1px solid #fed7aa', borderRadius: 20, padding: '0.25rem 0.75rem', fontSize: '0.75rem', color: '#E65C00', fontWeight: 700, marginTop: '0.4rem' }}>
+              🪑 Table {tableName || tableId}
+            </div>
           </div>
 
           <div style={{ marginBottom: '1rem' }}>
@@ -748,28 +830,26 @@ function TablePageInner() {
               onKeyDown={e => e.key === 'Enter' && handleStartSession()}
               placeholder="e.g. Rahul Sharma"
               autoFocus
-              style={{ width: '100%', boxSizing: 'border-box', padding: '0.7rem 0.9rem', border: `2px solid ${nameError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '0.95rem', outline: 'none' }}
+              style={{ width: '100%', boxSizing: 'border-box', padding: '0.75rem 0.9rem', border: `2px solid ${nameError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 12, fontFamily: 'Poppins,sans-serif', fontSize: '0.95rem', outline: 'none', transition: 'border-color 0.2s, box-shadow 0.2s' }}
             />
-            {nameError && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem' }}>{nameError}</div>}
+            {nameError && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem', fontWeight: 600 }}>{nameError}</div>}
           </div>
 
           <div style={{ marginBottom: '1rem' }}>
             <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>
-              🔐 Set Table PIN <span style={{ fontWeight: 400, color: '#888' }}>(4 digits — share with your group)</span>
+              🔐 Table PIN <span style={{ fontWeight: 400, color: '#888' }}>(4 digits — share with your group)</span>
             </label>
             <input
-              type="tel"
-              inputMode="numeric"
-              maxLength={4}
+              type="tel" inputMode="numeric" maxLength={4}
               value={pinInput}
               onChange={e => { setPinInput(e.target.value.replace(/\D/g, '').slice(0, 4)); setPinError(''); }}
               onKeyDown={e => e.key === 'Enter' && handleStartSession()}
               placeholder="e.g. 1234"
-              style={{ width: '100%', boxSizing: 'border-box', padding: '0.7rem 0.9rem', border: `2px solid ${pinError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '1.1rem', outline: 'none', letterSpacing: '0.3rem', fontWeight: 700 }}
+              style={{ width: '100%', boxSizing: 'border-box', padding: '0.75rem 0.9rem', border: `2px solid ${pinError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 12, fontFamily: 'Poppins,sans-serif', fontSize: '1.2rem', outline: 'none', letterSpacing: '0.4rem', fontWeight: 800, textAlign: 'center', transition: 'border-color 0.2s, box-shadow 0.2s' }}
             />
-            {pinError && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem' }}>{pinError}</div>}
+            {pinError && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem', fontWeight: 600 }}>{pinError}</div>}
             <div style={{ fontSize: '0.68rem', color: '#aaa', marginTop: '0.2rem' }}>
-              This PIN prevents others from adding to your bill without permission.
+              Needed to restore your session if you refresh. Share with friends.
             </div>
           </div>
 
@@ -778,40 +858,43 @@ function TablePageInner() {
               📧 Email <span style={{ fontWeight: 400, color: '#aaa' }}>(optional — for receipt)</span>
             </label>
             <input
-              type="email"
-              inputMode="email"
+              type="email" inputMode="email"
               value={emailInput}
               onChange={e => setEmailInput(e.target.value)}
               placeholder="you@example.com"
-              style={{ width: '100%', boxSizing: 'border-box', padding: '0.7rem 0.9rem', border: '2px solid #e5e7eb', borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '0.9rem', outline: 'none' }}
+              style={{ width: '100%', boxSizing: 'border-box', padding: '0.75rem 0.9rem', border: '2px solid #e5e7eb', borderRadius: 12, fontFamily: 'Poppins,sans-serif', fontSize: '0.9rem', outline: 'none', transition: 'border-color 0.2s, box-shadow 0.2s' }}
             />
           </div>
 
-          <div style={{ marginBottom: '1.25rem' }}>
-            <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>How many people?</label>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <div style={{ marginBottom: '1.5rem' }}>
+            <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.4rem' }}>👥 How many people?</label>
+            <div style={{ display: 'flex', gap: '0.4rem' }}>
               {[1, 2, 3, 4, 5, 6].map(n => (
-                <button
-                  key={n}
+                <button key={n} className="party-btn"
                   onClick={() => setPartyInput(String(n))}
                   style={{
-                    flex: 1, padding: '0.5rem 0', borderRadius: 8,
+                    flex: 1, padding: '0.55rem 0', borderRadius: 10,
                     border: `2px solid ${partyInput === String(n) ? '#E65C00' : '#e5e7eb'}`,
-                    background: partyInput === String(n) ? '#fff5ee' : 'white',
-                    color: partyInput === String(n) ? '#E65C00' : '#555',
-                    fontWeight: 700, cursor: 'pointer', fontFamily: 'Poppins,sans-serif', fontSize: '0.9rem',
+                    background: partyInput === String(n) ? 'linear-gradient(135deg,#fff5ee,#fef3e2)' : 'white',
+                    color: partyInput === String(n) ? '#E65C00' : '#777',
+                    fontWeight: 800, cursor: 'pointer', fontFamily: 'Poppins,sans-serif', fontSize: '0.9rem',
+                    transition: 'all 0.15s',
+                    boxShadow: partyInput === String(n) ? '0 2px 8px rgba(230,92,0,0.2)' : 'none',
                   }}
                 >{n}</button>
               ))}
             </div>
           </div>
 
-          <button onClick={handleStartSession} style={{ ...btn(), width: '100%', padding: '0.85rem', fontSize: '1rem', borderRadius: 12 }}>
+          <button
+            onClick={handleStartSession}
+            style={{ width: '100%', padding: '0.9rem', fontSize: '1.05rem', borderRadius: 14, border: 'none', cursor: 'pointer', fontFamily: 'Poppins,sans-serif', fontWeight: 800, color: 'white', background: 'linear-gradient(135deg,#E65C00,#F9A826)', boxShadow: '0 8px 24px rgba(230,92,0,0.35)', letterSpacing: '0.01em' }}
+          >
             🚀 Start Ordering
           </button>
 
-          <p style={{ textAlign: 'center', fontSize: '0.72rem', color: '#aaa', marginTop: '0.75rem' }}>
-            Your device will be remembered — you&apos;ll reconnect automatically next time.
+          <p style={{ textAlign: 'center', fontSize: '0.7rem', color: '#bbb', marginTop: '0.85rem', lineHeight: 1.5 }}>
+            Your device is remembered — tap &quot;It&apos;s my session&quot; on the next visit to restore it.
           </p>
         </div>
       </div>
@@ -823,99 +906,173 @@ function TablePageInner() {
   // ══════════════════════════════════════════════════════════════════════════════
   if (view === 'join') {
     const existingCustomerName = existingTabForJoin?.customerName || 'someone';
-    const guestCount = existingTabForJoin
-      ? codiners.length   // fetched from Supabase tab_devices via refreshCodiners
-      : 0;
+    const guestCount = existingTabForJoin ? codiners.length : 0;
 
     return (
-      <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg,#1A0800,#3D1C00)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', fontFamily: 'Poppins,sans-serif' }}>
-        <div style={{ background: 'white', borderRadius: 20, padding: '2rem 1.75rem', width: '100%', maxWidth: 400, boxShadow: '0 20px 60px rgba(0,0,0,0.4)' }}>
+      <div style={{ minHeight: '100vh', background: 'linear-gradient(160deg,#1A0800 0%,#3D1C00 60%,#1A0800 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', fontFamily: 'Poppins,sans-serif' }}>
+        <style>{`
+          @keyframes fadeSlide { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+          .join-card { animation: fadeSlide 0.3s ease; }
+          .mode-tab { transition: all 0.2s; }
+          .mode-tab:hover { opacity: 0.9; }
+        `}</style>
+        <div className="join-card" style={{ background: 'white', borderRadius: 24, padding: '2rem 1.75rem', width: '100%', maxWidth: 420, boxShadow: '0 24px 80px rgba(0,0,0,0.5)' }}>
+
+          {/* Header */}
           <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
-            <div style={{ fontSize: '2.5rem', marginBottom: '0.4rem' }}>🤝</div>
-            <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.4rem', fontWeight: 900, color: '#1A0800' }}>Join Table {tableName || tableId}</div>
-            <div style={{ color: '#888', fontSize: '0.82rem', marginTop: '0.35rem', lineHeight: 1.5 }}>
-              <span style={{ fontWeight: 700, color: '#E65C00' }}>{existingCustomerName}</span> already has an open session here.
-              {guestCount > 1 && <span> ({guestCount} people at this table)</span>}
+            <div style={{ width: 56, height: 56, borderRadius: '50%', background: 'linear-gradient(135deg,#E65C00,#F9A826)', margin: '0 auto 0.6rem', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.6rem' }}>
+              {resumeMode ? '🔑' : '🤝'}
             </div>
-            <div style={{ marginTop: '0.5rem', background: '#fff5ee', borderRadius: 8, padding: '0.5rem 0.75rem', fontSize: '0.75rem', color: '#E65C00', fontWeight: 600 }}>
-              ✅ Your order will be added to the same table bill
+            <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.4rem', fontWeight: 900, color: '#1A0800' }}>
+              {resumeMode ? 'Restore My Session' : `Table ${tableName || tableId}`}
             </div>
-          </div>
-
-          <div style={{ marginBottom: '1rem' }}>
-            <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>Your Name *</label>
-            <input
-              value={nameInput}
-              onChange={e => { setNameInput(e.target.value); setNameError(''); }}
-              onKeyDown={e => e.key === 'Enter' && handleJoinSession()}
-              placeholder="e.g. Priya Sharma"
-              autoFocus
-              style={{ width: '100%', boxSizing: 'border-box', padding: '0.7rem 0.9rem', border: `2px solid ${nameError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '0.95rem', outline: 'none' }}
-            />
-            {nameError && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem' }}>{nameError}</div>}
-          </div>
-
-          {/* Joiner party size */}
-          {(() => {
-            const remaining = existingTabForJoin
-              ? Math.max(0, tableCapacity - (existingTabForJoin.partySize ?? 0))
-              : 0;
-            return (
-              <div style={{ marginBottom: '1rem' }}>
-                <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>
-                  👥 Party Size <span style={{ fontWeight: 400, color: '#888' }}>(how many people joining with you?)</span>
-                </label>
-                <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-                  <input
-                    type="number"
-                    min={1}
-                    max={remaining > 0 ? remaining : 1}
-                    value={joinerPartyInput}
-                    onChange={e => { setJoinerPartyInput(e.target.value); setJoinerPartyError(''); }}
-                    style={{ width: '80px', padding: '0.7rem 0.9rem', border: `2px solid ${joinerPartyError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '0.95rem', outline: 'none', fontWeight: 700, textAlign: 'center' }}
-                  />
-                  {remaining > 0 && (
-                    <span style={{ fontSize: '0.75rem', color: '#16a34a', fontWeight: 600 }}>
-                      🪑 {remaining} seat{remaining !== 1 ? 's' : ''} available
-                    </span>
-                  )}
-                  {remaining === 0 && (
-                    <span style={{ fontSize: '0.75rem', color: '#ef4444', fontWeight: 600 }}>
-                      🔴 Table is full
-                    </span>
-                  )}
-                </div>
-                {joinerPartyError && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem' }}>{joinerPartyError}</div>}
+            {!resumeMode && (
+              <div style={{ color: '#666', fontSize: '0.82rem', marginTop: '0.3rem', lineHeight: 1.5 }}>
+                <span style={{ fontWeight: 700, color: '#E65C00' }}>{existingCustomerName}</span> has an open session here.
+                {guestCount > 1 && ` (${guestCount} at this table)`}
               </div>
-            );
-          })()}
+            )}
+          </div>
 
-          {existingTabForJoin?.tableSessionPin && (
-            <div style={{ marginBottom: '1.25rem' }}>
-              <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>
-                🔐 Table PIN <span style={{ fontWeight: 400, color: '#888' }}>(ask the table host)</span>
-              </label>
-              <input
-                type="tel"
-                inputMode="numeric"
-                maxLength={4}
-                value={pinInput}
-                onChange={e => { setPinInput(e.target.value.replace(/\D/g, '').slice(0, 4)); setPinError(''); }}
-                onKeyDown={e => e.key === 'Enter' && handleJoinSession()}
-                placeholder="••••"
-                style={{ width: '100%', boxSizing: 'border-box', padding: '0.7rem 0.9rem', border: `2px solid ${pinError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '1.1rem', outline: 'none', letterSpacing: '0.3rem', fontWeight: 700 }}
-              />
-              {pinError && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem' }}>{pinError}</div>}
-            </div>
+          {/* Mode toggle tabs */}
+          <div style={{ display: 'flex', background: '#f5f5f5', borderRadius: 12, padding: '3px', marginBottom: '1.4rem', gap: '2px' }}>
+            <button
+              className="mode-tab"
+              onClick={() => { setResumeMode(false); setResumePinError(''); setResumePin(''); }}
+              style={{
+                flex: 1, padding: '0.5rem', borderRadius: 10, border: 'none', cursor: 'pointer',
+                fontFamily: 'Poppins,sans-serif', fontWeight: 700, fontSize: '0.75rem',
+                background: !resumeMode ? 'white' : 'transparent',
+                color: !resumeMode ? '#E65C00' : '#888',
+                boxShadow: !resumeMode ? '0 2px 8px rgba(0,0,0,0.1)' : 'none',
+              }}
+            >
+              🤝 Join as new person
+            </button>
+            <button
+              className="mode-tab"
+              onClick={() => { setResumeMode(true); setNameError(''); setPinError(''); }}
+              style={{
+                flex: 1, padding: '0.5rem', borderRadius: 10, border: 'none', cursor: 'pointer',
+                fontFamily: 'Poppins,sans-serif', fontWeight: 700, fontSize: '0.75rem',
+                background: resumeMode ? 'white' : 'transparent',
+                color: resumeMode ? '#1A0800' : '#888',
+                boxShadow: resumeMode ? '0 2px 8px rgba(0,0,0,0.1)' : 'none',
+              }}
+            >
+              🔑 It&apos;s my session
+            </button>
+          </div>
+
+          {/* ── MODE A: Join as a new person ── */}
+          {!resumeMode && (
+            <>
+              <div style={{ background: 'linear-gradient(135deg,#fff5ee,#fef3e2)', border: '1px solid #fed7aa', borderRadius: 10, padding: '0.55rem 0.8rem', marginBottom: '1.1rem', fontSize: '0.75rem', color: '#92400e', fontWeight: 600 }}>
+                ✅ Your order will be added to the same table bill
+              </div>
+
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>Your Name *</label>
+                <input
+                  value={nameInput}
+                  onChange={e => { setNameInput(e.target.value); setNameError(''); }}
+                  onKeyDown={e => e.key === 'Enter' && handleJoinSession()}
+                  placeholder="e.g. Priya Sharma"
+                  autoFocus={!resumeMode}
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '0.7rem 0.9rem', border: `2px solid ${nameError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '0.95rem', outline: 'none', transition: 'border-color 0.2s' }}
+                />
+                {nameError && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem' }}>{nameError}</div>}
+              </div>
+
+              {(() => {
+                const remaining = existingTabForJoin ? Math.max(0, tableCapacity - (existingTabForJoin.partySize ?? 0)) : 0;
+                return (
+                  <div style={{ marginBottom: '1rem' }}>
+                    <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>
+                      👥 How many joining? <span style={{ fontWeight: 400, color: '#888' }}>({remaining} seat{remaining !== 1 ? 's' : ''} available)</span>
+                    </label>
+                    <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                      <input
+                        type="number" min={1} max={remaining > 0 ? remaining : 1}
+                        value={joinerPartyInput}
+                        onChange={e => { setJoinerPartyInput(e.target.value); setJoinerPartyError(''); }}
+                        style={{ width: '80px', padding: '0.7rem 0.9rem', border: `2px solid ${joinerPartyError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '0.95rem', outline: 'none', fontWeight: 700, textAlign: 'center' }}
+                      />
+                      {remaining === 0 && <span style={{ fontSize: '0.75rem', color: '#ef4444', fontWeight: 600 }}>🔴 Table full</span>}
+                    </div>
+                    {joinerPartyError && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem' }}>{joinerPartyError}</div>}
+                  </div>
+                );
+              })()}
+
+              {existingTabForJoin?.tableSessionPin && (
+                <div style={{ marginBottom: '1.25rem' }}>
+                  <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>
+                    🔐 Table PIN <span style={{ fontWeight: 400, color: '#888' }}>(ask the table host)</span>
+                  </label>
+                  <input
+                    type="tel" inputMode="numeric" maxLength={4}
+                    value={pinInput}
+                    onChange={e => { setPinInput(e.target.value.replace(/\D/g, '').slice(0, 4)); setPinError(''); }}
+                    onKeyDown={e => e.key === 'Enter' && handleJoinSession()}
+                    placeholder="••••"
+                    style={{ width: '100%', boxSizing: 'border-box', padding: '0.7rem 0.9rem', border: `2px solid ${pinError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '1.1rem', outline: 'none', letterSpacing: '0.3rem', fontWeight: 700 }}
+                  />
+                  {pinError && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem' }}>{pinError}</div>}
+                </div>
+              )}
+
+              <button
+                onClick={handleJoinSession}
+                style={{ width: '100%', padding: '0.85rem', fontSize: '1rem', borderRadius: 12, border: 'none', cursor: 'pointer', fontFamily: 'Poppins,sans-serif', fontWeight: 700, color: 'white', background: 'linear-gradient(135deg,#16a34a,#15803d)' }}
+              >
+                🤝 Join & Start Ordering
+              </button>
+              <p style={{ textAlign: 'center', fontSize: '0.72rem', color: '#aaa', marginTop: '0.75rem', margin: '0.75rem 0 0' }}>
+                Each person orders independently — all items on one bill.
+              </p>
+            </>
           )}
 
-          <button onClick={handleJoinSession} style={{ ...btn('#16a34a'), width: '100%', padding: '0.85rem', fontSize: '1rem', borderRadius: 12 }}>
-            🤝 Join & Start Ordering
-          </button>
+          {/* ── MODE B: Restore my session with PIN ── */}
+          {resumeMode && (
+            <>
+              <div style={{ background: 'linear-gradient(135deg,#f0f9ff,#e0f2fe)', border: '1px solid #bae6fd', borderRadius: 10, padding: '0.65rem 0.9rem', marginBottom: '1.1rem', fontSize: '0.75rem', color: '#0369a1', fontWeight: 600, lineHeight: 1.5 }}>
+                🔑 You started this session but your browser lost the connection.<br/>
+                Enter your 4-digit PIN to get back in without joining as a new person.
+              </div>
 
-          <p style={{ textAlign: 'center', fontSize: '0.72rem', color: '#aaa', marginTop: '0.75rem' }}>
-            Each person orders independently — all items appear on one bill.
-          </p>
+              <div style={{ marginBottom: '1.25rem' }}>
+                <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>
+                  🔐 Your Session PIN
+                </label>
+                <input
+                  type="tel" inputMode="numeric" maxLength={4}
+                  value={resumePin}
+                  onChange={e => { setResumePin(e.target.value.replace(/\D/g, '').slice(0, 4)); setResumePinError(''); }}
+                  onKeyDown={e => e.key === 'Enter' && !resumeBusy && handleResumeSession()}
+                  placeholder="••••"
+                  autoFocus={resumeMode}
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '0.8rem', border: `2px solid ${resumePinError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '1.4rem', outline: 'none', letterSpacing: '0.5rem', fontWeight: 900, textAlign: 'center' }}
+                />
+                {resumePinError && (
+                  <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.3rem', fontWeight: 600 }}>{resumePinError}</div>
+                )}
+              </div>
+
+              <button
+                onClick={handleResumeSession}
+                disabled={resumeBusy}
+                style={{ width: '100%', padding: '0.85rem', fontSize: '1rem', borderRadius: 12, border: 'none', cursor: resumeBusy ? 'not-allowed' : 'pointer', fontFamily: 'Poppins,sans-serif', fontWeight: 700, color: 'white', background: resumeBusy ? '#94a3b8' : 'linear-gradient(135deg,#1A0800,#3D1C00)', opacity: resumeBusy ? 0.8 : 1 }}
+              >
+                {resumeBusy ? '⏳ Verifying…' : '🔑 Restore My Session'}
+              </button>
+
+              <p style={{ textAlign: 'center', fontSize: '0.72rem', color: '#aaa', marginTop: '0.75rem', margin: '0.75rem 0 0' }}>
+                This restores your original session without adding extra guests.
+              </p>
+            </>
+          )}
         </div>
       </div>
     );
@@ -930,28 +1087,36 @@ function TablePageInner() {
     const filtered = catFilter === 'All' ? menu : menu.filter(m => m.category === catFilter);
 
     return (
-      <div style={{ minHeight: '100vh', background: '#faf8f3', fontFamily: 'Poppins,sans-serif', paddingBottom: cartCount > 0 ? '100px' : 0 }}>
-        <div style={{ background: 'linear-gradient(135deg,#1A0800,#3D1C00)', color: 'white', padding: '0.9rem 1rem', position: 'sticky', top: 0, zIndex: 50 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div style={{ minHeight: '100vh', background: 'linear-gradient(180deg,#faf7f2 0%,#f5f0e8 100%)', fontFamily: 'Poppins,sans-serif', paddingBottom: cartCount > 0 ? '100px' : '1rem' }}>
+        <style>{`
+          @keyframes slideUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
+          .menu-card { animation: slideUp 0.25s ease; transition: transform 0.15s, box-shadow 0.15s; }
+          .menu-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important; }
+          .add-btn:active { transform: scale(0.95); }
+          .cat-pill { transition: all 0.2s; }
+        `}</style>
+        <div style={{ background: 'linear-gradient(160deg,#1A0800 0%,#3D1C00 70%,#2D0F00 100%)', color: 'white', padding: '0.9rem 1rem 0', position: 'sticky', top: 0, zIndex: 50, boxShadow: '0 4px 20px rgba(0,0,0,0.4)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
             <div>
-              <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.1rem', fontWeight: 900 }}>🍽️ Foodie Lover</div>
-              <div style={{ fontSize: '0.68rem', color: '#F9A826' }}>Table {tableName || tableId} · {customerName}</div>
+              <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.15rem', fontWeight: 900, letterSpacing: '-0.01em' }}>🍽️ Foodie Lover</div>
+              <div style={{ fontSize: '0.68rem', color: '#F9A826', fontWeight: 600 }}>Table {tableName || tableId} · {customerName}</div>
             </div>
             {tab && tabOrders.length > 0 && (
-              <button onClick={() => setView('tracking')} style={{ ...btn('#ffffff20', 'white'), fontSize: '0.75rem', border: '1px solid #ffffff40' }}>
-                📋 My Tab
+              <button onClick={() => setView('tracking')} style={{ background: 'rgba(249,168,38,0.18)', color: '#F9A826', border: '1px solid rgba(249,168,38,0.4)', borderRadius: 20, fontWeight: 700, cursor: 'pointer', fontFamily: 'Poppins,sans-serif', padding: '0.35rem 0.85rem', fontSize: '0.75rem' }}>
+                📋 My Tab ({tabOrders.filter(o => !['cancelled','void'].includes(o.status)).length})
               </button>
             )}
           </div>
-          <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.6rem', overflowX: 'auto', paddingBottom: '0.1rem' }}>
+          <div style={{ display: 'flex', gap: '0.35rem', overflowX: 'auto', paddingBottom: '0.65rem', scrollbarWidth: 'none' }}>
             {CATEGORIES.map(c => (
-              <button key={c} onClick={() => setCatFilter(c)} style={{
-                padding: '0.25rem 0.7rem', borderRadius: 20, whiteSpace: 'nowrap',
-                border: `1.5px solid ${catFilter === c ? '#F9A826' : '#ffffff30'}`,
-                background: catFilter === c ? '#F9A826' : 'transparent',
-                color: catFilter === c ? '#1A0800' : 'white',
-                fontWeight: catFilter === c ? 700 : 400, cursor: 'pointer',
-                fontFamily: 'Poppins,sans-serif', fontSize: '0.75rem',
+              <button key={c} className="cat-pill" onClick={() => setCatFilter(c)} style={{
+                padding: '0.28rem 0.75rem', borderRadius: 20, whiteSpace: 'nowrap',
+                border: `1.5px solid ${catFilter === c ? '#F9A826' : 'rgba(255,255,255,0.2)'}`,
+                background: catFilter === c ? 'linear-gradient(135deg,#F9A826,#E65C00)' : 'rgba(255,255,255,0.08)',
+                color: catFilter === c ? '#1A0800' : 'rgba(255,255,255,0.85)',
+                fontWeight: catFilter === c ? 800 : 400, cursor: 'pointer',
+                fontFamily: 'Poppins,sans-serif', fontSize: '0.72rem',
+                boxShadow: catFilter === c ? '0 3px 10px rgba(249,168,38,0.4)' : 'none',
               }}>{c}</button>
             ))}
           </div>
@@ -971,28 +1136,34 @@ function TablePageInner() {
           </div>
         )}
 
-        <div style={{ padding: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(160px,1fr))', gap: '0.75rem' }}>
+        <div style={{ padding: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(165px,1fr))', gap: '0.85rem' }}>
           {filtered.map(item => {
-            const hasVariants = item.variants && item.variants.length > 0;
-            const totalQty    = itemCartQty(item.id);
+            const hasVariants  = item.variants && item.variants.length > 0;
+            const totalQty     = itemCartQty(item.id);
             const noVariantKey = `${item.id}__`;
-            const noVarQty   = cart[noVariantKey]?.qty ?? 0;
+            const noVarQty     = cart[noVariantKey]?.qty ?? 0;
             return (
-              <div key={item.id} style={{ background: 'white', borderRadius: 14, overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.07)', border: totalQty > 0 ? '2px solid #E65C00' : '2px solid transparent', opacity: billRequested ? 0.6 : 1 }}>
-                {/* Image — render <img> for URL images, emoji/fallback otherwise */}
-                <div style={{ height: '110px', background: '#faf5ee', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', position: 'relative' }}>
+              <div key={item.id} className="menu-card" style={{ background: 'white', borderRadius: 16, overflow: 'hidden', boxShadow: totalQty > 0 ? '0 4px 16px rgba(230,92,0,0.2)' : '0 2px 8px rgba(0,0,0,0.07)', border: totalQty > 0 ? '2px solid #E65C00' : '2px solid transparent', opacity: billRequested ? 0.6 : 1, position: 'relative' }}>
+                {totalQty > 0 && (
+                  <div style={{ position: 'absolute', top: 8, right: 8, width: 22, height: 22, borderRadius: '50%', background: '#E65C00', color: 'white', fontSize: '0.68rem', fontWeight: 900, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2, boxShadow: '0 2px 6px rgba(0,0,0,0.2)' }}>{totalQty}</div>
+                )}
+                {/* Image */}
+                <div style={{ height: '115px', background: 'linear-gradient(135deg,#faf5ee,#f5ede0)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', position: 'relative' }}>
                   {item.img && item.img.startsWith('http')
                     ? <img src={item.img} alt={item.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                         onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
-                    : <span style={{ fontSize: '2.5rem' }}>{item.img || '🍽️'}</span>
+                    : <span style={{ fontSize: '2.8rem' }}>{item.img || '🍽️'}</span>
                   }
+                  {item.badge && (
+                    <div style={{ position: 'absolute', top: 6, left: 6, background: 'linear-gradient(135deg,#E65C00,#F9A826)', color: 'white', fontSize: '0.58rem', fontWeight: 800, borderRadius: 20, padding: '0.12rem 0.45rem', boxShadow: '0 2px 6px rgba(0,0,0,0.15)' }}>
+                      {BADGE_LABEL[item.badge] || item.badge}
+                    </div>
+                  )}
                 </div>
-                {item.badge && <div style={{ fontSize: '0.62rem', fontWeight: 700, color: '#E65C00', textAlign: 'center', marginBottom: '0.2rem' }}>{BADGE_LABEL[item.badge] || item.badge}</div>}
-                <div style={{ padding: '0.4rem 0.6rem 0.6rem' }}>
-                  <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#1A0800', marginBottom: '0.15rem' }}>{item.name}</div>
-                  <div style={{ fontSize: '0.68rem', color: '#888', marginBottom: '0.35rem', lineHeight: 1.3 }}>{item.desc}</div>
-                  {/* Price display */}
-                  <div style={{ fontSize: '0.78rem', fontWeight: 900, color: '#E65C00', marginBottom: '0.4rem' }}>
+                <div style={{ padding: '0.5rem 0.65rem 0.65rem' }}>
+                  <div style={{ fontWeight: 700, fontSize: '0.83rem', color: '#1A0800', marginBottom: '0.12rem', lineHeight: 1.3 }}>{item.name}</div>
+                  <div style={{ fontSize: '0.67rem', color: '#999', marginBottom: '0.35rem', lineHeight: 1.3 }}>{item.desc}</div>
+                  <div style={{ fontSize: '0.82rem', fontWeight: 900, color: '#E65C00', marginBottom: '0.45rem' }}>
                     {hasVariants
                       ? item.variants!.length === 1
                         ? `₹${item.variants![0].price}`
@@ -1004,7 +1175,7 @@ function TablePageInner() {
                   {hasVariants && totalQty > 0 && (
                     <div style={{ marginBottom: '0.3rem', display: 'flex', flexWrap: 'wrap', gap: '0.2rem' }}>
                       {cartEntries.filter(e => e.itemId === item.id).map(e => (
-                        <span key={e.key} style={{ fontSize: '0.62rem', background: '#fef3e2', color: '#E65C00', fontWeight: 700, borderRadius: 10, padding: '0.1rem 0.4rem' }}>
+                        <span key={e.key} style={{ fontSize: '0.6rem', background: '#fff5ee', color: '#E65C00', fontWeight: 700, borderRadius: 10, padding: '0.1rem 0.4rem', border: '1px solid #fed7aa' }}>
                           {e.variantName} ×{e.qty}
                         </span>
                       ))}
@@ -1012,17 +1183,17 @@ function TablePageInner() {
                   )}
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     {billRequested ? (
-                      <span style={{ fontSize: '0.65rem', color: '#f59e0b', fontWeight: 700 }}>🚫 Locked</span>
+                      <span style={{ fontSize: '0.62rem', color: '#f59e0b', fontWeight: 700 }}>🚫 Bill requested</span>
                     ) : hasVariants ? (
-                      <button onClick={() => openVariantPicker(item)} style={{ ...btn(), fontSize: '0.75rem', padding: '0.3rem 0.7rem', borderRadius: 20, width: '100%' }}>
-                        {totalQty > 0 ? `＋ Add More (${totalQty} in cart)` : '＋ Add'}
+                      <button className="add-btn" onClick={() => openVariantPicker(item)} style={{ background: totalQty > 0 ? 'linear-gradient(135deg,#fff5ee,#fef3e2)' : 'linear-gradient(135deg,#E65C00,#FF7A1A)', color: totalQty > 0 ? '#E65C00' : 'white', border: totalQty > 0 ? '1.5px solid #E65C00' : 'none', borderRadius: 20, fontWeight: 700, cursor: 'pointer', fontFamily: 'Poppins,sans-serif', padding: '0.3rem 0.7rem', fontSize: '0.73rem', width: '100%' }}>
+                        {totalQty > 0 ? `＋ Add More` : '＋ Add'}
                       </button>
                     ) : noVarQty === 0
-                      ? <button onClick={() => addToCartDirect(item)} style={{ ...btn(), fontSize: '0.75rem', padding: '0.3rem 0.7rem', borderRadius: 20 }}>+ Add</button>
+                      ? <button className="add-btn" onClick={() => addToCartDirect(item)} style={{ background: 'linear-gradient(135deg,#E65C00,#FF7A1A)', color: 'white', border: 'none', borderRadius: 20, fontWeight: 700, cursor: 'pointer', fontFamily: 'Poppins,sans-serif', padding: '0.3rem 0.85rem', fontSize: '0.73rem', boxShadow: '0 3px 10px rgba(230,92,0,0.3)' }}>+ Add</button>
                       : <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                          <button onClick={() => updateCartQty(noVariantKey, -1)} style={{ width: 26, height: 26, borderRadius: '50%', border: '2px solid #E65C00', background: 'white', color: '#E65C00', fontWeight: 900, cursor: 'pointer', fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>−</button>
-                          <span style={{ fontWeight: 700, color: '#1A0800', fontSize: '0.85rem', minWidth: 16, textAlign: 'center' }}>{noVarQty}</span>
-                          <button onClick={() => addToCartDirect(item)} style={{ width: 26, height: 26, borderRadius: '50%', border: 'none', background: '#E65C00', color: 'white', fontWeight: 900, cursor: 'pointer', fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
+                          <button onClick={() => updateCartQty(noVariantKey, -1)} style={{ width: 28, height: 28, borderRadius: '50%', border: '2px solid #E65C00', background: 'white', color: '#E65C00', fontWeight: 900, cursor: 'pointer', fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.15s' }}>−</button>
+                          <span style={{ fontWeight: 900, color: '#1A0800', fontSize: '0.9rem', minWidth: 18, textAlign: 'center' }}>{noVarQty}</span>
+                          <button onClick={() => addToCartDirect(item)} style={{ width: 28, height: 28, borderRadius: '50%', border: 'none', background: 'linear-gradient(135deg,#E65C00,#FF7A1A)', color: 'white', fontWeight: 900, cursor: 'pointer', fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px rgba(230,92,0,0.35)' }}>+</button>
                         </div>
                     }
                   </div>
@@ -1034,7 +1205,7 @@ function TablePageInner() {
 
         {cartCount > 0 && !billRequested && (
           <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, padding: '0.75rem 1rem', background: 'white', boxShadow: '0 -4px 20px rgba(0,0,0,0.12)', zIndex: 100 }}>
-            <button onClick={() => setView('cart')} style={{ ...btn(), width: '100%', padding: '0.8rem', fontSize: '0.95rem', borderRadius: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <button onClick={() => setView('cart')} style={{ width: '100%', padding: '0.85rem 1rem', fontSize: '0.95rem', borderRadius: 14, border: 'none', cursor: 'pointer', fontFamily: 'Poppins,sans-serif', fontWeight: 800, color: 'white', background: 'linear-gradient(135deg,#E65C00,#FF7A1A)', boxShadow: '0 4px 20px rgba(230,92,0,0.4)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span>🛒 {cartCount} item{cartCount !== 1 ? 's' : ''}</span>
               <span>₹{cartTotal} →</span>
             </button>

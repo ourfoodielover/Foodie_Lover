@@ -28,8 +28,8 @@ const STATUS_COLOR: Record<string, string> = {
 function fmtTime(iso: string) {
   return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
 }
-function elapsedMins(iso: string) {
-  return Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+function elapsedMins(iso: string, nowMs: number) {
+  return Math.floor((nowMs - new Date(iso).getTime()) / 60000);
 }
 
 export default function DeliveryPage() {
@@ -38,7 +38,7 @@ export default function DeliveryPage() {
   const [authChecked, setAuthChecked] = useState(false);
   const [orders, setOrders]               = useState<Order[]>([]);
   const [reDeliveryIssues, setReDeliveryIssues] = useState<OrderIssue[]>([]);
-  const [tick, setTick]                   = useState(0);
+  const [nowMs, setNowMs]                 = useState(() => Date.now());
   const [filter, setFilter]               = useState<'all' | 'ready' | 'enroute' | 'done' | 'redeliver'>('all');
   const [confirmPick,   setConfirmPick]   = useState<string | null>(null);
   const [confirmDeliv,  setConfirmDeliv]  = useState<string | null>(null);
@@ -94,11 +94,11 @@ export default function DeliveryPage() {
     if (!authChecked) return;
     refresh();
     const t1 = setInterval(refresh, 5000);
-    const t2 = setInterval(() => setTick(n => n + 1), 1000);
+    const t2 = setInterval(() => setNowMs(Date.now()), 1000);
     return () => { clearInterval(t1); clearInterval(t2); };
   }, [refresh, authChecked]);
 
-  void tick; // used to force re-render for live timers
+  void nowMs; // used indirectly via elapsedMins(iso, nowMs)
 
   async function doPickup(orderId: string) {
     const deliveryName = session?.name || 'Delivery';
@@ -291,7 +291,7 @@ export default function DeliveryPage() {
       {/* Order cards */}
       <div style={{ padding: '0.5rem 1rem 5rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(300px,1fr))', gap: '0.85rem' }}>
         {shown.map(order => {
-          const elapsed      = elapsedMins(order.timestamp);
+          const elapsed      = elapsedMins(order.timestamp, nowMs);
           const isUrgent     = (order.status === 'prepared' || order.status === 'served') && elapsed > 15;
           const isReDeliver  = order.status === 're_serve_required';
           const events       = (order.timeline ?? []) as { eventType: string; by?: string; at?: string }[];
