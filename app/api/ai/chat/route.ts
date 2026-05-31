@@ -221,20 +221,57 @@ export async function POST(req: NextRequest) {
   });
 
   // ── Build chat history for multi-turn ─────────────────────────────────────
-  // Gemini uses 'user' and 'model' roles (not 'assistant').
-  // For model (assistant) turns we re-wrap the reply text as JSON so Gemini
-  // sees consistent JSON in prior turns and keeps producing JSON.
-  const geminiHistory = history.slice(-6).map(m => {
+  //
+  // Frontend sends: history = [...priorTurns, currentUserMsg]
+  // The current user message is ALSO sent separately as `message`.
+  // Gemini's startChat({ history }) requires COMPLETED turns only —
+  // the new user message must NOT be in history (it's sent via sendMessage).
+  //
+  // Required Gemini history shape:
+  //   [ user, model, user, model, ... ]  ← ends with 'model', starts with 'user'
+  //
+  // Steps:
+  //   1. Pop the last entry — it IS the current user message (duplicate of `message`)
+  //   2. Trim any leading 'model' entries (history must start with 'user')
+  //   3. Ensure even count so we always have complete user/model pairs
+  //   4. Take last 6 entries (3 pairs) to stay within context limits
+  //   5. Re-wrap assistant text as JSON so Gemini stays in JSON mode
+
+  let priorTurns = history.slice(); // copy
+
+  // Step 1: remove last entry (= current user message, sent separately via sendMessage)
+  if (priorTurns.length > 0 && priorTurns[priorTurns.length - 1].role === 'user') {
+    priorTurns = priorTurns.slice(0, -1);
+  }
+
+  // Step 2: trim any leading 'model' entries (Gemini requires first role = 'user')
+  while (priorTurns.length > 0 && priorTurns[0].role === 'assistant') {
+    priorTurns = priorTurns.slice(1);
+  }
+
+  // Step 3: ensure even count — drop unpaired tail entry if needed
+  if (priorTurns.length % 2 !== 0) {
+    priorTurns = priorTurns.slice(0, -1);
+  }
+
+  // Step 4: keep last 6 entries (= 3 complete user/model pairs)
+  priorTurns = priorTurns.slice(-6);
+
+  // Step 5: map to Gemini format, re-wrapping assistant replies as JSON
+  const geminiHistory = priorTurns.map(m => {
     if (m.role === 'assistant') {
-      // Re-wrap the plain reply text back into the JSON format Gemini was trained to produce
-      const jsonWrapped = JSON.stringify({ reply: m.content, actions: [] });
-      return { role: 'model', parts: [{ text: jsonWrapped }] };
+      // Re-wrap as JSON so Gemini sees consistent JSON in prior turns
+      return { role: 'model' as const, parts: [{ text: JSON.stringify({ reply: m.content, actions: [] }) }] };
     }
-    return { role: 'user', parts: [{ text: m.content }] };
+    return { role: 'user' as const, parts: [{ text: m.content }] };
   });
 
   console.log('[Foodie AI] Gemini model: gemini-2.5-flash');
-  console.log('[Foodie AI] History turns sent to Gemini:', geminiHistory.length);
+  console.log('[Foodie AI] Prior turns (before current msg):', priorTurns.length);
+  console.log('[Foodie AI] geminiHistory payload:\n' + JSON.stringify(
+    geminiHistory.map(m => ({ role: m.role, text: m.parts[0].text.slice(0, 80) })),
+    null, 2,
+  ));
 
   // ── Call Gemini ───────────────────────────────────────────────────────────
   try {
