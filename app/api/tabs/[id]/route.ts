@@ -1,7 +1,7 @@
 // PATCH /api/tabs/[id] — update or close a tab
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId, broadcast } from '@/lib/supabase-server';
-import { enqueueReceiptEmail, sendReceiptEmail } from '@/lib/email-server';
+import { enqueueReceiptEmail, sendReceiptEmail, sendTabReceiptEmail } from '@/lib/email-server';
 
 export const dynamic = 'force-dynamic';
 type Ctx = { params: Promise<{ id: string }> };
@@ -170,36 +170,45 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       await broadcast(rid, 'payment_completed', { tabId: id, total: finalTotal, paymentMethod });
 
       // ── Receipt emails ─────────────────────────────────────────────────────
-      // For each completed tab order that has a customer_email, send a receipt.
-      // Uses sendReceiptEmail which is idempotent (checks order_events for duplicates).
-      // Fire-and-forget: don't block the response on email delivery.
-      if (tabOrders && tabOrders.length > 0) {
-        const { data: completedOrders } = await sb
-          .from('orders')
-          .select('id, customer_email')
-          .eq('tab_id', id)
-          .eq('status', 'completed')
-          .not('customer_email', 'is', null);
+      // PRIMARY path for dine-in (QR / waiter-created) tabs:
+      //   sendTabReceiptEmail reads customer_tabs.customer_email directly so it
+      //   works even when individual orders don't carry the email field.
+      //   It builds ONE combined receipt covering every order round in the tab.
+      //   No-op when the tab has no customer_email — logged but never throws.
+      sendTabReceiptEmail(id).then(result => {
+        if (result.sent) {
+          console.info(`[tabs/close] tab receipt sent for ${id}: ${result.messageId}`);
+        } else if (result.reason && result.reason !== 'No customer email') {
+          // Real failure (not just "no email configured") — fall back to per-order
+          console.warn(`[tabs/close] tab receipt failed for ${id}: ${result.reason}`);
 
-        if (completedOrders && completedOrders.length > 0) {
-          for (const o of completedOrders) {
-            if (o.customer_email) {
-              const oid = o.id as string;
-              // Attempt immediate send — most reliable path
-              sendReceiptEmail(oid).then(result => {
-                if (!result.sent) {
-                  console.warn(`[tabs/close] immediate email failed for ${oid}: ${result.reason}`);
-                  // Fall back to queue for retry
-                  return enqueueReceiptEmail(oid);
+          // FALLBACK: send individual order receipts for any orders that carried
+          // a customer_email (e.g. orders created manually with an email override).
+          if (tabOrders && tabOrders.length > 0) {
+            void (async () => {
+              try {
+                const { data: completedOrders } = await sb
+                  .from('orders')
+                  .select('id, customer_email')
+                  .eq('tab_id', id)
+                  .eq('status', 'completed')
+                  .not('customer_email', 'is', null);
+                if (!completedOrders?.length) return;
+                for (const o of completedOrders) {
+                  if (!o.customer_email) continue;
+                  const oid = o.id as string;
+                  sendReceiptEmail(oid).then(r => {
+                    if (!r.sent) return enqueueReceiptEmail(oid);
+                    console.info(`[tabs/close] fallback receipt sent for ${oid}: ${r.messageId}`);
+                  }).catch(err => console.error(`[tabs/close] fallback email error for ${oid}:`, err));
                 }
-                console.info(`[tabs/close] receipt email sent for ${oid}: ${result.messageId}`);
-              }).catch(err =>
-                console.error(`[tabs/close] email error for ${oid}:`, err),
-              );
-            }
+              } catch (err) {
+                console.error('[tabs/close] fallback orders fetch error:', err);
+              }
+            })();
           }
         }
-      }
+      }).catch(err => console.error(`[tabs/close] tab receipt error for ${id}:`, err));
 
       // Return updated tab
       const { data: updated } = await sb.from('customer_tabs').select('*').eq('id', id).single();

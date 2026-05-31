@@ -46,12 +46,13 @@ interface TabUI {
   discount:        number;
   discountReason?: string;
   tableSessionPin: string;     // PIN from Supabase customer_tabs.pin (not localStorage)
+  email?:          string;     // customer email captured at tab open — used for receipts
   createdAt:       string;
 }
 function toTabUI(
   t: { id: string; tableId?: string | null; customerName: string; partySize: number;
        status: string; total: number; discount: number; discountReason?: string | null;
-       pin?: string | null; createdAt: string },
+       pin?: string | null; email?: string | null; createdAt: string },
 ): TabUI {
   const s = (t.status || 'open') as TabStatus;
   return {
@@ -60,6 +61,7 @@ function toTabUI(
     total: t.total, totalAmount: t.total,
     discount: t.discount, discountReason: t.discountReason ?? undefined,
     tableSessionPin: t.pin ?? '',   // PIN comes from Supabase, no localStorage needed
+    email: t.email ?? undefined,    // carry email so handlePlaceOrder can send confirmations
     createdAt: t.createdAt,
   };
 }
@@ -468,8 +470,9 @@ function TablePageInner() {
     try {
       // Create order in Supabase — visible immediately to waiter/kitchen/manager
       const order = await createOrderApi({
-        type:         'dine-in',
+        type:          'dine-in',
         customerName,
+        customerEmail: tab?.email || undefined,  // triggers confirmation email if email was captured
         tableId,
         tabId,
         items,
@@ -976,7 +979,14 @@ function TablePageInner() {
             const noVarQty   = cart[noVariantKey]?.qty ?? 0;
             return (
               <div key={item.id} style={{ background: 'white', borderRadius: 14, overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.07)', border: totalQty > 0 ? '2px solid #E65C00' : '2px solid transparent', opacity: billRequested ? 0.6 : 1 }}>
-                <div style={{ fontSize: '2.5rem', textAlign: 'center', padding: '0.75rem 0 0.4rem', background: '#faf5ee' }}>{item.img}</div>
+                {/* Image — render <img> for URL images, emoji/fallback otherwise */}
+                <div style={{ height: '110px', background: '#faf5ee', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', position: 'relative' }}>
+                  {item.img && item.img.startsWith('http')
+                    ? <img src={item.img} alt={item.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                        onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                    : <span style={{ fontSize: '2.5rem' }}>{item.img || '🍽️'}</span>
+                  }
+                </div>
                 {item.badge && <div style={{ fontSize: '0.62rem', fontWeight: 700, color: '#E65C00', textAlign: 'center', marginBottom: '0.2rem' }}>{BADGE_LABEL[item.badge] || item.badge}</div>}
                 <div style={{ padding: '0.4rem 0.6rem 0.6rem' }}>
                   <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#1A0800', marginBottom: '0.15rem' }}>{item.name}</div>
