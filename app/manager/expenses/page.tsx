@@ -9,6 +9,7 @@ import {
   listExpenses, addExpenseApi, deleteExpenseApi, computeExpenseStats,
   Expense, ExpenseStats, ExpenseCategory, EXPENSE_CATEGORIES,
 } from '@/lib/api';
+import { todayMidnightIST, fmtDateLong, fmtTime } from '@/lib/date';
 
 // ─── Style helpers ─────────────────────────────────────────────────────────────
 const btn = (bg = '#E65C00', c = 'white'): React.CSSProperties => ({
@@ -94,11 +95,9 @@ export default function ExpensesPage() {
   // ── Data refresh — all from Supabase ─────────────────────────────────────
   const refresh = useCallback(async () => {
     try {
-      const todayMidnight = new Date();
-      todayMidnight.setHours(0, 0, 0, 0);
       const [allExpenses, todayOrders] = await Promise.all([
         listExpenses(),
-        getOrders({ since: todayMidnight.toISOString(), limit: 200 }),
+        getOrders({ since: todayMidnightIST().toISOString(), limit: 200 }),
       ]);
       // Newest first
       const sorted = [...allExpenses].sort(
@@ -369,8 +368,8 @@ export default function ExpensesPage() {
             filtered.map((expense, i) => {
               const isOdd       = i % 2 === 1;
               const isDeleting  = confirmDel === expense.id;
-              const dateLabel   = new Date(expense.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-              const timeLabel   = new Date(expense.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+              const dateLabel   = fmtDateLong(expense.createdAt);
+              const timeLabel   = fmtTime(expense.createdAt);
 
               return (
                 <div

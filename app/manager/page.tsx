@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession, clearSession, AuthSession } from '@/lib/auth';
 import { formatTableName } from '@/lib/format';
+import { todayMidnightIST, isToday, clockIST, fmtTime } from '@/lib/date';
 import {
   getTabs, getOrders, closeTab, applyTabDiscount,
   updateOrderStatus,
@@ -103,11 +104,9 @@ export default function ManagerPage() {
       // Fetch ALL of today's orders (active + completed + cancelled) so the
       // EOD report has access to completed-order revenue and void counts.
       // Bounded by midnight-today to avoid loading unbounded history.
-      const todayMidnight = new Date();
-      todayMidnight.setHours(0, 0, 0, 0);
       const [allTabs, allOrders, issues] = await Promise.all([
         getTabs(),
-        getOrders({ since: todayMidnight.toISOString(), limit: 200 }),
+        getOrders({ since: todayMidnightIST().toISOString(), limit: 200 }),
         getActiveIssues(),
       ]);
       setTabs(allTabs);
@@ -147,13 +146,7 @@ export default function ManagerPage() {
     if (!authChecked) return;
     refresh();
     const t1 = setInterval(refresh, 5000);
-    const t2 = setInterval(() => {
-      const n = new Date();
-      setClock({
-        date: n.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
-        time: n.toLocaleTimeString(),
-      });
-    }, 1000);
+    const t2 = setInterval(() => { setClock(clockIST()); }, 1000);
     return () => { clearInterval(t1); clearInterval(t2); };
   }, [refresh, authChecked]);
 
@@ -318,12 +311,10 @@ export default function ManagerPage() {
   // ── Derived data ──────────────────────────────────────────────────────────
   const awaitingTabs = tabs.filter(t => t.status === 'awaiting_payment');
   const openTabs     = tabs.filter(t => t.status === 'open');
-  const closedTabs   = tabs.filter(t => t.status === 'closed' &&
-    !!t.closedAt && new Date(t.closedAt).toDateString() === new Date().toDateString(),
-  );
+  const closedTabs   = tabs.filter(t => t.status === 'closed' && !!t.closedAt && isToday(t.closedAt));
   // todayRevenue from orders state (already fetched from API)
   const todayRevenue  = orders
-    .filter(o => { try { const d = new Date(o.timestamp); return d.toDateString() === new Date().toDateString(); } catch { return false; } })
+    .filter(o => { try { return isToday(o.timestamp); } catch { return false; } })
     .reduce((s, o) => s + (o.total || 0), 0);
   const todayNetProfit = todayRevenue - todayExpenses;
 
@@ -355,8 +346,7 @@ export default function ManagerPage() {
     : [];
 
   // EOD report — derived from live Supabase orders (replaces localStorage getEndOfDayReport)
-  const todayStr2 = new Date().toDateString();
-  const todayOrds = orders.filter(o => new Date(o.timestamp).toDateString() === todayStr2);
+  const todayOrds = orders.filter(o => isToday(o.timestamp));
   const completedOrds = todayOrds.filter(o => o.status === 'completed');
   const avgVal = completedOrds.length > 0
     ? Math.round(completedOrds.reduce((s, o) => s + (o.total || 0), 0) / completedOrds.length)
@@ -368,11 +358,11 @@ export default function ManagerPage() {
     });
   });
   const eodReport = {
-    date:           new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+    date:           new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' }),
     totalOrders:    completedOrds.length,
     totalRevenue:   Math.round(todayOrds.filter(o => !['cancelled', 'void'].includes(o.status)).reduce((s, o) => s + (o.total || 0), 0)),
     avgOrderValue:  avgVal,
-    completedTabs:  tabs.filter(t => t.status === 'closed' && new Date(t.createdAt).toDateString() === todayStr2).length,
+    completedTabs:  tabs.filter(t => t.status === 'closed' && isToday(t.createdAt)).length,
     discountsTotal: Math.round(todayOrds.reduce((s, o) => s + (o.discount || 0), 0)),
     voidedOrders:   todayOrds.filter(o => o.status === 'void').length,
     topItems: Array.from(itemQtyMap.entries())
@@ -382,10 +372,7 @@ export default function ManagerPage() {
   };
 
   // ── Pickup & Delivery visibility ──────────────────────────────────────────
-  const isToday = (ts: string) => {
-    try { return new Date(ts).toDateString() === new Date().toDateString(); }
-    catch { return false; }
-  };
+  // isToday is imported from lib/date — uses IST, not UTC
   const activePickup    = orders.filter(o => o.type === 'pickup'   && !['cancelled','void','completed'].includes(o.status));
   const activeDelivery  = orders.filter(o => o.type === 'delivery' && !['cancelled','void','completed'].includes(o.status));
   const todayPickup     = orders.filter(o => o.type === 'pickup'   && isToday(o.timestamp));
@@ -539,7 +526,7 @@ export default function ManagerPage() {
                       {relOrder?.customerName && <span style={{ fontWeight: 400, marginLeft: '0.4rem', opacity: 0.85 }}>— {relOrder.customerName}</span>}
                     </div>
                     <div style={{ fontSize: '0.7rem', opacity: 0.85, marginTop: '0.1rem' }}>
-                      Reported by: {issue.reportedBy} · Attempt #{issue.retryCount} · {new Date(issue.reportedAt).toLocaleTimeString()}
+                      Reported by: {issue.reportedBy} · Attempt #{issue.retryCount} · {fmtTime(issue.reportedAt)}
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: '0.4rem' }}>

@@ -3,6 +3,8 @@
 // Exports same function names as lib/storage.ts for easy migration.
 'use client';
 
+import { isToday } from '@/lib/date';
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 export type OrderStatus =
   | 'awaiting_waiter' | 'pending' | 'preparing' | 'prepared' | 'served'
@@ -523,11 +525,8 @@ export async function getShifts(opts?: { staffId?: string; open?: boolean }): Pr
 
 // ─── Analytics ────────────────────────────────────────────────────────────────
 export async function getAnalytics(period: 'today' | 'week' | 'month' | 'all' = 'today'): Promise<AnalyticsData> {
-  // Pass the browser's UTC offset so the server can compute "today" in local time.
-  // new Date().getTimezoneOffset() returns negative minutes for positive offsets
-  // e.g. IST (UTC+5:30) → getTimezoneOffset() = -330 → tz = +330
-  const tz = typeof window !== 'undefined' ? (-new Date().getTimezoneOffset()) : 0;
-  return apiFetch<AnalyticsData>(`/api/analytics?restaurantId=${rid()}&period=${period}&tz=${tz}`);
+  // Server uses IST (Asia/Kolkata) directly — no tz offset needed from client
+  return apiFetch<AnalyticsData>(`/api/analytics?restaurantId=${rid()}&period=${period}`);
 }
 
 // ─── Online order stats (computed from live Supabase orders) ─────────────────
@@ -556,15 +555,11 @@ export interface OnlineOrderStats {
  * getOnlineOrderStats() from lib/storage which reads stale localStorage.
  */
 export function computeOnlineOrderStats(orders: Order[]): OnlineOrderStats {
-  const todayStr = new Date().toDateString();  // e.g. "Mon Mar 17 2025" in local TZ
-
   // Only online-sourced orders (pickup / delivery placed via /online page)
   const online = orders.filter(o => o.source === 'online');
 
-  // Today's online orders: compare created_at (UTC) converted to local date string
-  const todayOnline = online.filter(
-    o => new Date(o.timestamp).toDateString() === todayStr,
-  );
+  // Today's online orders — compared in IST to avoid UTC midnight mismatch
+  const todayOnline = online.filter(o => isToday(o.timestamp));
 
   const stats: OnlineOrderStats = {
     todayTotal:    todayOnline.length,
@@ -905,12 +900,12 @@ export async function deleteExpenseApi(id: string): Promise<void> {
 
 /** Compute expense stats from a list of already-fetched expenses. */
 export function computeExpenseStats(expenses: Expense[]): ExpenseStats {
-  const now   = new Date();
-  const today = now.toDateString();
+  const now      = new Date();
   const weekAgo  = new Date(now.getTime() - 7  * 86_400_000);
   const monthAgo = new Date(now.getTime() - 30 * 86_400_000);
 
-  const todayExp  = expenses.filter(e => new Date(e.createdAt).toDateString() === today);
+  // isToday uses IST — avoids UTC midnight mismatch when running on Vercel
+  const todayExp  = expenses.filter(e => isToday(e.createdAt));
   const weekExp   = expenses.filter(e => new Date(e.createdAt) >= weekAgo);
   const monthExp  = expenses.filter(e => new Date(e.createdAt) >= monthAgo);
 

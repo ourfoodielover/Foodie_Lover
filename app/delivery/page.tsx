@@ -26,7 +26,7 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 function fmtTime(iso: string) {
-  return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+  return new Date(iso).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true });
 }
 function elapsedMins(iso: string, nowMs: number) {
   return Math.floor((nowMs - new Date(iso).getTime()) / 60000);

@@ -43,7 +43,7 @@ function buildReceiptHtml(order: Record<string, unknown>, items: Record<string, 
   const total     = Number(order.total)     || 0;
   const discReason= (order.discount_reason as string) || '';
   const createdAt = order.created_at
-    ? new Date(order.created_at as string).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })
+    ? new Date(order.created_at as string).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })
     : '';
   const orderType = (order.type as string) || 'dine-in';
 
@@ -221,7 +221,7 @@ function buildTabReceiptHtml(
   const tableId    = (tab.table_id as string) || '';
   const tableName  = (tab.table_name as string) || tableId || '';
   const createdAt  = tab.created_at
-    ? new Date(tab.created_at as string).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })
+    ? new Date(tab.created_at as string).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })
     : '';
 
   // Determine the order type from the first order (all orders in a tab share the same type)
@@ -239,7 +239,7 @@ function buildTabReceiptHtml(
     const orderId  = (o.order.id as string) || '';
     const orderNum = (o.order.order_number as number) ?? String(orderId).slice(-6);
     const orderTime = o.order.created_at
-      ? new Date(o.order.created_at as string).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
+      ? new Date(o.order.created_at as string).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true })
       : '';
 
     const itemRows = o.items.map(it => `

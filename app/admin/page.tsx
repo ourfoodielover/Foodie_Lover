@@ -22,6 +22,11 @@ import {
   getSession, clearSession, AuthSession,
   SECURITY_QUESTIONS,
 } from '@/lib/auth';
+import {
+  todayMidnightIST, isToday, clockIST,
+  fmtDateLong, fmtDate, fmtTime, fmtDateTime, fmtDateTimeShort,
+  getISTHour, fmtMonthYear, toISTDate,
+} from '@/lib/date';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 // Dine-in flow:  awaiting_waiter→pending→preparing→prepared→served→completed
@@ -187,9 +192,7 @@ export default function AdminPage() {
       // admin analytics (EOD totals, cancel rate, waiter stats, discount log)
       // have access to the full picture.  We bound by "since midnight today" so
       // we never pull unbounded history. The server caps at 200 rows.
-      const todayMidnight = new Date();
-      todayMidnight.setHours(0, 0, 0, 0);
-      const liveOrders = await getOrders({ since: todayMidnight.toISOString(), limit: 200 });
+      const liveOrders = await getOrders({ since: todayMidnightIST().toISOString(), limit: 200 });
       setOrders(liveOrders);
 
       // Compute online/pickup/delivery stats from the same live data.
@@ -203,8 +206,8 @@ export default function AdminPage() {
     // ── Issue analytics: fetch all today's issues ──────────────────────────────
     try {
       const allIssues = await getAllIssues();
-      const todayMidnight2 = new Date(); todayMidnight2.setHours(0, 0, 0, 0);
-      setTodayIssues(allIssues.filter(i => new Date(i.createdAt) >= todayMidnight2));
+      const midnight = todayMidnightIST();
+      setTodayIssues(allIssues.filter(i => new Date(i.createdAt) >= midnight));
     } catch (e) {
       console.error('[Admin] Failed to load issues from Supabase:', e);
     }
@@ -212,8 +215,7 @@ export default function AdminPage() {
     // waiter_name lives on customer_tabs (not orders), so we compute accountability
     // stats here by aggregating today's open and recently closed tabs per waiter.
     try {
-      const todayMidnightTs = new Date();
-      todayMidnightTs.setHours(0, 0, 0, 0);
+      const todayMidnightTs = todayMidnightIST();
       const todayMidnightIso = todayMidnightTs.toISOString();
       const [apiTables, openTabs, closedTabs] = await Promise.all([
         getTablesApi(),
@@ -224,7 +226,7 @@ export default function AdminPage() {
       ]);
 
       // ── Waiter accountability from today's tabs ─────────────────────────────
-      // openTabs are filtered to today for stats (but ALL open tabs used for occupancy)
+      // openTabs are filtered to today (IST) for stats (but ALL open tabs used for occupancy)
       const todayTabs = [
         ...openTabs.filter(t => new Date(t.createdAt) >= todayMidnightTs),
         ...closedTabs,   // already filtered to today on the server
@@ -310,10 +312,7 @@ export default function AdminPage() {
     if (!authChecked) return;
     refresh();
     const t1 = setInterval(refresh, 5000);
-    const t2 = setInterval(() => {
-      const n = new Date();
-      setClock({ date: n.toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}), time: n.toLocaleTimeString() });
-    }, 1000);
+    const t2 = setInterval(() => { setClock(clockIST()); }, 1000);
     return () => { clearInterval(t1); clearInterval(t2); };
   }, [refresh, authChecked]);
 
@@ -340,14 +339,13 @@ export default function AdminPage() {
     router.replace('/admin/login');
   }
 
-  // ─── Today stats ──────────────────────────────────────────────────────────
-  const todayStr      = new Date().toDateString();
-  // todayOrders: all non-cancelled, non-void orders for today (used for counts + discount totals)
-  const todayOrders   = orders.filter(o => new Date(o.timestamp).toDateString()===todayStr && !['cancelled','void'].includes(o.status));
+  // ─── Today stats (IST — avoids UTC midnight mismatch) ────────────────────
+  // todayOrders: all non-cancelled, non-void orders for today
+  const todayOrders   = orders.filter(o => isToday(o.timestamp) && !['cancelled','void'].includes(o.status));
   // todayRevenue: only COMPLETED orders — money actually collected, not in-progress
-  const todayRevenue  = orders.filter(o => new Date(o.timestamp).toDateString()===todayStr && o.status==='completed').reduce((s,o)=>s+(o.total||0),0);
+  const todayRevenue  = orders.filter(o => isToday(o.timestamp) && o.status==='completed').reduce((s,o)=>s+(o.total||0),0);
   const todayDiscount = todayOrders.reduce((s,o)=>s+(o.discount||0),0);
-  const todayCancel   = orders.filter(o => o.status === 'cancelled' && new Date(o.timestamp).toDateString()===todayStr);
+  const todayCancel   = orders.filter(o => o.status === 'cancelled' && isToday(o.timestamp));
   // Active tables: count of tables with status 'occupied' from live Supabase data.
   const activeTables  = liveTables.filter(t => t.status === 'occupied').length;
   // Pending count: include awaiting_waiter (new dine-in orders) AND pending (kitchen queue).
@@ -579,12 +577,12 @@ export default function AdminPage() {
   }
 
   // ─── Sales data ───────────────────────────────────────────────────────────
-  // Filter live Supabase orders by the selected time period
+  // Filter live Supabase orders by the selected time period (IST-aware)
   function filterByPeriod(allOrders: Order[], period: typeof salesTab): Order[] {
     const now = new Date();
     return allOrders.filter(o => {
       const ts = new Date(o.timestamp);
-      if (period === 'today') return ts.toDateString() === now.toDateString();
+      if (period === 'today') return isToday(o.timestamp);
       if (period === 'week')  { const s = new Date(now); s.setDate(s.getDate() - 7);  return ts >= s; }
       if (period === 'month') { const s = new Date(now); s.setDate(s.getDate() - 30); return ts >= s; }
       return true; // 'all'
@@ -608,29 +606,38 @@ export default function AdminPage() {
   periodOrders.forEach(o=>(o.items||[]).forEach(it=>{if(!itemMap[it.name])itemMap[it.name]={qty:0,revenue:0};itemMap[it.name].qty+=it.qty||1;itemMap[it.name].revenue+=(it.subtotal||(it.price*(it.qty||1)));}));
   const topItems = Object.entries(itemMap).sort((a,b)=>b[1].qty-a[1].qty).slice(0,10);
 
-  // Breakdown rows
+  // Breakdown rows — all hour/date bucketing uses IST to avoid UTC offset errors
   const breakdownRows = (() => {
-    const now = new Date();
     if (salesTab==='today') {
       const hrs:Record<number,{o:number;n:number;d:number}> = {};
       for(let h=10;h<=23;h++) hrs[h]={o:0,n:0,d:0};
-      periodOrders.forEach(o=>{const h=new Date(o.timestamp).getHours();if(hrs[h]){hrs[h].o++;hrs[h].n+=o.total||0;hrs[h].d+=o.discount||0;}});
+      // getISTHour returns 0-23 in IST — never UTC
+      periodOrders.forEach(o=>{const h=getISTHour(o.timestamp);if(hrs[h]){hrs[h].o++;hrs[h].n+=o.total||0;hrs[h].d+=o.discount||0;}});
       return Object.entries(hrs).filter(([,v])=>v.o>0).map(([h,v])=>({label:`${parseInt(h)>12?parseInt(h)-12:h}:00${parseInt(h)>=12?' PM':' AM'}`,orders:v.o,net:v.n,disc:v.d}));
     }
     if (salesTab==='week') {
       const days=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
       const map:Record<string,{o:number;n:number;d:number}> = {};
-      for(let i=0;i<7;i++){const d=new Date(now);d.setDate(now.getDate()-now.getDay()+i);map[d.toDateString()]={o:0,n:0,d:0};}
-      periodOrders.forEach(o=>{const k=new Date(o.timestamp).toDateString();if(map[k]){map[k].o++;map[k].n+=o.total||0;map[k].d+=o.discount||0;}});
-      return Object.entries(map).map(([k,v])=>({label:`${days[new Date(k).getDay()]} ${new Date(k).getDate()}`,orders:v.o,net:v.n,disc:v.d}));
+      // Build week map using IST dates
+      for(let i=0;i<7;i++){
+        const d=new Date(); d.setDate(d.getDate()-d.getDay()+i);
+        const k=toISTDate(d); map[k]={o:0,n:0,d:0};
+      }
+      periodOrders.forEach(o=>{const k=toISTDate(o.timestamp);if(map[k]){map[k].o++;map[k].n+=o.total||0;map[k].d+=o.discount||0;}});
+      return Object.entries(map).map(([k,v])=>({
+        label:`${days[new Date(k+'T12:00:00+05:30').getDay()]} ${parseInt(k.slice(8),10)}`,
+        orders:v.o,net:v.n,disc:v.d,
+      }));
     }
     if (salesTab==='month') {
       const map:Record<string,{o:number;n:number;d:number}> = {};
-      periodOrders.forEach(o=>{const d=new Date(o.timestamp);const k=`Week ${Math.ceil(d.getDate()/7)}`;if(!map[k])map[k]={o:0,n:0,d:0};map[k].o++;map[k].n+=o.total||0;map[k].d+=o.discount||0;});
+      // getISTWeekLabel extracts IST day to avoid UTC-shifted week buckets
+      periodOrders.forEach(o=>{ const k=`Week ${Math.ceil(parseInt(toISTDate(o.timestamp).slice(8),10)/7)}`;if(!map[k])map[k]={o:0,n:0,d:0};map[k].o++;map[k].n+=o.total||0;map[k].d+=o.discount||0;});
       return Object.entries(map).map(([k,v])=>({label:k,orders:v.o,net:v.n,disc:v.d}));
     }
+    // 'all' — bucket by month in IST
     const map:Record<string,{o:number;n:number;d:number}> = {};
-    periodOrders.forEach(o=>{const d=new Date(o.timestamp);const k=d.toLocaleDateString('en-IN',{month:'short',year:'numeric'});if(!map[k])map[k]={o:0,n:0,d:0};map[k].o++;map[k].n+=o.total||0;map[k].d+=o.discount||0;});
+    periodOrders.forEach(o=>{const k=fmtMonthYear(o.timestamp);if(!map[k])map[k]={o:0,n:0,d:0};map[k].o++;map[k].n+=o.total||0;map[k].d+=o.discount||0;});
     return Object.entries(map).map(([k,v])=>({label:k,orders:v.o,net:v.n,disc:v.d}));
   })();
 
@@ -639,7 +646,7 @@ export default function AdminPage() {
   const cancelledOrders = orders.filter(o=>o.status==='cancelled').sort((a,b)=>new Date(b.timestamp).getTime()-new Date(a.timestamp).getTime());
   const cancelRate      = orders.length>0?Math.round((cancelledOrders.length/orders.length)*100):0;
   const highDiscOrders  = discountOrders.filter(o=>(o.discount||0)/((o.subtotal||o.total)||1)>0.3);
-  const todayDiscTotal  = orders.filter(o=>new Date(o.timestamp).toDateString()===todayStr).reduce((s,o)=>s+(o.discount||0),0);
+  const todayDiscTotal  = orders.filter(o=>isToday(o.timestamp)).reduce((s,o)=>s+(o.discount||0),0);
   const alerts:string[] = [];
   if (cancelRate>20) alerts.push(`⚠️ High cancellation rate: ${cancelRate}% of all orders cancelled`);
   if (highDiscOrders.length>0) alerts.push(`⚠️ ${highDiscOrders.length} order(s) had discount >30% of bill — review now`);
@@ -946,7 +953,7 @@ export default function AdminPage() {
                           {issue.escalated && <span style={{marginLeft:'0.5rem',background:'#dc2626',color:'white',borderRadius:4,padding:'0.05rem 0.35rem',fontSize:'0.65rem',fontWeight:800}}>ESCALATED</span>}
                         </div>
                         <div style={{fontSize:'0.7rem',color:'#64748b',marginTop:'0.1rem'}}>
-                          Reported by: {issue.reportedBy} · Attempt #{issue.retryCount} · Status: {issue.status} · {new Date(issue.reportedAt).toLocaleTimeString()}
+                          Reported by: {issue.reportedBy} · Attempt #{issue.retryCount} · Status: {issue.status} · {fmtTime(issue.reportedAt)}
                         </div>
                       </div>
                       <span style={{fontSize:'0.72rem',fontWeight:700,padding:'0.2rem 0.55rem',borderRadius:20,background: issue.status === 'reserving' ? '#dbeafe' : issue.escalated ? '#fee2e2' : '#fff7ed',color: issue.status === 'reserving' ? '#1d4ed8' : issue.escalated ? '#dc2626' : '#c2410c'}}>
@@ -1012,7 +1019,7 @@ export default function AdminPage() {
 
           {/* End of Day Report — derived from live Supabase orders */}
           {(() => {
-            const todayOrdsFull = orders.filter(o => new Date(o.timestamp).toDateString() === todayStr);
+            const todayOrdsFull = orders.filter(o => isToday(o.timestamp));
             const eod = {
               totalOrders:   todayOrdsFull.filter(o => o.status === 'completed').length,
               totalRevenue:  Math.round(todayOrdsFull.filter(o => !['cancelled','void'].includes(o.status)).reduce((s,o)=>s+(o.total||0),0)),
@@ -1083,7 +1090,7 @@ export default function AdminPage() {
                         <td style={{padding:'0.48rem 0.75rem',fontWeight:700,color:'#3b82f6'}}>{t.totalSessions}</td>
                         <td style={{padding:'0.48rem 0.75rem'}}>{t.avgMinutes} min</td>
                         <td style={{padding:'0.48rem 0.75rem',fontWeight:700,color:'#16a34a'}}>₹{t.totalRevenue}</td>
-                        <td style={{padding:'0.48rem 0.75rem',color:'#888',fontSize:'0.75rem'}}>{t.lastUsed?new Date(t.lastUsed).toLocaleDateString('en-IN'):'—'}</td>
+                        <td style={{padding:'0.48rem 0.75rem',color:'#888',fontSize:'0.75rem'}}>{t.lastUsed?fmtDate(t.lastUsed):'—'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1145,7 +1152,7 @@ export default function AdminPage() {
                   {!filteredOrders.length
                     ? <tr><td colSpan={12} style={{textAlign:'center',color:'#999',padding:'2rem'}}>No orders</td></tr>
                     : filteredOrders.map(order=>{
-                        const t      = new Date(order.timestamp).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+                        const t      = fmtTime(order.timestamp);
                         // Each order type has its own status flow — must NOT share delivery/pickup flows.
                         // Pickup: pending→preparing→prepared→served→completed  (NOT out_for_delivery)
                         // Delivery: pending→preparing→prepared→out_for_delivery→delivered→completed
@@ -1205,7 +1212,7 @@ export default function AdminPage() {
               const rows = periodOrders.map(o=>[
                 o.id,o.orderNum||'',o.type,o.customerName,o.status,
                 o.total||0,o.discount||0,o.paymentMethod||'',
-                new Date(o.timestamp).toLocaleString('en-IN'),
+                fmtDateTime(o.timestamp),
               ]);
               const header=['ID','Order#','Type','Customer','Status','Total','Discount','Payment','Date'];
               const csv=[header,...rows].map(r=>r.map(v=>JSON.stringify(v??'')).join(',')).join('\n');
@@ -1522,7 +1529,7 @@ export default function AdminPage() {
                           <tr key={o.id} style={{borderBottom:'1px solid #f5f0e8',background:pct>30?'#fef2f2':'white'}}>
                             <td style={{padding:'0.48rem 0.7rem'}}><button onClick={()=>setSelOrder(o)} style={{background:'none',border:'none',color:'#E65C00',textDecoration:'underline',fontWeight:700,cursor:'pointer',fontFamily:'Poppins,sans-serif',fontSize:'0.8rem'}}>{o.id}</button></td>
                             <td style={{padding:'0.48rem 0.7rem',fontWeight:600}}>{o.customerName}</td>
-                            <td style={{padding:'0.48rem 0.7rem',color:'#888'}}>{new Date(o.timestamp).toLocaleDateString()}</td>
+                            <td style={{padding:'0.48rem 0.7rem',color:'#888'}}>{fmtDate(o.timestamp)}</td>
                             <td style={{padding:'0.48rem 0.7rem'}}>₹{sub}</td>
                             <td style={{padding:'0.48rem 0.7rem',color:'#16a34a',fontWeight:700}}>-₹{o.discount}</td>
                             <td style={{padding:'0.48rem 0.7rem'}}><span style={{fontWeight:700,color:pct>30?'#ef4444':'#888'}}>{pct}%{pct>30?' ⚠️':''}</span></td>
@@ -1554,7 +1561,7 @@ export default function AdminPage() {
                           <td style={{padding:'0.48rem 0.7rem',fontWeight:600}}>{o.customerName}</td>
                           <td style={{padding:'0.48rem 0.7rem',textTransform:'capitalize'}}>{o.type}</td>
                           <td style={{padding:'0.48rem 0.7rem',fontWeight:700,color:'#ef4444'}}>₹{o.total}</td>
-                          <td style={{padding:'0.48rem 0.7rem',color:'#888'}}>{new Date(o.timestamp).toLocaleString()}</td>
+                          <td style={{padding:'0.48rem 0.7rem',color:'#888'}}>{fmtDateTime(o.timestamp)}</td>
                           <td style={{padding:'0.48rem 0.7rem',color:'#555'}}>{o.cancelReason||'—'}</td>
                         </tr>
                       ))}
@@ -1590,9 +1597,9 @@ export default function AdminPage() {
                               </span>
                             </td>
                             <td style={{padding:'0.48rem 0.7rem',textAlign:'center'}}>{issue.escalated?<span style={{color:'#dc2626',fontWeight:800}}>⬆ YES</span>:'—'}</td>
-                            <td style={{padding:'0.48rem 0.7rem',color:'#888',whiteSpace:'nowrap'}}>{new Date(issue.reportedAt).toLocaleTimeString()}</td>
+                            <td style={{padding:'0.48rem 0.7rem',color:'#888',whiteSpace:'nowrap'}}>{fmtTime(issue.reportedAt)}</td>
                             <td style={{padding:'0.48rem 0.7rem',color:'#555'}}>{issue.resolvedBy || '—'}</td>
-                            <td style={{padding:'0.48rem 0.7rem',color:'#888',whiteSpace:'nowrap'}}>{issue.resolvedAt ? new Date(issue.resolvedAt).toLocaleTimeString() : '—'}</td>
+                            <td style={{padding:'0.48rem 0.7rem',color:'#888',whiteSpace:'nowrap'}}>{issue.resolvedAt ? fmtTime(issue.resolvedAt) : '—'}</td>
                           </tr>
                         );
                       })}
@@ -1675,7 +1682,7 @@ export default function AdminPage() {
                           <td style={{padding:'0.48rem 0.7rem',color:'#555',maxWidth:'200px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{a.detail}</td>
                           <td style={{padding:'0.48rem 0.7rem',fontWeight:600}}>{a.by}</td>
                           <td style={{padding:'0.48rem 0.7rem',color:'#ef4444',fontWeight:700}}>{a.amount?`₹${a.amount}`:'—'}</td>
-                          <td style={{padding:'0.48rem 0.7rem',color:'#888',fontSize:'0.75rem'}}>{new Date(a.at).toLocaleString('en-IN',{dateStyle:'short',timeStyle:'short'})}</td>
+                          <td style={{padding:'0.48rem 0.7rem',color:'#888',fontSize:'0.75rem'}}>{fmtDateTimeShort(a.at)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1716,7 +1723,7 @@ export default function AdminPage() {
             <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:'1rem',fontWeight:700,marginBottom:'0.2rem',color:'#1A0800'}}>🛡️ PIN Recovery — Security Question</h3>
             <p style={{fontSize:'0.78rem',color:'#888',marginBottom:'0.75rem'}}>
               Set a security question so you can reset your PIN if you ever forget it.
-              {secSetup && <span style={{color:'#16a34a',marginLeft:'0.3rem'}}>✅ Set up on {new Date(secSetup.setupAt).toLocaleDateString('en-IN')}</span>}
+              {secSetup && <span style={{color:'#16a34a',marginLeft:'0.3rem'}}>✅ Set up on {fmtDate(secSetup.setupAt)}</span>}
             </p>
             {secSetup && (
               <div style={{background:'#f0fdf4',borderRadius:8,padding:'0.6rem 0.85rem',marginBottom:'0.75rem',fontSize:'0.83rem',color:'#166534',fontWeight:600}}>
@@ -1832,7 +1839,7 @@ export default function AdminPage() {
                             </span>
                           </td>
                           <td style={{padding:'0.55rem 0.75rem',color:'#aaa',fontSize:'0.78rem'}}>
-                            {acc.createdAt ? new Date(acc.createdAt).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}) : '—'}
+                            {acc.createdAt ? fmtDateLong(acc.createdAt) : '—'}
                           </td>
                           <td style={{padding:'0.55rem 0.75rem'}}>
                             <div style={{display:'flex',gap:'0.4rem',flexWrap:'wrap' as const}}>
@@ -1930,7 +1937,7 @@ export default function AdminPage() {
                             </span>
                           </td>
                           <td style={{padding:'0.55rem 0.75rem',color:'#aaa',fontSize:'0.78rem'}}>
-                            {acc.createdAt ? new Date(acc.createdAt).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}) : '—'}
+                            {acc.createdAt ? fmtDateLong(acc.createdAt) : '—'}
                           </td>
                           <td style={{padding:'0.55rem 0.75rem'}}>
                             <div style={{display:'flex',gap:'0.4rem',flexWrap:'wrap' as const}}>
@@ -2040,7 +2047,7 @@ export default function AdminPage() {
                 <div style={{fontSize:'0.65rem',fontWeight:700,color:'#888',textTransform:'uppercase',letterSpacing:1,marginBottom:'0.3rem'}}>Last Queue Entry</div>
                 <div style={{display:'flex',gap:'1rem',flexWrap:'wrap' as const,fontSize:'0.78rem'}}>
                   <span>Status: <strong style={{color:emailDiag.lastEntry.status==='sent'?'#16a34a':emailDiag.lastEntry.status==='failed'?'#dc2626':'#f59e0b'}}>{emailDiag.lastEntry.status}</strong></span>
-                  <span>Created: {new Date(emailDiag.lastEntry.created_at).toLocaleString()}</span>
+                  <span>Created: {fmtDateTime(emailDiag.lastEntry.created_at)}</span>
                   {emailDiag.lastEntry.error && <span style={{color:'#dc2626'}}>Error: {emailDiag.lastEntry.error}</span>}
                 </div>
               </div>
@@ -2072,7 +2079,7 @@ export default function AdminPage() {
                           <span style={{padding:'0.1rem 0.45rem',borderRadius:20,fontSize:'0.68rem',fontWeight:700,background:row.status==='sent'?'#dcfce7':row.status==='failed'?'#fef2f2':'#fef3c7',color:row.status==='sent'?'#16a34a':row.status==='failed'?'#dc2626':'#d97706'}}>{row.status}</span>
                         </td>
                         <td style={{padding:'0.35rem 0.5rem',textAlign:'center',color:'#64748b'}}>{row.retry_count}</td>
-                        <td style={{padding:'0.35rem 0.5rem',color:'#94a3b8'}}>{new Date(row.created_at).toLocaleString('en-IN',{dateStyle:'short',timeStyle:'short'})}</td>
+                        <td style={{padding:'0.35rem 0.5rem',color:'#94a3b8'}}>{fmtDateTimeShort(row.created_at)}</td>
                         <td style={{padding:'0.35rem 0.5rem',color:'#ef4444',maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' as const}}>{row.error ?? '—'}</td>
                       </tr>
                     ))}
@@ -2140,7 +2147,7 @@ export default function AdminPage() {
               <div>
                 <div style={{fontSize:'0.68rem',opacity:0.7,textTransform:'uppercase',letterSpacing:'0.1em'}}>Order Details</div>
                 <div style={{fontSize:'1.05rem',fontWeight:900,fontFamily:"'Playfair Display',serif"}}>{selOrder.id}</div>
-                <div style={{fontSize:'0.75rem',opacity:0.8}}>{new Date(selOrder.timestamp).toLocaleString()}</div>
+                <div style={{fontSize:'0.75rem',opacity:0.8}}>{fmtDateTime(selOrder.timestamp)}</div>
               </div>
               <div style={{display:'flex',gap:'0.5rem',alignItems:'center'}}>
                 <span style={{fontSize:'0.7rem',fontWeight:700,padding:'0.18rem 0.55rem',borderRadius:10,background:(STATUS_COLOR[selOrder.status]||'#888')+'44',color:'white',textTransform:'capitalize'}}>{selOrder.status}</span>
@@ -2193,7 +2200,7 @@ export default function AdminPage() {
                       <span style={{fontWeight:700,textTransform:'capitalize',color:'#333',fontSize:'0.8rem'}}>{ev.eventType?.replace(/_/g,' ')}</span>
                       {ev.by&&<span style={{color:'#888',fontSize:'0.73rem'}}> by {ev.by}</span>}
                       {ev.note&&<div style={{fontSize:'0.72rem',color:'#888',fontStyle:'italic'}}>{ev.note}</div>}
-                      <div style={{fontSize:'0.7rem',color:'#bbb'}}>{ev.at ? new Date(ev.at).toLocaleTimeString() : ''}</div>
+                      <div style={{fontSize:'0.7rem',color:'#bbb'}}>{ev.at ? fmtTime(ev.at) : ''}</div>
                     </div>
                   </div>
                 ))}

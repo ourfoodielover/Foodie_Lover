@@ -1,27 +1,18 @@
 // GET /api/analytics?period=today|week|month|all&restaurantId=...
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/supabase-server';
+import { todayMidnightIST, getISTHour } from '@/lib/date';
 
 export const dynamic = 'force-dynamic';
 
 /**
  * periodStart — returns an ISO timestamp for the start of the requested period.
- *
- * tzOffsetMins: client's UTC offset in minutes (e.g. IST = +330, EST = -300).
- * Defaults to 0 (UTC) when not provided.
- *
- * For 'today': computes midnight in the CLIENT timezone so IST restaurants see
- * correct daily counts regardless of the server's UTC offset.
+ * All "today" calculations are anchored to IST midnight (UTC+5:30), not UTC.
  */
-function periodStart(period: string, tzOffsetMins = 0): string | null {
+function periodStart(period: string): string | null {
   const now = new Date();
   if (period === 'today') {
-    // Shift now to the client's local time, set to midnight, then shift back
-    const localMs      = now.getTime() + tzOffsetMins * 60_000;
-    const localDate    = new Date(localMs);
-    localDate.setUTCHours(0, 0, 0, 0);             // midnight in client timezone
-    const utcMidnight  = new Date(localDate.getTime() - tzOffsetMins * 60_000);
-    return utcMidnight.toISOString();
+    return todayMidnightIST().toISOString();
   }
   if (period === 'week') {
     const d = new Date(now); d.setDate(d.getDate() - 7); return d.toISOString();
@@ -38,9 +29,7 @@ export async function GET(req: NextRequest) {
     const url         = new URL(req.url);
     const rid         = url.searchParams.get('restaurantId') ?? 'rest_default';
     const period      = url.searchParams.get('period') ?? 'today';
-    // tzOffset: client sends its UTC offset in minutes (new Date().getTimezoneOffset() * -1)
-    const tzOffsetMins = Number(url.searchParams.get('tz') ?? '0');
-    const since       = periodStart(period, tzOffsetMins);
+    const since       = periodStart(period);
 
     let query = sb
       .from('orders')
@@ -67,12 +56,12 @@ export async function GET(req: NextRequest) {
       .sort((a, b) => b.qty - a.qty)
       .slice(0, 10);
 
-    // ── Peak hours ────────────────────────────────────────────────────────────
+    // ── Peak hours (IST) ──────────────────────────────────────────────────────
     const hourCounts: number[] = Array(24).fill(0);
     for (const o of rows) {
       try {
-        const h = new Date(o.created_at ?? '').getHours();
-        if (!isNaN(h)) hourCounts[h]++;
+        const h = getISTHour(o.created_at ?? '');
+        hourCounts[h]++;
       } catch { /* skip invalid dates */ }
     }
     const peakHours = hourCounts.map((count, hour) => ({ hour, count }));

@@ -12,6 +12,7 @@ import {
 import { useRealtime } from '@/lib/realtime-client';
 import { getSession, clearSession, AuthSession } from '@/lib/auth';
 import { formatTableName } from '@/lib/format';
+import { fmtTime } from '@/lib/date';
 
 const STATUS_FLOW: Record<string, string> = {
   awaiting_waiter: 'pending',
@@ -819,7 +820,7 @@ function WaiterPageInner() {
                   {selOrder.timeline!.map((t, i) => (
                     <div key={i} style={{ fontSize: '0.75rem', color: '#666', padding: '0.2rem 0', display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
                       <span style={{ color: STATUS_COLOR[t.eventType] || '#888', fontWeight: 700 }}>{STATUS_LABEL[t.eventType] || t.eventType}</span>
-                      <span style={{ color: '#aaa' }}>· {t.by} · {new Date(t.at || '').toLocaleTimeString()}</span>
+                      <span style={{ color: '#aaa' }}>· {t.by} · {fmtTime(t.at || '')}</span>
                       {t.note && <span style={{ color: '#888', fontStyle: 'italic' }}>{t.note}</span>}
                     </div>
                   ))}

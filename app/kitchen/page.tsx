@@ -285,7 +285,7 @@ export default function KitchenPage() {
     });
     const t1 = setInterval(refresh, 5000);
     const t2 = setInterval(() => {
-      setClock(new Date().toLocaleTimeString());
+      setClock(new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' }));
       setNowMs(Date.now());
     }, 1000);
     return () => { clearInterval(t1); clearInterval(t2); };

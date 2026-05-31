@@ -78,7 +78,7 @@ function getStepsForType(type: string): TrackStep[] {
 
 function fmtTime(iso?: string) {
   if (!iso) return '';
-  return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+  return new Date(iso).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true });
 }
 
 // ─── Shared input style ───────────────────────────────────────────────────────
