@@ -296,7 +296,6 @@ export default function DeliveryPage() {
           const isReDeliver  = order.status === 're_serve_required';
           const events       = (order.timeline ?? []) as { eventType: string; by?: string; at?: string }[];
           const latestEv     = events[events.length - 1];
-          const trackUrl     = order.trackingToken ? `/track?id=${order.id}&token=${order.trackingToken}` : '';
           const claimedByOther = false; // field not in Supabase schema
 
           // Find matching issue for re-delivery orders
@@ -409,15 +408,6 @@ export default function DeliveryPage() {
                   </div>
                 )}
 
-                {/* Tracking link */}
-                {trackUrl && (
-                  <div style={{ fontSize: '0.7rem', marginBottom: '0.75rem' }}>
-                    <a href={trackUrl} target="_blank" rel="noopener noreferrer"
-                      style={{ color: '#2563eb', fontWeight: 700, textDecoration: 'none' }}>
-                      🔗 Customer Tracking Page →
-                    </a>
-                  </div>
-                )}
 
                 {/* Action buttons */}
                 {(order.status === 'prepared' || order.status === 'served') && (

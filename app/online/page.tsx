@@ -1,7 +1,7 @@
 'use client';
 
 export const dynamic = 'force-dynamic';
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, FormEvent } from 'react';
 import { getMenu, createOrder, lookupOrderByContact, MenuItem } from '@/lib/api';
 import { safeApiCall } from '@/lib/safe-api';
 
@@ -35,6 +35,194 @@ interface CartItem {
   qty:          number;
 }
 
+// ─── AI types ─────────────────────────────────────────────────────────────────
+
+interface AIChatMessage {
+  role:    'user' | 'assistant';
+  content: string;
+}
+
+interface AIAction {
+  type:          string;
+  itemId?:       string;
+  itemName?:     string;
+  variantName?:  string;
+  variantPrice?: number;
+  quantity?:     number;
+}
+
+interface FoodieAIChatProps {
+  menu:        MenuItem[];
+  cart:        CartItem[];
+  onAction:    (action: AIAction) => void;
+  onCheckout:  () => void;
+  onClose:     () => void;
+}
+
+// ─── Foodie AI Chat component ─────────────────────────────────────────────────
+
+function FoodieAIChat({ menu, cart, onAction, onCheckout, onClose }: FoodieAIChatProps) {
+  const [messages,  setMessages]  = useState<AIChatMessage[]>([
+    { role: 'assistant', content: "👋 Hi! I'm Foodie AI. Tell me what you'd like to eat — I can add items, suggest dishes, or help you find something within your budget. What sounds good?" },
+  ]);
+  const [input,    setInput]     = useState('');
+  const [loading,  setLoading]   = useState(false);
+  const bottomRef                = useRef<HTMLDivElement>(null);
+  const inputRef                 = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  useEffect(() => {
+    const t = setTimeout(() => inputRef.current?.focus(), 200);
+    return () => clearTimeout(t);
+  }, []);
+
+  async function sendMessage(e?: FormEvent) {
+    e?.preventDefault();
+    const text = input.trim();
+    if (!text || loading) return;
+
+    const userMsg: AIChatMessage = { role: 'user', content: text };
+    setMessages(prev => [...prev, userMsg]);
+    setInput('');
+    setLoading(true);
+
+    const historyToSend = [...messages.slice(1), userMsg];
+
+    try {
+      const res = await fetch('/api/ai/chat', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ message: text, cart, menu, history: historyToSend }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json() as { reply: string; actions: AIAction[] };
+
+      setMessages(prev => [...prev, { role: 'assistant', content: data.reply }]);
+
+      for (const action of data.actions ?? []) {
+        if (action.type === 'OPEN_CHECKOUT') {
+          onClose();
+          onCheckout();
+        } else {
+          onAction(action);
+        }
+      }
+    } catch (err) {
+      console.error('[FoodieAI]', err);
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: "I'm having trouble right now. Please try again in a moment! 🙏",
+      }]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const PURPLE    = '#7c3aed';
+  const GRAD_AI   = 'linear-gradient(135deg,#7c3aed,#a855f7)';
+  const quickTips = [
+    '🍗 Dinner for 2 people',
+    '💰 Food under ₹500',
+    '🌶 Spicy chicken dishes',
+    '🛒 Show my cart',
+    '✅ Checkout now',
+  ];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {/* Header */}
+      <div style={{ background: GRAD_AI, color: 'white', padding: '1rem 1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+          <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1rem', border: '1px solid rgba(255,255,255,0.3)' }}>💬</div>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: '0.95rem' }}>Foodie AI</div>
+            <div style={{ fontSize: '0.68rem', opacity: 0.85 }}>Your personal ordering assistant</div>
+          </div>
+        </div>
+        <button onClick={onClose} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', width: 30, height: 30, borderRadius: '50%', cursor: 'pointer', fontWeight: 900, fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
+      </div>
+
+      {/* Messages */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.65rem', background: '#f9fafb' }}>
+        {messages.map((m, i) => (
+          <div key={i} style={{ display: 'flex', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start', alignItems: 'flex-end', gap: '0.45rem' }}>
+            {m.role === 'assistant' && (
+              <div style={{ width: 26, height: 26, borderRadius: '50%', background: GRAD_AI, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', flexShrink: 0 }}>💬</div>
+            )}
+            <div style={{
+              maxWidth: '78%', padding: '0.6rem 0.85rem',
+              borderRadius: m.role === 'user' ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+              background: m.role === 'user' ? PRIMARY : 'white',
+              color: m.role === 'user' ? 'white' : '#1a1a2e',
+              fontSize: '0.84rem', lineHeight: 1.55,
+              boxShadow: '0 1px 4px rgba(0,0,0,0.07)',
+              whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            }}>
+              {m.content}
+            </div>
+          </div>
+        ))}
+        {loading && (
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: '0.45rem' }}>
+            <div style={{ width: 26, height: 26, borderRadius: '50%', background: GRAD_AI, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', flexShrink: 0 }}>💬</div>
+            <div style={{ background: 'white', padding: '0.65rem 0.85rem', borderRadius: '18px 18px 18px 4px', boxShadow: '0 1px 4px rgba(0,0,0,0.07)' }}>
+              <div style={{ display: 'flex', gap: '4px', alignItems: 'center', height: 16 }}>
+                {[0, 0.2, 0.4].map(delay => (
+                  <div key={delay} style={{ width: 7, height: 7, borderRadius: '50%', background: PURPLE, animation: `fl-ai-dot 1s ${delay}s infinite ease-in-out` }} />
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Quick suggestion chips (only on first message) */}
+      {messages.length === 1 && (
+        <div style={{ padding: '0.5rem 1rem 0', background: '#f9fafb', display: 'flex', gap: '0.4rem', flexWrap: 'wrap', flexShrink: 0 }}>
+          {quickTips.map(tip => (
+            <button
+              key={tip}
+              onClick={() => { setInput(tip); setTimeout(() => { sendMessage(); }, 10); }}
+              style={{ background: 'white', border: `1.5px solid ${PURPLE}44`, borderRadius: 16, padding: '0.28rem 0.65rem', fontSize: '0.72rem', cursor: 'pointer', color: PURPLE, fontWeight: 600, transition: 'all 0.12s' }}
+              onMouseEnter={e => { e.currentTarget.style.background = PURPLE; e.currentTarget.style.color = 'white'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'white'; e.currentTarget.style.color = PURPLE; }}
+            >{tip}</button>
+          ))}
+        </div>
+      )}
+
+      {/* Input */}
+      <form onSubmit={sendMessage} style={{ padding: '0.7rem 1rem', background: 'white', borderTop: '1px solid #ede9fe', display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
+        <input
+          ref={inputRef}
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          placeholder="Ask me anything about the menu…"
+          disabled={loading}
+          maxLength={500}
+          style={{ flex: 1, padding: '0.55rem 0.85rem', border: '2px solid #e5e7eb', borderRadius: 22, fontSize: '0.85rem', outline: 'none', transition: 'border-color 0.15s', fontFamily: 'Poppins,sans-serif' }}
+          onFocus={e => (e.target.style.borderColor = PURPLE)}
+          onBlur={e => (e.target.style.borderColor = '#e5e7eb')}
+        />
+        <button type="submit" disabled={!input.trim() || loading} style={{ width: 40, height: 40, borderRadius: '50%', background: !input.trim() || loading ? '#e5e7eb' : GRAD_AI, border: 'none', color: 'white', cursor: !input.trim() || loading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '1rem', transition: 'all 0.15s' }}>
+          {loading ? '⏳' : '➤'}
+        </button>
+      </form>
+
+      <style>{`
+        @keyframes fl-ai-dot {
+          0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+          40%            { transform: scale(1);   opacity: 1;   }
+        }
+      `}</style>
+    </div>
+  );
+}
+
 export default function OnlineOrderPage() {
   const [menu, setMenu]                 = useState<MenuItem[]>([]);
   const [cart, setCart]                 = useState<CartItem[]>([]);
@@ -49,6 +237,7 @@ export default function OnlineOrderPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError]   = useState('');
   const [addedKey, setAddedKey]         = useState<string|null>(null); // for animation
+  const [aiOpen,   setAiOpen]           = useState(false);
 
   const [showTrackModal,  setShowTrackModal]  = useState(false);
   const [trackName,       setTrackName]       = useState('');
@@ -103,6 +292,54 @@ export default function OnlineOrderPage() {
     setAddedKey(key);
     setTimeout(() => setAddedKey(null), 600);
   }, []);
+
+  // ─── AI action handler ─────────────────────────────────────────────────────
+  function handleAiAction(action: AIAction) {
+    switch (action.type) {
+      case 'ADD_TO_CART': {
+        if (!action.itemId) break;
+        const key = `${action.itemId}__${action.variantName ?? ''}`;
+        const qty = Math.max(1, Math.min(action.quantity ?? 1, MAX_QTY));
+        setCart(prev => {
+          const ex = prev.find(c => c.key === key);
+          if (ex) {
+            const newQty = Math.min(ex.qty + qty, MAX_QTY);
+            return prev.map(c => c.key === key ? { ...c, qty: newQty } : c);
+          }
+          if (!action.itemName || action.variantPrice == null) return prev;
+          return [...prev, {
+            key,
+            itemId:       action.itemId!,
+            itemName:     action.itemName,
+            variantName:  action.variantName ?? '',
+            variantPrice: action.variantPrice,
+            qty,
+          }];
+        });
+        flashAdded(key);
+        break;
+      }
+      case 'REMOVE_FROM_CART': {
+        const key = `${action.itemId}__${action.variantName ?? ''}`;
+        setCart(prev => prev.filter(c => c.key !== key));
+        break;
+      }
+      case 'UPDATE_QUANTITY': {
+        const key = `${action.itemId}__${action.variantName ?? ''}`;
+        const qty = Math.max(0, Math.min(action.quantity ?? 1, MAX_QTY));
+        setCart(prev => prev.map(c => c.key === key ? { ...c, qty } : c).filter(c => c.qty > 0));
+        break;
+      }
+      case 'SHOW_CART':
+        setCartOpen(true);
+        break;
+      case 'CLEAR_CART':
+        setCart([]);
+        break;
+      default:
+        break;
+    }
+  }
 
   function addDirectToCart(item: MenuItem) {
     const key = `${item.id}__`;
@@ -608,20 +845,44 @@ export default function OnlineOrderPage() {
         </div>
       )}
 
-      {/* ── AI Assistant FAB (design-only placeholder) ───────────────────── */}
-      <div
-        style={{ position: 'fixed', bottom: cartCount > 0 ? '5.5rem' : '1.25rem', right: '1.25rem', zIndex: 390 }}
-        title="AI Ordering Assistant — coming soon!"
-      >
-        <div
-          style={{ width: 52, height: 52, borderRadius: '50%', background: 'linear-gradient(135deg,#7c3aed,#a855f7)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: '0 4px 16px rgba(124,58,237,0.45)', fontSize: '1.3rem', transition: 'transform 0.15s' }}
+      {/* ── Foodie AI chat panel ─────────────────────────────────────────── */}
+      {aiOpen && (
+        <>
+          {/* Overlay for mobile (closes on tap outside) */}
+          <div
+            onClick={() => setAiOpen(false)}
+            style={{ position: 'fixed', inset: 0, zIndex: 450, background: 'rgba(0,0,0,0.35)', backdropFilter: 'blur(2px)' }}
+          />
+          {/* Chat panel */}
+          <div
+            className="fl-fadeup"
+            style={{ position: 'fixed', bottom: cartCount > 0 ? '5.5rem' : '1.5rem', right: '1rem', zIndex: 460, width: 'min(380px, calc(100vw - 2rem))', height: 'min(540px, 78vh)', background: 'white', borderRadius: 20, boxShadow: '0 8px 40px rgba(124,58,237,0.3)', display: 'flex', flexDirection: 'column', overflow: 'hidden', border: '1.5px solid #ede9fe' }}
+          >
+            <FoodieAIChat
+              menu={menu}
+              cart={cart}
+              onAction={handleAiAction}
+              onCheckout={() => setShowCheckout(true)}
+              onClose={() => setAiOpen(false)}
+            />
+          </div>
+        </>
+      )}
+
+      {/* ── AI FAB button ─────────────────────────────────────────────────── */}
+      <div style={{ position: 'fixed', bottom: cartCount > 0 ? '5.5rem' : '1.25rem', right: '1.25rem', zIndex: 440 }}>
+        <button
+          onClick={() => setAiOpen(o => !o)}
+          style={{ width: 54, height: 54, borderRadius: '50%', background: 'linear-gradient(135deg,#7c3aed,#a855f7)', color: 'white', border: 'none', cursor: 'pointer', boxShadow: '0 4px 18px rgba(124,58,237,0.5)', fontSize: '1.4rem', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'transform 0.15s', position: 'relative' }}
           onMouseEnter={e => (e.currentTarget.style.transform = 'scale(1.1)')}
           onMouseLeave={e => (e.currentTarget.style.transform = 'scale(1)')}
-          onClick={() => alert('💬 Foodie AI assistant is coming soon! 🚀')}
+          title="Ask Foodie AI"
         >
-          💬
-        </div>
-        <div style={{ position: 'absolute', bottom: '100%', right: 0, marginBottom: 6, background: '#1a1a2e', color: 'white', fontSize: '0.65rem', fontWeight: 600, borderRadius: 8, padding: '0.3rem 0.55rem', whiteSpace: 'nowrap', opacity: 0.9 }}>Ask Foodie AI</div>
+          {aiOpen ? '×' : '💬'}
+        </button>
+        {!aiOpen && (
+          <div style={{ position: 'absolute', bottom: '100%', right: 0, marginBottom: 6, background: '#1a1a2e', color: 'white', fontSize: '0.65rem', fontWeight: 700, borderRadius: 8, padding: '0.28rem 0.6rem', whiteSpace: 'nowrap', pointerEvents: 'none' }}>Ask Foodie AI</div>
+        )}
       </div>
 
       {/* ── Track order modal ────────────────────────────────────────────── */}
