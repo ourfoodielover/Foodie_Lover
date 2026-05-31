@@ -25,6 +25,9 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  // Sender address — read from env, never hardcoded
+  const fromEmail = process.env.FROM_EMAIL ?? '(FROM_EMAIL not configured)';
+
   const html = `
     <!DOCTYPE html>
     <html>
@@ -36,8 +39,8 @@ export async function GET(req: NextRequest) {
         </div>
         <h2 style="font-size:18px;color:#16a34a;margin:0 0 12px">✅ Email test successful!</h2>
         <p style="font-size:14px;color:#475569;margin:0 0 16px">
-          If you're reading this, Resend is correctly configured and emails
-          are being delivered from <strong>noreply@mail.ourfoodielover.com</strong>.
+          If you&#39;re reading this, Resend is correctly configured and emails
+          are being delivered from <strong>${fromEmail}</strong>.
         </p>
         <p style="font-size:13px;color:#94a3b8;margin:0">
           Sent at: ${new Date().toISOString()}

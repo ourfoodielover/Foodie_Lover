@@ -101,7 +101,12 @@ export default function AdminPage() {
 
   // ── Email Diagnostics ──
   type EmailDiag = {
-    configured: boolean; fromEmail: string; apiKeyPresent: boolean; apiKeyLength: number;
+    configured: boolean;
+    fromEmail: string;
+    fromEmailConfigured: boolean;
+    fromEmailDomain: string;
+    apiKeyPresent: boolean;
+    apiKeyLength: number;
     queueError: string | null;
     queueSummary: { total: number; sent: number; failed: number; pending: number };
     lastEntry: { status: string; error: string | null; created_at: string; updated_at: string } | null;
@@ -2015,11 +2020,11 @@ export default function AdminPage() {
             {emailDiag && (
               <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'0.6rem'}}>
                 {[
-                  {label:'RESEND_API_KEY set?',    value: emailDiag.apiKeyPresent ? `✅ Yes (${emailDiag.apiKeyLength} chars)` : '❌ Not set',                       ok: emailDiag.apiKeyPresent},
-                  {label:'Configured & valid?',     value: emailDiag.configured   ? '✅ Yes — ready to send' : '❌ No — placeholder or missing',                     ok: emailDiag.configured},
-                  {label:'From address',            value: emailDiag.fromEmail,                                                                                       ok: true},
-                  {label:'Domain',                  value: 'mail.ourfoodielover.com',                                                                                  ok: true},
-                  {label:'Queue errors?',           value: emailDiag.queueError   ? `❌ ${emailDiag.queueError}` : '✅ None',                                         ok: !emailDiag.queueError},
+                  {label:'RESEND_API_KEY set?',    value: emailDiag.apiKeyPresent ? `✅ Yes (${emailDiag.apiKeyLength} chars)` : '❌ Not set',                                                     ok: emailDiag.apiKeyPresent},
+                  {label:'Configured & valid?',     value: emailDiag.configured   ? '✅ Yes — ready to send' : '❌ No — placeholder or missing',                                                     ok: emailDiag.configured},
+                  {label:'FROM_EMAIL set?',         value: emailDiag.fromEmailConfigured ? `✅ ${emailDiag.fromEmail}` : '❌ FROM_EMAIL env var not set',                                             ok: emailDiag.fromEmailConfigured},
+                  {label:'Sending domain',          value: emailDiag.fromEmailDomain     ? `✅ ${emailDiag.fromEmailDomain}` : '❌ Cannot determine — FROM_EMAIL missing',                           ok: Boolean(emailDiag.fromEmailDomain)},
+                  {label:'Queue errors?',           value: emailDiag.queueError   ? `❌ ${emailDiag.queueError}` : '✅ None',                                                                        ok: !emailDiag.queueError},
                   {label:'Queue summary',           value: `Total: ${emailDiag.queueSummary.total} | ✅ Sent: ${emailDiag.queueSummary.sent} | ❌ Failed: ${emailDiag.queueSummary.failed} | ⏳ Pending: ${emailDiag.queueSummary.pending}`, ok: emailDiag.queueSummary.failed === 0},
                 ].map(row=>(
                   <div key={row.label} style={{background:'white',borderRadius:8,padding:'0.5rem 0.75rem',border:`1px solid ${row.ok?'#dcfce7':'#fecaca'}`}}>
@@ -2115,11 +2120,11 @@ export default function AdminPage() {
             )}
             <div style={{marginTop:'0.85rem',padding:'0.6rem',background:'#f8fafc',borderRadius:8,fontSize:'0.72rem',color:'#64748b'}}>
               <strong>Troubleshooting checklist:</strong><br/>
-              1. RESEND_API_KEY set in Vercel → Settings → Environment Variables<br/>
-              2. Domain <code>mail.ourfoodielover.com</code> verified in Resend → Domains<br/>
-              3. FROM address <code>noreply@mail.ourfoodielover.com</code> is on the verified domain<br/>
+              1. <code>RESEND_API_KEY</code> set in Vercel → Settings → Environment Variables<br/>
+              2. <code>FROM_EMAIL</code> set in Vercel → e.g. <code>Foodie Lover &lt;noreply@yourdomain.com&gt;</code><br/>
+              3. The domain in <code>FROM_EMAIL</code> must be verified in Resend → Domains<br/>
               4. Customer must have provided email at order time (check their order/tab record)<br/>
-              5. Check Vercel function logs for <code>[dispatchViaResend]</code> entries<br/>
+              5. Check Vercel function logs for <code>[sendEmail]</code> entries<br/>
               6. Flush the retry queue via: <code>GET /api/email/process-queue</code> (with Authorization header)
             </div>
           </div>

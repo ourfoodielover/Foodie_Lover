@@ -9,7 +9,14 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   const apiKey    = process.env.RESEND_API_KEY ?? '';
   const configured = Boolean(apiKey && !apiKey.startsWith('re_placeholder') && apiKey.length > 10);
-  const fromEmail  = 'noreply@mail.ourfoodielover.com';
+
+  // FROM_EMAIL is read from env — never hardcoded
+  const fromEmail           = process.env.FROM_EMAIL ?? '';
+  const fromEmailConfigured = Boolean(fromEmail);
+  // Extract domain from "Display Name <user@domain.com>" or "user@domain.com"
+  const fromEmailDomain     = fromEmail
+    ? ((fromEmail.match(/@([^>]+)/))?.[1] ?? fromEmail.split('@')[1] ?? '')
+    : '';
 
   // Pull last 10 queue entries for status overview
   let recentQueue: {
@@ -45,11 +52,15 @@ export async function GET() {
   const pending = recentQueue.filter(r => r.status === 'pending').length;
   const lastEntry = recentQueue[0] ?? null;
 
-  console.info('[GET /api/email/diagnostics] RESEND configured:', configured, '| queue rows:', recentQueue.length);
+  console.info(
+    `[GET /api/email/diagnostics] configured: ${configured} | FROM_EMAIL: ${fromEmail || '(not set)'} | queue rows: ${recentQueue.length}`,
+  );
 
   return NextResponse.json({
     configured,
     fromEmail,
+    fromEmailConfigured,
+    fromEmailDomain,
     apiKeyPresent:  Boolean(apiKey),
     apiKeyLength:   apiKey.length,
     queueError,
