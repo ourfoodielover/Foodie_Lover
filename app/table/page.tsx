@@ -31,6 +31,7 @@ import {
 } from '@/lib/api';
 // ── localStorage ─ ONLY device identity (not business data) ──────────────────
 import { getOrCreateDeviceId } from '@/lib/storage';
+import { validateEmail } from '@/lib/validation';
 
 // ─── TabUI — normalised tab shape used throughout this component ───────────────
 type TabStatus = 'open' | 'awaiting_payment' | 'closed';
@@ -163,6 +164,7 @@ function TablePageInner() {
   const [customerName, setCustomerName]   = useState('');
   const [nameInput, setNameInput]         = useState('');
   const [emailInput, setEmailInput]       = useState('');
+  const [emailError, setEmailError]       = useState('');
   const [partyInput, setPartyInput]       = useState('2');
   const [nameError, setNameError]         = useState('');
 
@@ -357,6 +359,10 @@ function TablePageInner() {
     const pin = pinInput.trim();
     if (!pin) { setPinError('Please set a 4-digit PIN to protect your table'); return; }
     if (!/^\d{4}$/.test(pin)) { setPinError('PIN must be exactly 4 digits'); return; }
+
+    const emailErr = validateEmail(emailInput);
+    if (emailErr) { setEmailError(emailErr); return; }
+    setEmailError('');
 
     const party = Math.max(1, parseInt(partyInput) || 1);
 
@@ -935,10 +941,12 @@ function TablePageInner() {
             <input
               type="email" inputMode="email"
               value={emailInput}
-              onChange={e => setEmailInput(e.target.value)}
+              onChange={e => { setEmailInput(e.target.value); if (emailError) setEmailError(''); }}
+              onBlur={() => setEmailError(validateEmail(emailInput))}
               placeholder="you@example.com"
-              style={{ width: '100%', boxSizing: 'border-box', padding: '0.75rem 0.9rem', border: '2px solid #e5e7eb', borderRadius: 12, fontFamily: 'Poppins,sans-serif', fontSize: '0.9rem', outline: 'none', transition: 'border-color 0.2s, box-shadow 0.2s' }}
+              style={{ width: '100%', boxSizing: 'border-box', padding: '0.75rem 0.9rem', border: `2px solid ${emailError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 12, fontFamily: 'Poppins,sans-serif', fontSize: '0.9rem', outline: 'none', transition: 'border-color 0.2s, box-shadow 0.2s' }}
             />
+            {emailError && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem', fontWeight: 600 }}>{emailError}</div>}
           </div>
 
           <div style={{ marginBottom: '1.5rem' }}>

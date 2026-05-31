@@ -249,10 +249,12 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     }
 
     // ── "Order ready" notification — fire-and-forget on prepared ────────────
-    // Tells the customer their food is ready for collection (pickup) or
-    // about to be dispatched (delivery).  Dine-in orders skip this because
-    // the waiter brings the food directly; they rarely have a customerEmail.
-    if (!isIdempotent && body.status === 'prepared' && order.customerEmail) {
+    // Pickup:   customer picks up at counter  → email: "your order is ready"
+    // Delivery: food about to be dispatched   → email: "your order is ready"
+    // Dine-in:  waiter brings to the table    → NO email at this stage
+    //           (table orders only get a receipt email on payment completion)
+    const isPickupOrDelivery = order.type === 'pickup' || order.type === 'delivery';
+    if (!isIdempotent && body.status === 'prepared' && order.customerEmail && isPickupOrDelivery) {
       sendOrderReadyEmail(id).catch(err =>
         console.error(`[PATCH /api/orders/[id]] ready email error for ${id}:`, err),
       );

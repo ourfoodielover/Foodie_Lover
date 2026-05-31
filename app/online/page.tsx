@@ -4,6 +4,7 @@ export const dynamic = 'force-dynamic';
 import { useState, useEffect, useRef, useCallback, FormEvent } from 'react';
 import { getMenu, createOrder, lookupOrderByContact, MenuItem } from '@/lib/api';
 import { safeApiCall } from '@/lib/safe-api';
+import { validateIndianPhone, validateEmail, normaliseIndianPhone } from '@/lib/validation';
 
 const CATEGORIES = [
   'All',
@@ -250,6 +251,7 @@ export default function OnlineOrderPage() {
     type: 'pickup' as 'pickup' | 'delivery',
     address: '', payment: 'cod',
   });
+  const [formErrors, setFormErrors] = useState({ name: '', phone: '', email: '', address: '' });
 
   const submittingRef  = useRef(false);
   const searchRef      = useRef<HTMLInputElement>(null);
@@ -394,10 +396,18 @@ export default function OnlineOrderPage() {
 
   async function placeOrder() {
     if (submittingRef.current || isSubmitting) return;
-    if (!form.name.trim())  { alert('Please enter your name'); return; }
-    if (!form.phone.trim()) { alert('Please enter your phone number'); return; }
-    if (form.type === 'delivery' && !form.address.trim()) { alert('Please enter delivery address'); return; }
-    if (!cart.length) { alert('Cart is empty'); return; }
+
+    // ── Validate all fields before submitting ─────────────────────────────
+    const nameErr    = form.name.trim() ? '' : 'Name is required';
+    const phoneErr   = validateIndianPhone(form.phone);
+    const emailErr   = validateEmail(form.email);                  // optional
+    const addressErr = form.type === 'delivery' && !form.address.trim()
+      ? 'Delivery address is required' : '';
+
+    setFormErrors({ name: nameErr, phone: phoneErr, email: emailErr, address: addressErr });
+
+    if (nameErr || phoneErr || emailErr || addressErr) return;
+    if (!cart.length) { setSubmitError('Your cart is empty'); return; }
 
     submittingRef.current = true;
     setIsSubmitting(true);
@@ -416,7 +426,7 @@ export default function OnlineOrderPage() {
         type:            form.type,
         customerName:    form.name.trim(),
         customerEmail:   form.email.trim() || undefined,
-        phone:           form.phone.trim(),
+        phone:           normaliseIndianPhone(form.phone) ?? form.phone.trim(),
         items,
         subtotal:        cartTotal,
         total:           cartTotal,
@@ -435,6 +445,7 @@ export default function OnlineOrderPage() {
         setShowCheckout(false);
         setOrderPlaced(true);
         setForm({ name: '', phone: '', email: '', type: 'pickup', address: '', payment: 'cod' });
+        setFormErrors({ name: '', phone: '', email: '', address: '' });
       } else if (result.data) {
         const savedOrder = result.data;
         const trackUrl = savedOrder.trackingToken
@@ -445,6 +456,7 @@ export default function OnlineOrderPage() {
         setShowCheckout(false);
         setOrderPlaced(true);
         setForm({ name: '', phone: '', email: '', type: 'pickup', address: '', payment: 'cod' });
+        setFormErrors({ name: '', phone: '', email: '', address: '' });
       } else {
         setSubmitError(result.error ?? 'Failed to place order');
       }
@@ -989,17 +1001,47 @@ export default function OnlineOrderPage() {
 
               <div style={{ marginBottom: '0.9rem' }}>
                 <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.3rem' }}>Your Name *</label>
-                <input className="fl-input" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Full name" disabled={isSubmitting} />
+                <input
+                  className="fl-input"
+                  value={form.name}
+                  onChange={e => { setForm(f => ({ ...f, name: e.target.value })); setFormErrors(fe => ({ ...fe, name: '' })); }}
+                  placeholder="Full name"
+                  disabled={isSubmitting}
+                  style={{ borderColor: formErrors.name ? '#ef4444' : undefined }}
+                />
+                {formErrors.name && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem', fontWeight: 600 }}>{formErrors.name}</div>}
               </div>
               <div style={{ marginBottom: '0.9rem' }}>
-                <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.3rem' }}>Phone Number *</label>
-                <input className="fl-input" type="tel" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="+91 XXXXX XXXXX" disabled={isSubmitting} />
+                <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.3rem' }}>Phone Number * <span style={{ fontWeight: 400, color: '#aaa' }}>(India +91)</span></label>
+                <input
+                  className="fl-input"
+                  type="tel"
+                  inputMode="numeric"
+                  value={form.phone}
+                  onChange={e => { setForm(f => ({ ...f, phone: e.target.value })); setFormErrors(fe => ({ ...fe, phone: '' })); }}
+                  onBlur={e => { const err = validateIndianPhone(e.target.value); setFormErrors(fe => ({ ...fe, phone: err })); }}
+                  placeholder="9876543210"
+                  disabled={isSubmitting}
+                  maxLength={14}
+                  style={{ borderColor: formErrors.phone ? '#ef4444' : undefined }}
+                />
+                {formErrors.phone && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem', fontWeight: 600 }}>{formErrors.phone}</div>}
               </div>
               <div style={{ marginBottom: '0.9rem' }}>
                 <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.3rem' }}>
                   Email <span style={{ color: '#aaa', fontWeight: 500 }}>(optional — for receipt)</span>
                 </label>
-                <input className="fl-input" type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} placeholder="you@example.com" disabled={isSubmitting} />
+                <input
+                  className="fl-input"
+                  type="email"
+                  value={form.email}
+                  onChange={e => { setForm(f => ({ ...f, email: e.target.value })); setFormErrors(fe => ({ ...fe, email: '' })); }}
+                  onBlur={e => { if (e.target.value.trim()) { const err = validateEmail(e.target.value); setFormErrors(fe => ({ ...fe, email: err })); } }}
+                  placeholder="name@example.com"
+                  disabled={isSubmitting}
+                  style={{ borderColor: formErrors.email ? '#ef4444' : undefined }}
+                />
+                {formErrors.email && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem', fontWeight: 600 }}>{formErrors.email}</div>}
               </div>
 
               {/* Order type */}
