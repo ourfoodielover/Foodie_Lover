@@ -181,20 +181,25 @@ async function dispatchViaResend(
 ): Promise<{ messageId: string } | { error: string }> {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey || apiKey.startsWith('re_placeholder')) {
+    console.error('[dispatchViaResend] ❌ RESEND_API_KEY is missing or placeholder — set it in Vercel Environment Variables');
     return { error: 'RESEND_API_KEY not configured' };
   }
+
+  console.info(`[dispatchViaResend] → Sending | to: ${email} | subject: "${subject}" | html: ${html.length} chars`);
 
   const result = await sendEmail({ to: email, subject, html });
 
   if ('error' in result) {
     // Detect the Resend free-tier domain restriction and surface an actionable message.
     const errMsg = result.error;
+    console.error(`[dispatchViaResend] ❌ Resend error | to: ${email} | error: ${errMsg}`);
     if (errMsg.includes('verify a domain') || errMsg.includes('testing emails')) {
       return { error: `RESEND_DOMAIN_REQUIRED: ${errMsg}` };
     }
     return { error: errMsg };
   }
 
+  console.info(`[dispatchViaResend] ✅ Delivered | to: ${email} | messageId: ${result.messageId}`);
   return { messageId: result.messageId };
 }
 
@@ -585,13 +590,18 @@ export async function sendTabReceiptEmail(
       items: (o.order_items as Record<string, unknown>[]) ?? [],
     }));
     const html       = buildTabReceiptHtml(tab as Record<string, unknown>, ordersForHtml, emailOverride);
-    const tablePart  = (tab.table_name as string) || (tab.table_id as string) || '';
+    // Use table name if present, else humanise the raw table_id (tbl_01 → Table 1)
+    const rawTableId = (tab.table_id as string) || '';
+    const tablePart  =
+      (tab.table_name as string) ||
+      (rawTableId ? rawTableId.replace(/^tbl[_-]?0*(\d+)$/i, 'Table $1').replace(/^T0*(\d+)$/, 'Table $1') : '');
     const namePart   = (tab.customer_name as string) || 'Dine-In';
     const subject    = tablePart
       ? `Your Foodie Lover Receipt — ${namePart} (${tablePart})`
       : `Your Foodie Lover Receipt — ${namePart}`;
 
-    console.info(`${TAG} Dispatching tab receipt to ${email} (${rawOrders.length} orders)`);
+    const totalItems = rawOrders.reduce((s, o) => s + ((o.order_items as unknown[]) ?? []).length, 0);
+    console.info(`${TAG} Dispatching tab receipt → recipient: ${email} | subject: "${subject}" | orders: ${rawOrders.length} | items: ${totalItems}`);
 
     // 5. Send via Resend
     const result = await dispatchViaResend(email, subject, html);

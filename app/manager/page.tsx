@@ -4,6 +4,7 @@ export const dynamic = 'force-dynamic';
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession, clearSession, AuthSession } from '@/lib/auth';
+import { formatTableName } from '@/lib/format';
 import {
   getTabs, getOrders, closeTab, applyTabDiscount,
   updateOrderStatus,
@@ -758,7 +759,7 @@ export default function ManagerPage() {
             >
               <div style={{ padding: '0.8rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
-                  <div style={{ fontWeight: 800, fontSize: '0.9rem', color: '#1A0800' }}>Table {tab.tableId}</div>
+                  <div style={{ fontWeight: 800, fontSize: '0.9rem', color: '#1A0800' }}>{formatTableName(tab.tableId)}</div>
                   <div style={{ fontSize: '0.73rem', color: '#888', marginTop: '0.1rem' }}>
                     {tab.customerName} · {tab.partySize} guest{tab.partySize !== 1 ? 's' : ''}
                   </div>
@@ -798,7 +799,7 @@ export default function ManagerPage() {
             <div style={{ background: 'linear-gradient(135deg,#064e3b,#16a34a)', color: 'white', padding: '1rem 1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
                 <div style={{ fontFamily: "'Playfair Display',serif", fontWeight: 900, fontSize: '1.05rem' }}>
-                  🪑 Table {selTab.tableId} — {selTab.customerName}
+                  🪑 {formatTableName(selTab.tableId)} — {selTab.customerName}
                 </div>
                 <div style={{ fontSize: '0.73rem', opacity: 0.8 }}>
                   {selTab.partySize} guest{selTab.partySize !== 1 ? 's' : ''} ·{' '}

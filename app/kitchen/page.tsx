@@ -8,6 +8,7 @@ import {
 } from '@/lib/api';
 import { useRealtime } from '@/lib/realtime-client';
 import { getSession, clearSession, AuthSession } from '@/lib/auth';
+import { formatTableName, formatTableNameForSpeech } from '@/lib/format';
 
 const STATUS_COLOR: Record<string, string> = {
   pending: '#f59e0b', preparing: '#3b82f6', prepared: '#8b5cf6',
@@ -35,6 +36,24 @@ function playOrderAlert() {
   } catch { /* AudioContext not available (SSR) */ }
 }
 
+// ── Pick the best available English voice for clear TTS output ────────────────
+function getBestVoice(): SpeechSynthesisVoice | null {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return null;
+  const voices = window.speechSynthesis.getVoices();
+  // Prefer a natural-sounding en-US Google voice
+  return (
+    voices.find(v => v.lang === 'en-US' && /google/i.test(v.name)) ||
+    voices.find(v => v.lang === 'en-GB' && /google/i.test(v.name)) ||
+    voices.find(v => v.lang === 'en-US') ||
+    voices.find(v => v.lang === 'en-GB') ||
+    voices.find(v => v.lang.startsWith('en')) ||
+    null
+  );
+}
+
+// ── Audio state per order ─────────────────────────────────────────────────────
+type OrderAudioState = 'idle' | 'playing' | 'paused';
+
 export default function KitchenPage() {
   const router = useRouter();
   const [session, setSession]         = useState<AuthSession | null>(null);
@@ -46,16 +65,22 @@ export default function KitchenPage() {
   const [flashIds, setFlashIds]       = useState<Set<string>>(new Set());
   const [fetchError, setFetchError]   = useState('');
 
+  // ── Audio state ─────────────────────────────────────────────────────────────
   // Track which order IDs we've already alerted about (in-memory, resets on mount)
   const seenOrderIds = useRef<Set<string>>(new Set());
-  // Track which orders have been announced via TTS (persisted in sessionStorage across hot-reloads)
+  // Track which orders have been announced via TTS (persisted in sessionStorage)
   const announcedIds = useRef<Set<string>>(new Set());
+  // Per-order audio state: which order is being spoken + its play/pause state
+  const [audioOrderId,    setAudioOrderId]    = useState<string | null>(null);
+  const [audioState,      setAudioOrderState] = useState<OrderAudioState>('idle');
+  const currentUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+
   const [kitchenMuted, setKitchenMuted] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     return localStorage.getItem('kitchen_muted') === 'true';
   });
   const kitchenMutedRef = useRef(kitchenMuted);
-  // Keep the ref in sync with state (must be in an effect, not during render)
+  // Keep the ref in sync with state
   useEffect(() => { kitchenMutedRef.current = kitchenMuted; }, [kitchenMuted]);
 
   // Load already-announced IDs from sessionStorage on first render
@@ -68,30 +93,120 @@ export default function KitchenPage() {
     } catch { /* ignore */ }
   }, []);
 
+  // Cleanup speech on unmount
+  useEffect(() => {
+    return () => {
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
+
+  // ── Global mute toggle ───────────────────────────────────────────────────────
   function toggleMute() {
     setKitchenMuted(prev => {
       const next = !prev;
       localStorage.setItem('kitchen_muted', String(next));
       kitchenMutedRef.current = next;
+      // If muting while something plays, stop it
+      if (next && typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        setAudioOrderId(null);
+        setAudioOrderState('idle');
+      }
       return next;
     });
   }
 
-  function speakOrder(order: Order) {
+  // ── Build utterance from order ────────────────────────────────────────────────
+  function buildUtterance(order: Order, onEnd?: () => void): SpeechSynthesisUtterance {
+    const orderNum  = order.orderNum || order.id.slice(-4);
+    // Use formatTableNameForSpeech so "tbl_1" → "Table 1" not "tbl underscore 1"
+    const tableInfo =
+      order.tableId
+        ? `${formatTableNameForSpeech(order.tableId)}.`
+        : order.type === 'pickup'
+        ? 'Pickup order.'
+        : 'Delivery order.';
+
+    const itemLines = (order.items || [])
+      .map(item => `${item.qty} ${item.name}`)
+      .join(', ');
+
+    const text = `New order received. Order number ${orderNum}. ${tableInfo} Items: ${itemLines}. Please review the order.`;
+
+    const utterance     = new SpeechSynthesisUtterance(text);
+    utterance.rate      = 0.9;
+    utterance.pitch     = 1.0;
+    utterance.volume    = 1.0;
+
+    // Pick the best English voice; voices may not load until after interaction
+    const voice = getBestVoice();
+    if (voice) {
+      utterance.voice = voice;
+      utterance.lang  = voice.lang;
+    } else {
+      utterance.lang  = 'en-US';
+    }
+
+    if (onEnd) {
+      utterance.onend   = onEnd;
+      utterance.onerror = onEnd;
+    }
+    return utterance;
+  }
+
+  // ── Per-order audio controls ─────────────────────────────────────────────────
+  function playOrder(order: Order) {
     if (kitchenMutedRef.current) return;
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-    window.speechSynthesis.cancel(); // stop any ongoing speech
-    const orderNum = order.orderNum || order.id.slice(-4);
-    const tableInfo = order.tableId ? `Table ${order.tableId}.` : order.type === 'pickup' ? 'Pickup order.' : 'Delivery order.';
-    const itemLines = (order.items || []).map(item => `${item.name}, Quantity ${item.qty}`).join('. ');
-    const text = `New Order. Order Number ${orderNum}. ${tableInfo} ${itemLines}.`;
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang  = 'en-IN';
-    utterance.rate  = 0.88;
-    utterance.pitch = 1.0;
-    utterance.volume = 1.0;
+
+    // Stop anything currently playing
+    window.speechSynthesis.cancel();
+
+    const clearState = () => {
+      setAudioOrderId(null);
+      setAudioOrderState('idle');
+      currentUtteranceRef.current = null;
+    };
+
+    const utterance = buildUtterance(order, clearState);
+    currentUtteranceRef.current = utterance;
+
+    setAudioOrderId(order.id);
+    setAudioOrderState('playing');
     window.speechSynthesis.speak(utterance);
   }
+
+  function pauseAudio() {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    window.speechSynthesis.pause();
+    setAudioOrderState('paused');
+  }
+
+  function resumeAudio() {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    window.speechSynthesis.resume();
+    setAudioOrderState('playing');
+  }
+
+  function stopAudio() {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    setAudioOrderId(null);
+    setAudioOrderState('idle');
+    currentUtteranceRef.current = null;
+  }
+
+  // ── Auto-announce new orders (fire-and-forget, uses muted ref) ───────────────
+  const speakOrder = useCallback((order: Order) => {
+    if (kitchenMutedRef.current) return;
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = buildUtterance(order);
+    window.speechSynthesis.speak(utterance);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Auth ────────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -414,7 +529,7 @@ export default function KitchenPage() {
                       #{order.orderNum || order.id.slice(-4)}
                     </div>
                     <div style={{ fontSize: '0.72rem', color: '#888', marginTop: '0.1rem' }}>
-                      {order.customerName}{order.tableId ? ` · ${order.tableId}` : ''}
+                      {order.customerName}{order.tableId ? ` · ${formatTableName(order.tableId)}` : ''}
                     </div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
@@ -455,21 +570,93 @@ export default function KitchenPage() {
                   })}
                 </div>
 
-                {/* Action + Read buttons */}
-                <div style={{ display: 'flex', gap: '0.4rem' }}>
+                {/* Action buttons */}
+                <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.4rem' }}>
                   {nextAction && (
                     <button onClick={() => advanceOrder(order)} style={{ ...btn(nextAction.bg), flex: 1, padding: '0.55rem', borderRadius: 10, fontSize: '0.82rem' }}>
                       {nextAction.label}
                     </button>
                   )}
-                  <button
-                    onClick={() => speakOrder(order)}
-                    title="Read this order aloud"
-                    style={{ ...btn('#374151'), padding: '0.55rem 0.7rem', borderRadius: 10, fontSize: '0.82rem', flexShrink: 0 }}
-                  >
-                    🔊
-                  </button>
                 </div>
+
+                {/* ── Audio controls ── always visible, persists after acknowledgement */}
+                {(() => {
+                  const isThisOrder   = audioOrderId === order.id;
+                  const isPlaying     = isThisOrder && audioState === 'playing';
+                  const isPaused      = isThisOrder && audioState === 'paused';
+                  const isMuted       = kitchenMuted;
+
+                  const audioStatusIcon =
+                    isMuted      ? '🔇' :
+                    isPlaying    ? '🔊' :
+                    isPaused     ? '⏸'  :
+                    '⏹';
+
+                  const audioStatusLabel =
+                    isMuted      ? 'Muted' :
+                    isPlaying    ? 'Playing' :
+                    isPaused     ? 'Paused'  :
+                    'Stopped';
+
+                  const statusColor =
+                    isMuted      ? '#ef4444' :
+                    isPlaying    ? '#22c55e' :
+                    isPaused     ? '#f59e0b' :
+                    '#6b7280';
+
+                  return (
+                    <div style={{ background: '#161616', borderRadius: 10, padding: '0.45rem 0.6rem', border: `1px solid ${statusColor}30` }}>
+                      {/* Status row */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                        <span style={{ fontSize: '0.65rem', fontWeight: 700, color: statusColor, display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                          {audioStatusIcon} {audioStatusLabel}
+                        </span>
+                        {/* Mute/Unmute toggle */}
+                        <button
+                          onClick={toggleMute}
+                          title={isMuted ? 'Unmute kitchen audio' : 'Mute kitchen audio'}
+                          style={{ ...btn(isMuted ? '#ef444420' : '#374151', isMuted ? '#ef4444' : '#9ca3af'), padding: '0.15rem 0.45rem', borderRadius: 6, fontSize: '0.62rem', border: `1px solid ${isMuted ? '#ef444440' : '#44444470'}` }}
+                        >
+                          {isMuted ? '🔇 Unmute' : '🔊 Mute'}
+                        </button>
+                      </div>
+                      {/* Control buttons */}
+                      <div style={{ display: 'flex', gap: '0.3rem' }}>
+                        {/* Play / Resume */}
+                        {!isPlaying && (
+                          <button
+                            onClick={() => isPaused ? resumeAudio() : playOrder(order)}
+                            disabled={isMuted}
+                            title={isPaused ? 'Resume announcement' : 'Play order announcement'}
+                            style={{ ...btn(isMuted ? '#33333390' : '#3b82f6', isMuted ? '#555' : 'white'), flex: 1, padding: '0.3rem 0.5rem', borderRadius: 8, fontSize: '0.72rem', opacity: isMuted ? 0.5 : 1, cursor: isMuted ? 'not-allowed' : 'pointer' }}
+                          >
+                            {isPaused ? '▶ Resume' : '🔊 Play'}
+                          </button>
+                        )}
+                        {/* Pause */}
+                        {isPlaying && (
+                          <button
+                            onClick={pauseAudio}
+                            title="Pause announcement"
+                            style={{ ...btn('#f59e0b'), flex: 1, padding: '0.3rem 0.5rem', borderRadius: 8, fontSize: '0.72rem' }}
+                          >
+                            ⏸ Pause
+                          </button>
+                        )}
+                        {/* Stop — only show if actively playing or paused */}
+                        {isThisOrder && (
+                          <button
+                            onClick={stopAudio}
+                            title="Stop announcement"
+                            style={{ ...btn('#ef4444'), padding: '0.3rem 0.6rem', borderRadius: 8, fontSize: '0.72rem', flexShrink: 0 }}
+                          >
+                            ⏹ Stop
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
                 {order.status === 'prepared' && (
                   <div style={{
                     background: isDelivery ? '#2563eb20' : isPickup ? '#16a34a20' : '#8b5cf620',

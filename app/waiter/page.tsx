@@ -11,6 +11,7 @@ import {
 } from '@/lib/api';
 import { useRealtime } from '@/lib/realtime-client';
 import { getSession, clearSession, AuthSession } from '@/lib/auth';
+import { formatTableName } from '@/lib/format';
 
 const STATUS_FLOW: Record<string, string> = {
   awaiting_waiter: 'pending',
@@ -487,7 +488,7 @@ function WaiterPageInner() {
                     Order #{order?.orderNum ?? issue.orderId.slice(-4)}
                     {order?.type === 'pickup'   ? ' · 🏪 Pickup at counter' :
                      order?.type === 'delivery' ? ' · 🛵 Delivery' :
-                     order?.tableId             ? ` · Table ${order.tableId}` : ''}
+                     order?.tableId             ? ` · ${formatTableName(order.tableId)}` : ''}
                     {' — '}
                     Attempt {issue.retryCount}/{3}
                   </span>
@@ -517,7 +518,7 @@ function WaiterPageInner() {
           </div>
           {disputes.map(d => (
             <div key={d.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.25rem 0', fontSize: '0.78rem', color: '#fca5a5' }}>
-              <span>Table {d.tableId} · {d.customerName} — Order dispute</span>
+              <span>{formatTableName(d.tableId)} · {d.customerName} — Order dispute</span>
               <button
                 onClick={() => handleResolveDispute(d.id)}
                 style={{ ...btn('#10b981'), fontSize: '0.65rem', padding: '0.2rem 0.5rem' }}
@@ -539,7 +540,7 @@ function WaiterPageInner() {
             const callMinutesAgo = Math.floor((Date.now() - new Date(call.at).getTime()) / 60000);
             return (
               <div key={call.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.25rem 0', fontSize: '0.78rem', color: '#78350f' }}>
-                <span>Table {call.tableId} · {call.customerName} ({callMinutesAgo}m ago)</span>
+                <span>{formatTableName(call.tableId)} · {call.customerName} ({callMinutesAgo}m ago)</span>
                 <button
                   onClick={() => handleAcknowledgeWaiterCall(call.id)}
                   style={{ ...btn('#f59e0b', '#1A0800'), fontSize: '0.65rem', padding: '0.2rem 0.5rem' }}
@@ -604,7 +605,7 @@ function WaiterPageInner() {
                 );
                 return (
                   <div key={tab.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.25rem 0', fontSize: '0.78rem', color: '#7c2d12' }}>
-                    <span>Table {tab.tableId ?? '—'} — {tab.customerName || 'Guest'}</span>
+                    <span>{tab.tableId ? formatTableName(tab.tableId) : '—'} — {tab.customerName || 'Guest'}</span>
                     <span style={{ background: '#fed7aa', color: '#9a3412', padding: '0.15rem 0.5rem', borderRadius: 10, fontSize: '0.7rem', fontWeight: 700 }}>
                       ⚡ {readyOrders.length} ready — serve now
                     </span>
@@ -627,7 +628,7 @@ function WaiterPageInner() {
                 const billAmt = Math.max(0, liveSubtotal - (tab.discount || 0));
                 return (
                   <div key={tab.id} style={{ fontSize: '0.78rem', color: '#713f12', padding: '0.15rem 0' }}>
-                    Table {tab.tableId ?? '—'} — {tab.customerName || 'Guest'} · ₹{billAmt}
+                    {tab.tableId ? formatTableName(tab.tableId) : '—'} — {tab.customerName || 'Guest'} · ₹{billAmt}
                   </div>
                 );
               })}
@@ -643,7 +644,7 @@ function WaiterPageInner() {
           style={{ background: '#fef3c7', borderBottom: '2px solid #f59e0b', padding: '0.55rem 1.25rem', fontWeight: 700, fontSize: '0.82rem', color: '#92400e', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
         >
           <span>
-            🪑 New party seated{b.tableId ? ` at Table ${b.tableId}` : ''} — <strong>{b.customerName}</strong>, party of {b.partySize}. Take their order!
+            🪑 New party seated{b.tableId ? ` at ${formatTableName(b.tableId)}` : ''} — <strong>{b.customerName}</strong>, party of {b.partySize}. Take their order!
           </span>
           <button
             onClick={() => setSeatedBanners(prev => prev.filter(x => x.id !== b.id))}
@@ -722,7 +723,7 @@ function WaiterPageInner() {
                     #{order.orderNum || order.id.slice(-4)}
                   </div>
                   <div style={{ fontSize: '0.72rem', color: '#888', marginTop: '0.1rem' }}>
-                    {order.customerName}{order.tableId ? ` · Table ${order.tableId}` : ''}
+                    {order.customerName}{order.tableId ? ` · ${formatTableName(order.tableId)}` : ''}
                   </div>
                   {seatBadge && (
                     <div style={{ fontSize: '0.66rem', color: '#E65C00', fontWeight: 700, marginTop: '0.1rem' }}>
@@ -793,7 +794,7 @@ function WaiterPageInner() {
             <div style={{ background: `linear-gradient(135deg,${STATUS_COLOR[selOrder.status] || '#7c3aed'},${STATUS_COLOR[selOrder.status] || '#5b21b6'})`, color: 'white', padding: '1rem 1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
                 <div style={{ fontWeight: 900, fontSize: '1rem' }}>Order #{selOrder.orderNum || selOrder.id.slice(-4)}</div>
-                <div style={{ fontSize: '0.72rem', opacity: 0.85 }}>{selOrder.customerName}{selOrder.tableId ? ` · Table ${selOrder.tableId}` : ''} · {STATUS_LABEL[selOrder.status]}</div>
+                <div style={{ fontSize: '0.72rem', opacity: 0.85 }}>{selOrder.customerName}{selOrder.tableId ? ` · ${formatTableName(selOrder.tableId)}` : ''} · {STATUS_LABEL[selOrder.status]}</div>
               </div>
               <button onClick={() => { setSelOrder(null); setShowCancelFor(null); }} style={{ background: 'none', border: 'none', color: 'white', fontSize: '1.4rem', cursor: 'pointer' }}>×</button>
             </div>

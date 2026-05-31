@@ -78,7 +78,7 @@ export default function AdminPage() {
   const [authChecked, setAuthChecked]   = useState(false);
 
   // ── Navigation ──
-  type Section = 'overview'|'orders'|'sales'|'menu'|'tables'|'fraud'|'staff';
+  type Section = 'overview'|'orders'|'sales'|'menu'|'tables'|'fraud'|'staff'|'email';
   const [section, setSection] = useState<Section>('overview');
 
   // ── Tabs / filters ──
@@ -98,6 +98,21 @@ export default function AdminPage() {
   const [csvImportMsg,   setCsvImportMsg]    = useState('');
   const [cancelModal,   setCancelModal]   = useState<{open:boolean;orderId:string}>({open:false,orderId:''});
   const [discountModal, setDiscountModal] = useState<{open:boolean;orderId:string}>({open:false,orderId:''});
+
+  // ── Email Diagnostics ──
+  type EmailDiag = {
+    configured: boolean; fromEmail: string; apiKeyPresent: boolean; apiKeyLength: number;
+    queueError: string | null;
+    queueSummary: { total: number; sent: number; failed: number; pending: number };
+    lastEntry: { status: string; error: string | null; created_at: string; updated_at: string } | null;
+    recentQueue: { id: string; order_id: string; status: string; error: string | null; retry_count: number; created_at: string; updated_at: string }[];
+  };
+  const [emailDiag,       setEmailDiag]       = useState<EmailDiag | null>(null);
+  const [emailDiagLoading,setEmailDiagLoading] = useState(false);
+  const [emailDiagError,  setEmailDiagError]   = useState('');
+  const [testEmailTo,     setTestEmailTo]      = useState('');
+  const [testEmailResult, setTestEmailResult]  = useState('');
+  const [testEmailBusy,   setTestEmailBusy]    = useState(false);
 
   // ── Form values ──
   const [cancelReason, setCancelReason] = useState('');
@@ -848,6 +863,7 @@ export default function AdminPage() {
         <NavBtn id="tables"   label="🪑 Tables"           />
         <NavBtn id="fraud"    label="🔍 Transparency"     />
         <NavBtn id="staff"    label="👥 Staff"            />
+        <NavBtn id="email"    label="📧 Email"            />
       </div>
 
       <div style={{maxWidth:'1400px',margin:'0 auto',padding:'1.5rem'}}>
@@ -1968,6 +1984,143 @@ export default function AdminPage() {
                   {l.label}
                 </a>
               ))}
+            </div>
+          </div>
+        </>}
+
+        {/* ═══════════ EMAIL DIAGNOSTICS ═══════════ */}
+        {section==='email' && <>
+          <div style={{fontFamily:"'Playfair Display',serif",fontWeight:700,fontSize:'1.15rem',marginBottom:'1rem',color:'#1A0800'}}>📧 Email Diagnostics</div>
+
+          {/* Config status card */}
+          <div style={{...card('#E65C00'),marginBottom:'1rem'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'0.75rem'}}>
+              <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:'1rem',fontWeight:700,color:'#1A0800',margin:0}}>Resend Configuration</h3>
+              <button
+                onClick={async()=>{
+                  setEmailDiagLoading(true); setEmailDiagError('');
+                  try {
+                    const r = await fetch('/api/email/diagnostics');
+                    const d = await r.json() as typeof emailDiag;
+                    setEmailDiag(d);
+                  } catch(e){ setEmailDiagError(String(e)); }
+                  setEmailDiagLoading(false);
+                }}
+                style={{...btn(),padding:'0.3rem 0.8rem',fontSize:'0.75rem'}}
+              >{emailDiagLoading ? '⏳ Checking…' : '🔍 Check Status'}</button>
+            </div>
+
+            {emailDiagError && <div style={{background:'#fef2f2',color:'#dc2626',borderRadius:8,padding:'0.5rem',fontSize:'0.78rem',marginBottom:'0.75rem'}}>❌ {emailDiagError}</div>}
+
+            {emailDiag && (
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'0.6rem'}}>
+                {[
+                  {label:'RESEND_API_KEY set?',    value: emailDiag.apiKeyPresent ? `✅ Yes (${emailDiag.apiKeyLength} chars)` : '❌ Not set',                       ok: emailDiag.apiKeyPresent},
+                  {label:'Configured & valid?',     value: emailDiag.configured   ? '✅ Yes — ready to send' : '❌ No — placeholder or missing',                     ok: emailDiag.configured},
+                  {label:'From address',            value: emailDiag.fromEmail,                                                                                       ok: true},
+                  {label:'Domain',                  value: 'mail.ourfoodielover.com',                                                                                  ok: true},
+                  {label:'Queue errors?',           value: emailDiag.queueError   ? `❌ ${emailDiag.queueError}` : '✅ None',                                         ok: !emailDiag.queueError},
+                  {label:'Queue summary',           value: `Total: ${emailDiag.queueSummary.total} | ✅ Sent: ${emailDiag.queueSummary.sent} | ❌ Failed: ${emailDiag.queueSummary.failed} | ⏳ Pending: ${emailDiag.queueSummary.pending}`, ok: emailDiag.queueSummary.failed === 0},
+                ].map(row=>(
+                  <div key={row.label} style={{background:'white',borderRadius:8,padding:'0.5rem 0.75rem',border:`1px solid ${row.ok?'#dcfce7':'#fecaca'}`}}>
+                    <div style={{fontSize:'0.65rem',fontWeight:700,color:'#888',textTransform:'uppercase',letterSpacing:1,marginBottom:'0.2rem'}}>{row.label}</div>
+                    <div style={{fontSize:'0.8rem',fontWeight:600,color:row.ok?'#16a34a':'#dc2626'}}>{row.value}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {emailDiag?.lastEntry && (
+              <div style={{marginTop:'0.75rem',background:'white',borderRadius:8,padding:'0.6rem 0.85rem',border:'1px solid #e5e7eb'}}>
+                <div style={{fontSize:'0.65rem',fontWeight:700,color:'#888',textTransform:'uppercase',letterSpacing:1,marginBottom:'0.3rem'}}>Last Queue Entry</div>
+                <div style={{display:'flex',gap:'1rem',flexWrap:'wrap' as const,fontSize:'0.78rem'}}>
+                  <span>Status: <strong style={{color:emailDiag.lastEntry.status==='sent'?'#16a34a':emailDiag.lastEntry.status==='failed'?'#dc2626':'#f59e0b'}}>{emailDiag.lastEntry.status}</strong></span>
+                  <span>Created: {new Date(emailDiag.lastEntry.created_at).toLocaleString()}</span>
+                  {emailDiag.lastEntry.error && <span style={{color:'#dc2626'}}>Error: {emailDiag.lastEntry.error}</span>}
+                </div>
+              </div>
+            )}
+
+            {!emailDiag && !emailDiagLoading && (
+              <div style={{fontSize:'0.8rem',color:'#888',textAlign:'center',padding:'1rem 0'}}>Click &quot;Check Status&quot; to load diagnostics</div>
+            )}
+          </div>
+
+          {/* Recent queue table */}
+          {emailDiag && emailDiag.recentQueue.length > 0 && (
+            <div style={{...card('#E65C00'),marginBottom:'1rem'}}>
+              <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:'1rem',fontWeight:700,color:'#1A0800',marginBottom:'0.75rem'}}>Recent Email Queue (last 10)</h3>
+              <div style={{overflowX:'auto'}}>
+                <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.75rem'}}>
+                  <thead>
+                    <tr style={{background:'#f8fafc'}}>
+                      {['Order ID','Status','Retries','Created','Error'].map(h=>(
+                        <th key={h} style={{padding:'0.4rem 0.5rem',textAlign:'left',fontWeight:700,color:'#64748b',borderBottom:'1px solid #e2e8f0'}}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {emailDiag.recentQueue.map(row=>(
+                      <tr key={row.id} style={{borderBottom:'1px solid #f1f5f9'}}>
+                        <td style={{padding:'0.35rem 0.5rem',fontFamily:'monospace',fontSize:'0.7rem',color:'#64748b'}}>{row.order_id?.slice(-8) ?? '—'}</td>
+                        <td style={{padding:'0.35rem 0.5rem'}}>
+                          <span style={{padding:'0.1rem 0.45rem',borderRadius:20,fontSize:'0.68rem',fontWeight:700,background:row.status==='sent'?'#dcfce7':row.status==='failed'?'#fef2f2':'#fef3c7',color:row.status==='sent'?'#16a34a':row.status==='failed'?'#dc2626':'#d97706'}}>{row.status}</span>
+                        </td>
+                        <td style={{padding:'0.35rem 0.5rem',textAlign:'center',color:'#64748b'}}>{row.retry_count}</td>
+                        <td style={{padding:'0.35rem 0.5rem',color:'#94a3b8'}}>{new Date(row.created_at).toLocaleString('en-IN',{dateStyle:'short',timeStyle:'short'})}</td>
+                        <td style={{padding:'0.35rem 0.5rem',color:'#ef4444',maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' as const}}>{row.error ?? '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Test email */}
+          <div style={{...card('#E65C00')}}>
+            <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:'1rem',fontWeight:700,color:'#1A0800',marginBottom:'0.25rem'}}>📤 Send Test Email</h3>
+            <p style={{fontSize:'0.78rem',color:'#888',marginBottom:'0.85rem'}}>Sends a test email via Resend to verify end-to-end delivery. Check server logs for details.</p>
+            <div style={{display:'flex',gap:'0.6rem',alignItems:'center'}}>
+              <input
+                type="email"
+                value={testEmailTo}
+                onChange={e=>setTestEmailTo(e.target.value)}
+                placeholder="your@email.com"
+                style={{flex:1,padding:'0.6rem 0.85rem',border:'2px solid #e5e7eb',borderRadius:10,fontFamily:'Poppins,sans-serif',fontSize:'0.85rem',outline:'none'}}
+              />
+              <button
+                onClick={async()=>{
+                  if (!testEmailTo.includes('@')) { setTestEmailResult('❌ Enter a valid email address'); return; }
+                  setTestEmailBusy(true); setTestEmailResult('⏳ Sending…');
+                  try {
+                    const r = await fetch(`/api/test-email?to=${encodeURIComponent(testEmailTo)}`);
+                    const d = await r.json() as {ok:boolean;messageId?:string;error?:string;sentTo?:string};
+                    if (d.ok) {
+                      setTestEmailResult(`✅ Sent! messageId: ${d.messageId ?? '?'} → ${d.sentTo ?? testEmailTo}`);
+                    } else {
+                      setTestEmailResult(`❌ Failed: ${d.error ?? 'Unknown error'}`);
+                    }
+                  } catch(e){ setTestEmailResult(`❌ ${String(e)}`); }
+                  setTestEmailBusy(false);
+                }}
+                disabled={testEmailBusy}
+                style={{...btn(),padding:'0.6rem 1.1rem',whiteSpace:'nowrap' as const,opacity:testEmailBusy?0.7:1}}
+              >📧 Send Test</button>
+            </div>
+            {testEmailResult && (
+              <div style={{marginTop:'0.6rem',padding:'0.5rem 0.75rem',borderRadius:8,background:testEmailResult.startsWith('✅')?'#dcfce7':testEmailResult.startsWith('❌')?'#fef2f2':'#f1f5f9',fontSize:'0.78rem',fontWeight:600,color:testEmailResult.startsWith('✅')?'#16a34a':testEmailResult.startsWith('❌')?'#dc2626':'#475569'}}>
+                {testEmailResult}
+              </div>
+            )}
+            <div style={{marginTop:'0.85rem',padding:'0.6rem',background:'#f8fafc',borderRadius:8,fontSize:'0.72rem',color:'#64748b'}}>
+              <strong>Troubleshooting checklist:</strong><br/>
+              1. RESEND_API_KEY set in Vercel → Settings → Environment Variables<br/>
+              2. Domain <code>mail.ourfoodielover.com</code> verified in Resend → Domains<br/>
+              3. FROM address <code>noreply@mail.ourfoodielover.com</code> is on the verified domain<br/>
+              4. Customer must have provided email at order time (check their order/tab record)<br/>
+              5. Check Vercel function logs for <code>[dispatchViaResend]</code> entries<br/>
+              6. Flush the retry queue via: <code>GET /api/email/process-queue</code> (with Authorization header)
             </div>
           </div>
         </>}
