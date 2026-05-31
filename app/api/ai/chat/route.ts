@@ -126,7 +126,38 @@ You MUST respond with valid JSON only. No prose before or after. Schema:
 
 - Include only actions the customer explicitly requested or agreed to.
 - When asking a clarifying question, return "actions": [].
-- For ADD_TO_CART, variantName should be "" (empty string) for single-price items.`;
+- For ADD_TO_CART, variantName should be "" (empty string) for single-price items.
+- CRITICAL: Every single response MUST be valid JSON. Never output plain text. Always wrap in {"reply":...,"actions":[...]}.`;
+}
+
+// ─── Robust JSON extractor ───────────────────────────────────────────────────
+// Gemini may return:
+//   1. Pure JSON                          → parse directly
+//   2. ```json\n{...}\n```               → strip fences
+//   3. Some text, then ```json\n{...}``` → find first { last }
+//   4. {... with trailing text            → find first { last }
+//
+function extractJSON(raw: string): AssistantResponse {
+  // Pass 1: direct parse (fast path for well-behaved responses)
+  try { return JSON.parse(raw); } catch { /* fall through */ }
+
+  // Pass 2: strip leading/trailing whitespace + markdown fences anywhere in string
+  const stripped = raw
+    .replace(/```json\s*/gi, '')
+    .replace(/```\s*/g, '')
+    .trim();
+  try { return JSON.parse(stripped); } catch { /* fall through */ }
+
+  // Pass 3: find the outermost JSON object { ... }
+  const firstBrace = raw.indexOf('{');
+  const lastBrace  = raw.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    const slice = raw.slice(firstBrace, lastBrace + 1);
+    try { return JSON.parse(slice); } catch { /* fall through */ }
+  }
+
+  // All attempts failed — throw with the raw text for diagnostics
+  throw new Error(`Cannot parse JSON from: ${raw.slice(0, 200)}`);
 }
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
@@ -190,12 +221,17 @@ export async function POST(req: NextRequest) {
   });
 
   // ── Build chat history for multi-turn ─────────────────────────────────────
-  // Gemini uses 'user' and 'model' roles (not 'assistant')
-  // Map our AIChatMessage history → Gemini Content[]
-  const geminiHistory = history.slice(-6).map(m => ({
-    role:  m.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: m.content }],
-  }));
+  // Gemini uses 'user' and 'model' roles (not 'assistant').
+  // For model (assistant) turns we re-wrap the reply text as JSON so Gemini
+  // sees consistent JSON in prior turns and keeps producing JSON.
+  const geminiHistory = history.slice(-6).map(m => {
+    if (m.role === 'assistant') {
+      // Re-wrap the plain reply text back into the JSON format Gemini was trained to produce
+      const jsonWrapped = JSON.stringify({ reply: m.content, actions: [] });
+      return { role: 'model', parts: [{ text: jsonWrapped }] };
+    }
+    return { role: 'user', parts: [{ text: m.content }] };
+  });
 
   console.log('[Foodie AI] Gemini model: gemini-2.5-flash');
   console.log('[Foodie AI] History turns sent to Gemini:', geminiHistory.length);
@@ -212,13 +248,13 @@ export async function POST(req: NextRequest) {
     // Parse JSON response
     let parsed: AssistantResponse;
     try {
-      // Strip markdown code fences if present (some models still add them)
-      const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
-      parsed = JSON.parse(cleaned);
+      parsed = extractJSON(raw);
     } catch (jsonErr) {
-      console.error('[Foodie AI] JSON parse failed:', jsonErr, '| Raw:', raw);
+      // Surface the raw response so the root cause is visible in the chat UI
+      console.error('[Foodie AI] JSON parse failed:', jsonErr);
+      console.error('[Foodie AI] Full raw response:', raw);
       return NextResponse.json({
-        reply:   "I got a response but couldn't read it properly. Please try again!",
+        reply:   `⚠️ Gemini returned non-JSON. Raw: ${raw.slice(0, 300)}`,
         actions: [],
       });
     }
