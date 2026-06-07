@@ -373,35 +373,37 @@ export default function KitchenPage() {
       `}</style>
 
       {/* Header */}
-      <div style={{ background: '#1a1a1a', borderBottom: '2px solid #333', padding: '0.8rem 1.25rem', position: 'sticky', top: 0, zIndex: 50, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-          <span style={{ fontSize: '1.6rem' }}>👨‍🍳</span>
-          <div>
-            <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.15rem', fontWeight: 900, color: '#F9A826' }}>Kitchen Display</div>
-            <div style={{ fontSize: '0.65rem', color: '#666' }}>{clock}</div>
-          </div>
-        </div>
-        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-          {[
-            { count: queuedCount,  color: '#f59e0b', label: 'Queued'  },
-            { count: cookingCount, color: '#3b82f6', label: 'Cooking' },
-            { count: readyCount,   color: '#8b5cf6', label: 'Ready'   },
-          ].map(s => (
-            <div key={s.label} style={{ textAlign: 'center' }}>
-              <div style={{ fontSize: '1rem', fontWeight: 900, color: s.color }}>{s.count}</div>
-              <div style={{ fontSize: '0.6rem', color: '#666' }}>{s.label}</div>
+      <div style={{ background: '#1a1a1a', borderBottom: '2px solid #333', padding: '0.75rem 1rem', paddingTop: 'max(0.75rem, env(safe-area-inset-top, 0px))', position: 'sticky', top: 0, zIndex: 50 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', minWidth: 0, flexShrink: 1 }}>
+            <span style={{ fontSize: '1.4rem', flexShrink: 0 }}>👨‍🍳</span>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.05rem', fontWeight: 900, color: '#F9A826', whiteSpace: 'nowrap' }}>Kitchen Display</div>
+              <div style={{ fontSize: '0.62rem', color: '#666', whiteSpace: 'nowrap' }}>{clock}</div>
             </div>
-          ))}
-          <button
-            onClick={toggleMute}
-            title={kitchenMuted ? 'Kitchen audio muted — click to unmute' : 'Kitchen audio on — click to mute'}
-            style={{ ...btn(kitchenMuted ? '#ef444420' : '#22c55e20', kitchenMuted ? '#ef4444' : '#22c55e'), border: `1px solid ${kitchenMuted ? '#ef444440' : '#22c55e40'}`, fontSize: '0.72rem' }}
-          >
-            {kitchenMuted ? '🔇 Muted' : '🔊 Audio On'}
-          </button>
-          <button onClick={logout} style={{ ...btn('#ffffff15', '#aaa'), border: '1px solid #333', fontSize: '0.72rem' }}>
-            🚪 Logout
-          </button>
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', overflowX: 'auto', WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none', flexShrink: 0, maxWidth: 'calc(100vw - 150px)' }}>
+            {[
+              { count: queuedCount,  color: '#f59e0b', label: 'Q'  },
+              { count: cookingCount, color: '#3b82f6', label: '🍳' },
+              { count: readyCount,   color: '#8b5cf6', label: '✅'  },
+            ].map(s => (
+              <div key={s.label} style={{ textAlign: 'center', flexShrink: 0 }}>
+                <div style={{ fontSize: '1rem', fontWeight: 900, color: s.color }}>{s.count}</div>
+                <div style={{ fontSize: '0.58rem', color: '#666' }}>{s.label}</div>
+              </div>
+            ))}
+            <button
+              onClick={toggleMute}
+              title={kitchenMuted ? 'Kitchen audio muted — click to unmute' : 'Kitchen audio on — click to mute'}
+              style={{ ...btn(kitchenMuted ? '#ef444420' : '#22c55e20', kitchenMuted ? '#ef4444' : '#22c55e'), border: `1px solid ${kitchenMuted ? '#ef444440' : '#22c55e40'}`, fontSize: '0.72rem', whiteSpace: 'nowrap', flexShrink: 0 }}
+            >
+              {kitchenMuted ? '🔇' : '🔊'}
+            </button>
+            <button onClick={logout} style={{ ...btn('#ffffff15', '#aaa'), border: '1px solid #333', fontSize: '0.72rem', whiteSpace: 'nowrap', flexShrink: 0 }}>
+              🚪
+            </button>
+          </div>
         </div>
       </div>
 

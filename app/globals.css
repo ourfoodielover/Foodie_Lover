@@ -8,22 +8,41 @@
   --dark-bg: #1A0800;
   --light-bg: #FFF5EB;
   --accent: #C0392B;
+  /* Safe area insets for notch / punch-hole cameras */
+  --safe-top:    env(safe-area-inset-top,    0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left:   env(safe-area-inset-left,   0px);
+  --safe-right:  env(safe-area-inset-right,  0px);
 }
 
 * { box-sizing: border-box; }
+
+html {
+  /* Prevent font scaling in landscape on iOS */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
 
 body {
   font-family: 'Poppins', sans-serif;
   background: linear-gradient(135deg, #faf8f3, #f5f0e8);
   min-height: 100vh;
   margin: 0;
+  /* Prevent horizontal overflow on mobile */
+  overflow-x: hidden;
 }
 
 h1, h2, h3, h4, h5, h6 {
   font-family: 'Playfair Display', serif;
 }
 
-/* Status badges */
+/* ─── Tap highlight removal for mobile ────────────────────────────────────── */
+button, a, [role="button"] {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* ─── Status badges ───────────────────────────────────────────────────────── */
 .badge {
   padding: 0.25rem 0.75rem;
   border-radius: 15px;
@@ -39,7 +58,7 @@ h1, h2, h3, h4, h5, h6 {
 .badge-dine-in   { background: #fff7ed; color: #ea580c; }
 .badge-pickup    { background: #f0fdf4; color: #16a34a; }
 
-/* Modal overlay */
+/* ─── Modal overlay ───────────────────────────────────────────────────────── */
 .modal-overlay {
   position: fixed; inset: 0;
   background: rgba(0,0,0,0.6);
@@ -51,7 +70,33 @@ h1, h2, h3, h4, h5, h6 {
 }
 .modal-overlay.show { display: flex; }
 
-/* ─── Login Page ─────────────────────────────────────────────────────────── */
+/* ─── Page header (sticky) ────────────────────────────────────────────────── */
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  flex-wrap: wrap;
+}
+
+/* Right-side header action strip — scrollable on mobile */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  flex-shrink: 1;
+  max-width: 100%;
+  padding-bottom: 2px; /* prevent clipping on scroll */
+}
+.header-actions::-webkit-scrollbar { display: none; }
+
+/* ─── Login Page ──────────────────────────────────────────────────────────── */
 .login-page {
   min-height: 100vh;
   display: flex;
@@ -59,6 +104,7 @@ h1, h2, h3, h4, h5, h6 {
   justify-content: center;
   background: linear-gradient(160deg, #1A0800 0%, #2D0F00 50%, #3D1C00 80%, #1A0800 100%);
   padding: 1rem;
+  padding-bottom: max(1rem, var(--safe-bottom));
 }
 
 .login-card {
@@ -162,7 +208,7 @@ h1, h2, h3, h4, h5, h6 {
   margin-bottom: 1rem;
 }
 
-/* ─── Role Selector (landing /login page) ───────────────────────────────── */
+/* ─── Role Selector (landing /login page) ────────────────────────────────── */
 .role-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -201,87 +247,101 @@ h1, h2, h3, h4, h5, h6 {
   text-align: center;
 }
 
-/* ─── Mobile Responsive: Header ─────────────────────────────────────────── */
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 0.75rem;
-  position: sticky;
-  top: 0;
-  z-index: 50;
-}
-
-/* ─── Mobile Responsive: Grid layouts ───────────────────────────────────── */
+/* ─── Grid layouts ────────────────────────────────────────────────────────── */
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(145px, 1fr));
+  gap: 0.75rem;
   margin-bottom: 1.5rem;
 }
 
 .orders-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 1rem;
 }
 
 .menu-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(255px, 1fr));
   gap: 1rem;
 }
 
-/* ─── Mobile Responsive: Filter tabs ────────────────────────────────────── */
+/* ─── Filter tabs ─────────────────────────────────────────────────────────── */
 .filter-tabs {
   display: flex;
   gap: 0.4rem;
   overflow-x: auto;
-  padding-bottom: 0.25rem;
+  padding: 0 0 0.35rem;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
+  flex-shrink: 0;
 }
 .filter-tabs::-webkit-scrollbar { display: none; }
 
-/* ─── Scrollable containers ──────────────────────────────────────────────── */
+/* ─── Scrollable containers ───────────────────────────────────────────────── */
 .scroll-x {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
 }
 
-/* ─── Mobile breakpoints ─────────────────────────────────────────────────── */
+/* ─── Responsive modal ────────────────────────────────────────────────────── */
+/* Full-screen bottom-sheet on phones, centered dialog on wider screens */
+.modal-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0,0,0,0.6);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.modal-sheet-inner {
+  background: white;
+  width: 100%;
+  max-width: 560px;
+  max-height: 92dvh;         /* dynamic viewport height — accounts for browser chrome */
+  overflow-y: auto;
+  border-radius: 16px 16px 0 0;
+  /* bottom padding for iPhone home indicator */
+  padding-bottom: max(1rem, var(--safe-bottom));
+}
+
+/* ─── Danger zone (admin clear data) ─────────────────────────────────────── */
+.danger-zone {
+  border: 2px solid #fecaca;
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+  background: #fef2f2;
+}
+.danger-zone-title {
+  font-weight: 800;
+  color: #dc2626;
+  font-size: 0.9rem;
+  margin-bottom: 0.35rem;
+}
+
+/* ─── Mobile breakpoints ──────────────────────────────────────────────────── */
 @media (max-width: 768px) {
-  .stats-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-  .orders-grid {
-    grid-template-columns: 1fr;
-  }
-  .menu-grid {
-    grid-template-columns: 1fr;
-  }
-  .role-grid {
-    grid-template-columns: 1fr;
-  }
-  .login-card {
-    padding: 2rem 1.5rem;
-  }
-  /* Hide secondary text in compact headers */
+  .stats-grid    { grid-template-columns: repeat(2, 1fr); }
+  .orders-grid   { grid-template-columns: 1fr; }
+  .menu-grid     { grid-template-columns: 1fr; }
+  .role-grid     { grid-template-columns: 1fr; }
+  .login-card    { padding: 2rem 1.5rem; }
+  /* Hide verbose secondary text in headers on mobile */
   .header-secondary { display: none; }
+  /* Tighten card padding */
+  .card-pad { padding: 1rem !important; }
 }
 
 @media (max-width: 480px) {
-  .stats-grid {
-    grid-template-columns: repeat(2, 1fr);
-    gap: 0.6rem;
-  }
-  .login-card {
-    padding: 1.75rem 1.25rem;
-    border-radius: 16px;
-  }
+  .stats-grid  { grid-template-columns: repeat(2, 1fr); gap: 0.5rem; }
+  .login-card  { padding: 1.75rem 1.25rem; border-radius: 16px; }
+  /* Ensure no horizontal overflow */
+  .orders-grid { grid-template-columns: 1fr; }
 }
 
-/* ─── Animations ─────────────────────────────────────────────────────────── */
+/* ─── Animations ──────────────────────────────────────────────────────────── */
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.7; }
@@ -310,25 +370,99 @@ h1, h2, h3, h4, h5, h6 {
 .animate-fade-up   { animation: fadeUp 0.3s ease; }
 .animate-spin      { animation: spin 0.8s linear infinite; }
 
-/* Global smooth scrollbar hiding */
+/* ─── Global scrollbar styling ────────────────────────────────────────────── */
 * { scrollbar-width: thin; scrollbar-color: rgba(0,0,0,0.15) transparent; }
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15); border-radius: 4px; }
 
-/* Global focus ring for accessibility */
+/* ─── Focus ring for accessibility ───────────────────────────────────────── */
 button:focus-visible, input:focus-visible {
   outline: 2px solid #E65C00;
   outline-offset: 2px;
 }
 
-/* Interactive press effect for clickable cards */
+/* ─── Press effect for clickable cards ───────────────────────────────────── */
 .pressable { transition: transform 0.12s, box-shadow 0.12s; }
 .pressable:active { transform: scale(0.97); }
 
-/* ─── Utility ────────────────────────────────────────────────────────────── */
+/* ─── Utility ─────────────────────────────────────────────────────────────── */
 .text-truncate {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ─── Admin / Staff page headers — responsive ────────────────────────────── */
+/* These pages use inline styles but override with these classes for mobile */
+.admin-header {
+  background: linear-gradient(135deg, #1A0800, #2D0F00);
+  color: white;
+  padding: 0.75rem 1.25rem;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+  padding-top: max(0.75rem, var(--safe-top));
+}
+.admin-header-inner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.admin-header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+  flex-shrink: 1;
+}
+.admin-header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  flex-shrink: 0;
+  max-width: calc(100vw - 160px);
+  padding-bottom: 2px;
+}
+.admin-header-right::-webkit-scrollbar { display: none; }
+
+/* Nav tabs row — always horizontally scrollable */
+.admin-nav-tabs {
+  display: flex;
+  gap: 0.2rem;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  padding: 0.5rem 1.25rem;
+  background: rgba(0,0,0,0.2);
+}
+.admin-nav-tabs::-webkit-scrollbar { display: none; }
+
+/* ─── Kitchen / Waiter / Delivery page bottom nav (mobile) ───────────────── */
+/* Add extra padding at bottom so content clears floating bottom nav / home indicator */
+.page-with-bottom-pad {
+  padding-bottom: max(5rem, calc(4rem + var(--safe-bottom)));
+}
+
+/* ─── Online ordering page ────────────────────────────────────────────────── */
+/* Cart sticky bar needs to clear home indicator on iOS */
+.cart-sticky-bar {
+  position: sticky;
+  bottom: 0;
+  padding-bottom: max(0.75rem, var(--safe-bottom));
+  background: white;
+  box-shadow: 0 -4px 20px rgba(0,0,0,0.12);
+}
+
+/* ─── Table ordering page ─────────────────────────────────────────────────── */
+.table-cart-bar {
+  position: sticky;
+  bottom: 0;
+  padding-bottom: max(0.75rem, var(--safe-bottom));
 }

@@ -554,42 +554,44 @@ export default function ManagerPage() {
     <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg,#faf8f3,#f5f0e8)', fontFamily: 'Poppins,sans-serif' }}>
 
       {/* Header */}
-      <div style={{ background: 'linear-gradient(135deg,#064e3b,#065f46)', color: 'white', padding: '0.9rem 1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, zIndex: 50, boxShadow: '0 4px 16px rgba(0,0,0,0.2)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <span style={{ fontSize: '1.5rem' }}>💳</span>
-          <div>
-            <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.2rem', fontWeight: 900 }}>Manager — Counter</div>
-            <div style={{ fontSize: '0.7rem', color: '#6ee7b7' }}>Billing & Payment Portal</div>
-          </div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          {awaitingTabs.length > 0 && (
-            <div style={{ background: '#f59e0b', color: 'white', padding: '0.25rem 0.75rem', borderRadius: 20, fontSize: '0.75rem', fontWeight: 800 }}>
-              💰 {awaitingTabs.length} Awaiting Payment
+      <div style={{ background: 'linear-gradient(135deg,#064e3b,#065f46)', color: 'white', padding: '0.75rem 1rem', paddingTop: 'max(0.75rem, env(safe-area-inset-top, 0px))', position: 'sticky', top: 0, zIndex: 50, boxShadow: '0 4px 16px rgba(0,0,0,0.2)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', minWidth: 0, flexShrink: 1 }}>
+            <span style={{ fontSize: '1.4rem', flexShrink: 0 }}>💳</span>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.05rem', fontWeight: 900, whiteSpace: 'nowrap' }}>Manager — Counter</div>
+              <div style={{ fontSize: '0.68rem', color: '#6ee7b7', whiteSpace: 'nowrap' }}>Billing & Payment Portal</div>
             </div>
-          )}
-          <button onClick={()=>setManagerSection('billing')} style={{...btn(managerSection==='billing'?'#059669':'#065f46','#6ee7b7'),border:`1px solid ${managerSection==='billing'?'#34d399':'#6ee7b7'}`,fontSize:'0.72rem'}}>
-            💳 Billing
-          </button>
-          <button onClick={()=>setManagerSection('menu')} style={{...btn(managerSection==='menu'?'#d97706':'#065f46','#fde68a'),border:`1px solid ${managerSection==='menu'?'#fbbf24':'#6ee7b7'}`,fontSize:'0.72rem'}}>
-            🍽️ Menu
-          </button>
-          <button onClick={() => router.push('/manager/tables')} style={{ ...btn('#065f46', '#6ee7b7'), border: '1px solid #6ee7b7', fontSize: '0.72rem' }}>
-            🪑 Table Map
-          </button>
-          <button onClick={() => router.push('/manager/expenses')} style={{ ...btn('#065f46', '#6ee7b7'), border: '1px solid #6ee7b7', fontSize: '0.72rem' }}>
-            💸 Expenses
-          </button>
-          <button onClick={() => setShowEOD(!showEOD)} style={{ ...btn('#065f46', '#6ee7b7'), border: '1px solid #6ee7b7', fontSize: '0.72rem' }}>
-            📊 EOD Report
-          </button>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: '0.78rem', fontWeight: 700 }}>{clock.date}</div>
-            <div style={{ fontSize: '0.7rem', color: '#6ee7b7' }}>{clock.time}</div>
           </div>
-          <button onClick={logout} style={{ ...btn('#ef444430', '#ef4444'), border: '1px solid #ef444440', fontSize: '0.72rem' }}>
-            🚪 Logout
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', overflowX: 'auto', WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none', flexShrink: 0, maxWidth: 'calc(100vw - 170px)', paddingBottom: 2 }}>
+            {awaitingTabs.length > 0 && (
+              <div style={{ background: '#f59e0b', color: 'white', padding: '0.2rem 0.55rem', borderRadius: 20, fontSize: '0.7rem', fontWeight: 800, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                💰 {awaitingTabs.length}
+              </div>
+            )}
+            <button onClick={()=>setManagerSection('billing')} style={{...btn(managerSection==='billing'?'#059669':'#065f46','#6ee7b7'),border:`1px solid ${managerSection==='billing'?'#34d399':'#6ee7b7'}`,fontSize:'0.72rem',whiteSpace:'nowrap',flexShrink:0}}>
+              💳 Billing
+            </button>
+            <button onClick={()=>setManagerSection('menu')} style={{...btn(managerSection==='menu'?'#d97706':'#065f46','#fde68a'),border:`1px solid ${managerSection==='menu'?'#fbbf24':'#6ee7b7'}`,fontSize:'0.72rem',whiteSpace:'nowrap',flexShrink:0}}>
+              🍽️ Menu
+            </button>
+            <button onClick={() => router.push('/manager/tables')} style={{ ...btn('#065f46', '#6ee7b7'), border: '1px solid #6ee7b7', fontSize: '0.72rem', whiteSpace: 'nowrap', flexShrink: 0 }}>
+              🪑 Tables
+            </button>
+            <button onClick={() => router.push('/manager/expenses')} style={{ ...btn('#065f46', '#6ee7b7'), border: '1px solid #6ee7b7', fontSize: '0.72rem', whiteSpace: 'nowrap', flexShrink: 0 }}>
+              💸 Expenses
+            </button>
+            <button onClick={() => setShowEOD(!showEOD)} style={{ ...btn('#065f46', '#6ee7b7'), border: '1px solid #6ee7b7', fontSize: '0.72rem', whiteSpace: 'nowrap', flexShrink: 0 }}>
+              📊 EOD
+            </button>
+            <div style={{ textAlign: 'right', flexShrink: 0 }}>
+              <div style={{ fontSize: '0.75rem', fontWeight: 700, whiteSpace: 'nowrap' }}>{clock.date}</div>
+              <div style={{ fontSize: '0.68rem', color: '#6ee7b7', whiteSpace: 'nowrap' }}>{clock.time}</div>
+            </div>
+            <button onClick={logout} style={{ ...btn('#ef444430', '#ef4444'), border: '1px solid #ef444440', fontSize: '0.72rem', whiteSpace: 'nowrap', flexShrink: 0 }}>
+              🚪
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1006,7 +1008,7 @@ export default function ManagerPage() {
         >
           <div
             onClick={e => e.stopPropagation()}
-            style={{ background: 'white', width: '100%', maxWidth: '540px', maxHeight: '92vh', overflow: 'hidden', display: 'flex', flexDirection: 'column', borderRadius: '16px 16px 0 0', boxShadow: '0 -20px 60px rgba(0,0,0,0.3)' }}
+            style={{ background: 'white', width: '100%', maxWidth: 'min(95vw,540px)', maxHeight: '92dvh', overflow: 'hidden', display: 'flex', flexDirection: 'column', borderRadius: '16px 16px 0 0', boxShadow: '0 -20px 60px rgba(0,0,0,0.3)' }}
           >
             {/* Modal header */}
             <div style={{ background: 'linear-gradient(135deg,#064e3b,#16a34a)', color: 'white', padding: '1rem 1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1484,7 +1486,7 @@ export default function ManagerPage() {
           style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}
           onClick={e => { if (e.target === e.currentTarget && !preCloseSending) setShowPreCloseModal(false); }}
         >
-          <div style={{ background: 'white', borderRadius: 20, padding: '1.75rem', width: '100%', maxWidth: 400, boxShadow: '0 20px 60px rgba(0,0,0,0.35)', fontFamily: 'Poppins,sans-serif' }}>
+          <div style={{ background: 'white', borderRadius: 20, padding: '1.5rem', width: '100%', maxWidth: 'min(95vw,400px)', boxShadow: '0 20px 60px rgba(0,0,0,0.35)', fontFamily: 'Poppins,sans-serif' }}>
             {/* Header */}
             <div style={{ textAlign: 'center', marginBottom: '1.25rem' }}>
               <div style={{ fontSize: '2.25rem', marginBottom: '0.35rem' }}>📧</div>
@@ -1544,7 +1546,7 @@ export default function ManagerPage() {
       {/* ══════════════════ MENU ITEM MODAL ══════════════════ */}
       {menuModal.open && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }} onClick={() => setMenuModal({ open: false, item: emptyItem(), isEdit: false })}>
-          <div onClick={e => e.stopPropagation()} style={{ background: 'white', borderRadius: 16, width: '100%', maxWidth: 510, maxHeight: '92vh', overflow: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'white', borderRadius: 16, width: '100%', maxWidth: 'min(95vw,510px)', maxHeight: '92dvh', overflow: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
             <div style={{ background: 'linear-gradient(135deg,#1A0800,#E65C00)', color: 'white', padding: '1.1rem 1.6rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderRadius: '16px 16px 0 0', position: 'sticky', top: 0, zIndex: 2 }}>
               <span style={{ fontFamily: "'Playfair Display',serif", fontWeight: 900, fontSize: '1.05rem' }}>{menuModal.isEdit ? '✏️ Edit Menu Item' : '➕ Add New Item'}</span>
               <button onClick={() => setMenuModal({ open: false, item: emptyItem(), isEdit: false })} style={{ background: 'none', border: 'none', color: 'white', fontSize: '1.5rem', cursor: 'pointer', lineHeight: 1 }}>×</button>

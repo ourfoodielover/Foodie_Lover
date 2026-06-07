@@ -423,24 +423,24 @@ function WaiterPageInner() {
       `}</style>
 
       {/* Header */}
-      <div style={{ background: 'linear-gradient(135deg,#7c3aed,#5b21b6)', color: 'white', padding: '0.9rem 1.25rem', position: 'sticky', top: 0, zIndex: 50, boxShadow: '0 4px 16px rgba(0,0,0,0.2)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-            <span style={{ fontSize: '1.5rem' }}>🛎️</span>
-            <div>
-              <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.15rem', fontWeight: 900 }}>Waiter Station</div>
-              <div style={{ fontSize: '0.68rem', color: '#c4b5fd' }}>
-                {session?.name} {myStats && `· ${myStats.ordersAccepted} accepted · ${myStats.ordersCancelled} cancelled · ${myStats.ordersServed} served`}
+      <div style={{ background: 'linear-gradient(135deg,#7c3aed,#5b21b6)', color: 'white', padding: '0.75rem 1rem', paddingTop: 'max(0.75rem, env(safe-area-inset-top, 0px))', position: 'sticky', top: 0, zIndex: 50, boxShadow: '0 4px 16px rgba(0,0,0,0.2)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', minWidth: 0, flexShrink: 1 }}>
+            <span style={{ fontSize: '1.4rem', flexShrink: 0 }}>🛎️</span>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.05rem', fontWeight: 900, whiteSpace: 'nowrap' }}>Waiter Station</div>
+              <div style={{ fontSize: '0.65rem', color: '#c4b5fd', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {session?.name} {myStats && `· ${myStats.ordersAccepted} acc · ${myStats.ordersServed} served`}
               </div>
             </div>
           </div>
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', flexShrink: 0, overflow: 'hidden' }}>
             {active.length > 0 && (
-              <div style={{ background: '#f59e0b', color: '#1A0800', padding: '0.2rem 0.6rem', borderRadius: 20, fontSize: '0.72rem', fontWeight: 800 }}>
+              <div style={{ background: '#f59e0b', color: '#1A0800', padding: '0.2rem 0.55rem', borderRadius: 20, fontSize: '0.72rem', fontWeight: 800, whiteSpace: 'nowrap' }}>
                 {active.length} Active
               </div>
             )}
-            <button onClick={logout} style={{ ...btn('#ffffff20', 'white'), border: '1px solid #ffffff30', fontSize: '0.72rem' }}>
+            <button onClick={logout} style={{ ...btn('#ffffff20', 'white'), border: '1px solid #ffffff30', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
               🚪 Logout
             </button>
           </div>

@@ -152,6 +152,12 @@ export default function AdminPage() {
   // ── Closed tabs count (for EOD report) ──
   const [closedTabsCount, setClosedTabsCount] = useState(0);
 
+  // ── Danger zone: clear all orders ──
+  const [clearPin,    setClearPin]    = useState('');
+  const [clearMsg,    setClearMsg]    = useState('');
+  const [clearBusy,   setClearBusy]   = useState(false);
+  const [clearConfirm, setClearConfirm] = useState(false);
+
   // ── Staff management state ──
   const [staffAccounts, setStaffAccounts] = useState<StaffMember[]>([]);
   const [staffForm,  setStaffForm]  = useState({ name: '', username: '', pin: '' });
@@ -721,6 +727,35 @@ export default function AdminPage() {
     }
   }
 
+  // ── Clear all orders ─────────────────────────────────────────────────────
+  async function clearAllOrders() {
+    if (!clearConfirm) { setClearMsg('❌ Please check the confirmation checkbox first.'); return; }
+    if (clearPin.length < 4) { setClearMsg('❌ Enter your Admin PIN (4+ digits)'); return; }
+    setClearBusy(true);
+    setClearMsg('⏳ Clearing all orders…');
+    try {
+      const res = await fetch('/api/orders/clear', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: clearPin }),
+      });
+      const result = await res.json() as { ok?: boolean; error?: string; message?: string };
+      if (!result.ok) {
+        setClearMsg(`❌ ${result.error ?? 'Failed to clear orders'}`);
+      } else {
+        setClearMsg('✅ All orders cleared successfully! Database is now empty.');
+        setClearPin('');
+        setClearConfirm(false);
+        // Refresh the page data
+        void refresh();
+      }
+    } catch (e) {
+      setClearMsg(`❌ ${e instanceof Error ? e.message : 'Network error'}`);
+    } finally {
+      setClearBusy(false);
+    }
+  }
+
   // ── Security question setup ───────────────────────────────────────────────
   async function saveSecurityQuestion() {
     setSecMsg('');
@@ -878,27 +913,29 @@ export default function AdminPage() {
     <div style={{minHeight:'100vh',background:'linear-gradient(135deg,#faf8f3,#f5f0e8)',fontFamily:'Poppins,sans-serif'}}>
 
       {/* Header */}
-      <div style={{background:'linear-gradient(135deg,#1A0800,#2D0F00)',color:'white',padding:'0.9rem 1.75rem',display:'flex',justifyContent:'space-between',alignItems:'center',position:'sticky',top:0,zIndex:200,boxShadow:'0 4px 16px rgba(0,0,0,0.3)'}}>
-        <div style={{display:'flex',alignItems:'center',gap:'0.75rem'}}>
-          <span style={{fontSize:'1.5rem'}}>📊</span>
-          <div>
-            <div style={{fontFamily:"'Playfair Display',serif",fontSize:'1.15rem',fontWeight:900}}>Admin Dashboard</div>
-            <div style={{fontSize:'0.7rem',color:'#F9A826'}}>Foodie Lover — Owner Control Panel</div>
+      <div style={{background:'linear-gradient(135deg,#1A0800,#2D0F00)',color:'white',padding:'0.75rem 1.25rem',paddingTop:'max(0.75rem, env(safe-area-inset-top, 0px))',position:'sticky',top:0,zIndex:200,boxShadow:'0 4px 16px rgba(0,0,0,0.3)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:'0.5rem',flexWrap:'wrap'}}>
+          <div style={{display:'flex',alignItems:'center',gap:'0.6rem',minWidth:0,flexShrink:1}}>
+            <span style={{fontSize:'1.4rem',flexShrink:0}}>📊</span>
+            <div style={{minWidth:0}}>
+              <div style={{fontFamily:"'Playfair Display',serif",fontSize:'1.05rem',fontWeight:900,whiteSpace:'nowrap'}}>Admin Dashboard</div>
+              <div style={{fontSize:'0.68rem',color:'#F9A826',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>Foodie Lover — Owner Control Panel</div>
+            </div>
           </div>
-        </div>
-        <div style={{display:'flex',alignItems:'center',gap:'1rem'}}>
-          {alerts.length>0 && <div style={{background:'#ef4444',color:'white',padding:'0.25rem 0.75rem',borderRadius:20,fontSize:'0.75rem',fontWeight:700,cursor:'pointer'}} onClick={()=>setSection('fraud')}>🚨 {alerts.length} Alert{alerts.length>1?'s':''}</div>}
-          <button onClick={()=>setSection('staff')} style={{...btn('#374151'),padding:'0.3rem 0.7rem',fontSize:'0.75rem'}}>🔐 PIN & Staff</button>
-          <button onClick={adminLogout} style={{...btn('#7f1d1d'),padding:'0.3rem 0.7rem',fontSize:'0.75rem'}}>🚪 Logout</button>
-          <div style={{textAlign:'right'}}>
-            <div style={{fontWeight:700,fontSize:'0.85rem'}}>{clock.date}</div>
-            <div style={{fontSize:'0.78rem',color:'#F9A826'}}>{clock.time}</div>
+          <div style={{display:'flex',alignItems:'center',gap:'0.35rem',overflowX:'auto',WebkitOverflowScrolling:'touch',scrollbarWidth:'none',flexShrink:0,maxWidth:'calc(100vw - 180px)',paddingBottom:2}}>
+            {alerts.length>0 && <div style={{background:'#ef4444',color:'white',padding:'0.25rem 0.6rem',borderRadius:20,fontSize:'0.72rem',fontWeight:700,cursor:'pointer',whiteSpace:'nowrap',flexShrink:0}} onClick={()=>setSection('fraud')}>🚨 {alerts.length}</div>}
+            <button onClick={()=>setSection('staff')} style={{...btn('#374151'),padding:'0.3rem 0.6rem',fontSize:'0.72rem',whiteSpace:'nowrap',flexShrink:0}}>🔐 Staff</button>
+            <button onClick={adminLogout} style={{...btn('#7f1d1d'),padding:'0.3rem 0.6rem',fontSize:'0.72rem',whiteSpace:'nowrap',flexShrink:0}}>🚪 Logout</button>
+            <div style={{textAlign:'right',flexShrink:0}}>
+              <div style={{fontWeight:700,fontSize:'0.8rem',whiteSpace:'nowrap'}}>{clock.date}</div>
+              <div style={{fontSize:'0.72rem',color:'#F9A826',whiteSpace:'nowrap'}}>{clock.time}</div>
+            </div>
           </div>
         </div>
       </div>
 
       {/* Nav */}
-      <div style={{background:'#1A0800',display:'flex',gap:'0.2rem',padding:'0.35rem 1.5rem',overflowX:'auto'}}>
+      <div style={{background:'#1A0800',display:'flex',gap:'0.2rem',padding:'0.35rem 1rem',overflowX:'auto',WebkitOverflowScrolling:'touch',scrollbarWidth:'none'}}>
         <NavBtn id="overview" label="📋 Overview"         />
         <NavBtn id="orders"   label="🧾 Orders"           />
         <NavBtn id="sales"    label="📊 Sales Report"     />
@@ -909,7 +946,7 @@ export default function AdminPage() {
         <NavBtn id="email"    label="📧 Email"            />
       </div>
 
-      <div style={{maxWidth:'1400px',margin:'0 auto',padding:'1.5rem'}}>
+      <div style={{maxWidth:'1400px',margin:'0 auto',padding:'1rem 1rem 1.5rem',paddingLeft:'max(1rem, env(safe-area-inset-left,0px))',paddingRight:'max(1rem, env(safe-area-inset-right,0px))'}}>
 
         {/* ═══════════ OVERVIEW ═══════════ */}
         {section==='overview' && <>
@@ -2038,6 +2075,71 @@ export default function AdminPage() {
               ))}
             </div>
           </div>
+
+          {/* ── Danger Zone: Clear All Orders ── */}
+          <div style={{border:'2px solid #fecaca',borderRadius:12,padding:'1.25rem',background:'#fef2f2',marginBottom:'1.5rem'}}>
+            <div style={{display:'flex',alignItems:'center',gap:'0.6rem',marginBottom:'0.5rem'}}>
+              <span style={{fontSize:'1.4rem'}}>🗑️</span>
+              <div>
+                <div style={{fontWeight:800,color:'#dc2626',fontSize:'0.95rem'}}>Danger Zone — Clear All Orders</div>
+                <div style={{fontSize:'0.75rem',color:'#ef4444',marginTop:'0.1rem'}}>Permanently deletes ALL orders, items, and events from the database. This cannot be undone.</div>
+              </div>
+            </div>
+            <div style={{background:'#fff',border:'1px solid #fecaca',borderRadius:8,padding:'0.9rem',marginBottom:'0.75rem'}}>
+              <div style={{fontSize:'0.8rem',color:'#666',marginBottom:'0.6rem'}}>
+                Use this only to clear dummy/test data before going live. Once deleted, orders <strong>cannot be recovered</strong>.
+              </div>
+              <label style={{display:'flex',alignItems:'flex-start',gap:'0.5rem',cursor:'pointer',marginBottom:'0.75rem'}}>
+                <input
+                  type="checkbox"
+                  checked={clearConfirm}
+                  onChange={e=>setClearConfirm(e.target.checked)}
+                  style={{marginTop:'0.15rem',accentColor:'#dc2626',width:16,height:16,flexShrink:0}}
+                />
+                <span style={{fontSize:'0.8rem',color:'#555',lineHeight:1.4}}>
+                  I understand this will permanently delete ALL orders from the live database and this action cannot be undone.
+                </span>
+              </label>
+              <div style={{display:'flex',gap:'0.65rem',alignItems:'flex-end',flexWrap:'wrap' as const}}>
+                <div style={{flex:1,minWidth:140}}>
+                  <label style={{fontSize:'0.72rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.25rem'}}>Admin PIN to confirm</label>
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    value={clearPin}
+                    onChange={e=>setClearPin(e.target.value.replace(/\D/g,''))}
+                    maxLength={8}
+                    placeholder="••••"
+                    style={{...inp,letterSpacing:'0.4em',textAlign:'center' as const}}
+                  />
+                </div>
+                <button
+                  onClick={clearAllOrders}
+                  disabled={clearBusy || !clearConfirm}
+                  style={{
+                    ...btn('#dc2626'),
+                    padding:'0.65rem 1.25rem',
+                    fontSize:'0.82rem',
+                    whiteSpace:'nowrap' as const,
+                    opacity: clearBusy || !clearConfirm ? 0.55 : 1,
+                    cursor: clearBusy || !clearConfirm ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {clearBusy ? '⏳ Clearing…' : '🗑️ Clear All Orders'}
+                </button>
+              </div>
+              {clearMsg && (
+                <div style={{
+                  fontSize:'0.8rem',
+                  color:clearMsg.includes('✅')?'#16a34a':clearMsg.includes('⏳')?'#555':'#ef4444',
+                  marginTop:'0.5rem',
+                  fontWeight:600,
+                }}>
+                  {clearMsg}
+                </div>
+              )}
+            </div>
+          </div>
         </>}
 
         {/* ═══════════ EMAIL DIAGNOSTICS ═══════════ */}
@@ -2182,7 +2284,7 @@ export default function AdminPage() {
       {/* ═══════ ORDER DETAIL MODAL ═══════ */}
       {selOrder && (
         <div className="modal-overlay show" onClick={()=>setSelOrder(null)}>
-          <div onClick={e=>e.stopPropagation()} style={{background:'white',borderRadius:16,width:'100%',maxWidth:600,maxHeight:'90vh',overflow:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:'white',borderRadius:16,width:'100%',maxWidth:'min(95vw,600px)',maxHeight:'90dvh',overflow:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
             <div style={{background:'linear-gradient(135deg,#1A0800,#E65C00)',color:'white',padding:'1.2rem 1.7rem',display:'flex',justifyContent:'space-between',alignItems:'flex-start',position:'sticky',top:0,zIndex:2,borderRadius:'16px 16px 0 0'}}>
               <div>
                 <div style={{fontSize:'0.68rem',opacity:0.7,textTransform:'uppercase',letterSpacing:'0.1em'}}>Order Details</div>
@@ -2253,7 +2355,7 @@ export default function AdminPage() {
       {/* ═══════ MENU ADD/EDIT MODAL ═══════ */}
       {menuModal.open && (
         <div className="modal-overlay show" onClick={()=>setMenuModal({open:false,item:emptyItem(),isEdit:false})}>
-          <div onClick={e=>e.stopPropagation()} style={{background:'white',borderRadius:16,width:'100%',maxWidth:510,maxHeight:'92vh',overflow:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:'white',borderRadius:16,width:'100%',maxWidth:'min(95vw,510px)',maxHeight:'92dvh',overflow:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
             <div style={{background:'linear-gradient(135deg,#1A0800,#E65C00)',color:'white',padding:'1.1rem 1.6rem',display:'flex',justifyContent:'space-between',alignItems:'center',borderRadius:'16px 16px 0 0',position:'sticky',top:0,zIndex:2}}>
               <span style={{fontFamily:"'Playfair Display',serif",fontWeight:900,fontSize:'1.05rem'}}>{menuModal.isEdit?'✏️ Edit Menu Item':'➕ Add New Item'}</span>
               <button onClick={()=>setMenuModal({open:false,item:emptyItem(),isEdit:false})} style={{background:'none',border:'none',color:'white',fontSize:'1.5rem',cursor:'pointer',lineHeight:1}}>×</button>
@@ -2323,7 +2425,7 @@ export default function AdminPage() {
       {/* ═══════ CANCEL MODAL ═══════ */}
       {cancelModal.open && (
         <div className="modal-overlay show" onClick={()=>setCancelModal({open:false,orderId:''})}>
-          <div onClick={e=>e.stopPropagation()} style={{background:'white',borderRadius:16,width:'100%',maxWidth:390,padding:'1.75rem',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:'white',borderRadius:16,width:'100%',maxWidth:'min(95vw,390px)',padding:'1.75rem',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
             <h3 style={{fontFamily:"'Playfair Display',serif",color:'#ef4444',marginBottom:'0.4rem',fontSize:'1.1rem'}}>❌ Cancel Order</h3>
             <p style={{fontSize:'0.82rem',color:'#666',marginBottom:'0.9rem'}}>Cannot be undone. Order stays in the Cancellation Log.</p>
             <label style={{fontSize:'0.75rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.28rem'}}>Reason *</label>
@@ -2339,7 +2441,7 @@ export default function AdminPage() {
       {/* ═══════ DISCOUNT MODAL ═══════ */}
       {discountModal.open && (
         <div className="modal-overlay show" onClick={()=>setDiscountModal({open:false,orderId:''})}>
-          <div onClick={e=>e.stopPropagation()} style={{background:'white',borderRadius:16,width:'100%',maxWidth:390,padding:'1.75rem',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:'white',borderRadius:16,width:'100%',maxWidth:'min(95vw,390px)',padding:'1.75rem',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
             <h3 style={{fontFamily:"'Playfair Display',serif",color:'#8b5cf6',marginBottom:'0.4rem',fontSize:'1.1rem'}}>🏷️ Apply Discount</h3>
             <p style={{fontSize:'0.82rem',color:'#666',marginBottom:'0.9rem'}}>Owner PIN required. Every discount is logged permanently.</p>
             <label style={{fontSize:'0.75rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.28rem'}}>Discount Amount (₹)</label>
@@ -2360,7 +2462,7 @@ export default function AdminPage() {
       {/* ═══════ PIN MANAGER ═══════ */}
       {showPinMgr && (
         <div className="modal-overlay show" onClick={()=>{setShowPinMgr(false);setNewPin('');setNewPinMsg('');setAdminPinOld('');}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:'white',borderRadius:16,width:'100%',maxWidth:350,padding:'1.75rem',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:'white',borderRadius:16,width:'100%',maxWidth:'min(95vw,350px)',padding:'1.75rem',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
             <h3 style={{fontFamily:"'Playfair Display',serif",marginBottom:'0.3rem',fontSize:'1.1rem'}}>🔑 Change Owner PIN</h3>
             <p style={{fontSize:'0.8rem',color:'#666',marginBottom:'0.9rem'}}>Used to authorise discounts. Enter your current PIN to change it.</p>
             <label style={{fontSize:'0.75rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.28rem'}}>Current PIN</label>

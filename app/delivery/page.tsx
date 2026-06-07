@@ -226,29 +226,29 @@ export default function DeliveryPage() {
     <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg,#f0f9ff,#e0f2fe)', fontFamily: 'Poppins,sans-serif' }}>
 
       {/* Header */}
-      <div style={{ background: 'linear-gradient(135deg,#0f172a,#1e293b)', color: 'white', padding: '0.9rem 1.25rem', position: 'sticky', top: 0, zIndex: 50, boxShadow: '0 4px 16px rgba(0,0,0,0.3)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-            <span style={{ fontSize: '1.6rem' }}>🛵</span>
-            <div>
-              <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.1rem', fontWeight: 900 }}>Delivery Dashboard</div>
-              <div style={{ fontSize: '0.68rem', color: '#94a3b8' }}>{session?.name} • Foodie Lover</div>
+      <div style={{ background: 'linear-gradient(135deg,#0f172a,#1e293b)', color: 'white', padding: '0.75rem 1rem', paddingTop: 'max(0.75rem, env(safe-area-inset-top, 0px))', position: 'sticky', top: 0, zIndex: 50, boxShadow: '0 4px 16px rgba(0,0,0,0.3)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', minWidth: 0, flexShrink: 1 }}>
+            <span style={{ fontSize: '1.4rem', flexShrink: 0 }}>🛵</span>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.05rem', fontWeight: 900, whiteSpace: 'nowrap' }}>Delivery Dashboard</div>
+              <div style={{ fontSize: '0.65rem', color: '#94a3b8', whiteSpace: 'nowrap' }}>{session?.name} • Foodie Lover</div>
             </div>
           </div>
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', overflowX: 'auto', WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none', flexShrink: 0, maxWidth: 'calc(100vw - 160px)' }}>
             {[
-              { label: 'Ready',      count: ready.length,     color: '#16a34a' },
-              { label: 'En Route',   count: enroute.length,   color: '#2563eb' },
-              { label: 'Delivered',  count: done.length,      color: '#8b5cf6' },
-              { label: 'Re-Deliver', count: reDeliver.length, color: '#dc2626' },
+              { label: 'Ready',  count: ready.length,     color: '#16a34a' },
+              { label: 'Route',  count: enroute.length,   color: '#2563eb' },
+              { label: 'Done',   count: done.length,      color: '#8b5cf6' },
+              { label: 'Redelv', count: reDeliver.length, color: '#dc2626' },
             ].map(s => (
-              <div key={s.label} style={{ textAlign: 'center', minWidth: 38 }}>
+              <div key={s.label} style={{ textAlign: 'center', minWidth: 32, flexShrink: 0 }}>
                 <div style={{ fontSize: '1rem', fontWeight: 900, color: s.color }}>{s.count}</div>
-                <div style={{ fontSize: '0.55rem', color: '#64748b' }}>{s.label}</div>
+                <div style={{ fontSize: '0.52rem', color: '#64748b' }}>{s.label}</div>
               </div>
             ))}
-            <button onClick={() => { clearSession('delivery'); router.replace('/delivery/login'); }} style={{ ...btn('#ffffff15', '#aaa'), border: '1px solid #334155', fontSize: '0.72rem' }}>
-              🚪 End Shift
+            <button onClick={() => { clearSession('delivery'); router.replace('/delivery/login'); }} style={{ ...btn('#ffffff15', '#aaa'), border: '1px solid #334155', fontSize: '0.72rem', whiteSpace: 'nowrap', flexShrink: 0 }}>
+              🚪 End
             </button>
           </div>
         </div>
