@@ -99,9 +99,19 @@ export default function ManagerPage() {
   const [splitCount, setSplitCount]           = useState('2');
   const [splitPayEntry, setSplitPayEntry]     = useState<string | null>(null);
   const [splitPayMethod, setSplitPayMethod]   = useState('cod');
-  // Split billing — by method
+  // Split billing — by method (used inside split-bill modal)
   const [showSplitMethod, setShowSplitMethod] = useState(false);
   const [splitMethodRows, setSplitMethodRows] = useState<{ method: string; amount: string }[]>([
+    { method: 'cod', amount: '' }, { method: 'upi', amount: '' },
+  ]);
+  // Inline split payment — table billing panel
+  const [showTabPaySplit, setShowTabPaySplit] = useState(false);
+  const [tabPaySplitRows, setTabPaySplitRows] = useState<{ method: string; amount: string }[]>([
+    { method: 'cod', amount: '' }, { method: 'upi', amount: '' },
+  ]);
+  // Inline split payment — pickup order modal
+  const [showPickupSplit, setShowPickupSplit] = useState(false);
+  const [pickupSplitRows, setPickupSplitRows] = useState<{ method: string; amount: string }[]>([
     { method: 'cod', amount: '' }, { method: 'upi', amount: '' },
   ]);
 
@@ -314,6 +324,9 @@ export default function ManagerPage() {
         setSplitBill(null);
         setShowSplitModal(false);
         setShowSplitMethod(false);
+        setShowTabPaySplit(false);
+        setTabPaySplitRows([{ method: 'cod', amount: '' }, { method: 'upi', amount: '' }]);
+        setTabPayMethod('cod');
       }, 1800);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
@@ -386,6 +399,12 @@ export default function ManagerPage() {
       );
       setPickupPayOrder(null);
       setPickupPayMsg('');
+      setShowPickupSplit(false);
+      setPickupSplitRows([{ method: 'cod', amount: '' }, { method: 'upi', amount: '' }]);
+      setPickupPayMethod('cod');
+      setPickupDiscApplied(null);
+      setPickupDiscAmt('');
+      setPickupDiscNote('');
       await refresh();
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Unknown error';
@@ -1097,7 +1116,7 @@ export default function ManagerPage() {
       {selTab && (
         <div
           style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 200 }}
-          onClick={() => { setSelTab(null); setTabCloseConfirm(false); setSplitBill(null); setShowSplitModal(false); setShowSplitMethod(false); }}
+          onClick={() => { setSelTab(null); setTabCloseConfirm(false); setSplitBill(null); setShowSplitModal(false); setShowSplitMethod(false); setShowTabPaySplit(false); setTabPaySplitRows([{ method: 'cod', amount: '' }, { method: 'upi', amount: '' }]); }}
         >
           <div
             onClick={e => e.stopPropagation()}
@@ -1114,7 +1133,7 @@ export default function ManagerPage() {
                   {selTab.status === 'awaiting_payment' ? '💳 Bill Requested' : selTab.status === 'open' ? '🟢 Open Tab' : '✅ Closed'}
                 </div>
               </div>
-              <button onClick={() => { setSelTab(null); setTabCloseConfirm(false); setSplitBill(null); setShowSplitModal(false); setShowSplitMethod(false); }} style={{ background: 'none', border: 'none', color: 'white', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
+              <button onClick={() => { setSelTab(null); setTabCloseConfirm(false); setSplitBill(null); setShowSplitModal(false); setShowSplitMethod(false); setShowTabPaySplit(false); setTabPaySplitRows([{ method: 'cod', amount: '' }, { method: 'upi', amount: '' }]); }} style={{ background: 'none', border: 'none', color: 'white', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto', padding: '1.25rem 1.5rem' }}>
@@ -1386,39 +1405,114 @@ export default function ManagerPage() {
               {selTab.status !== 'closed' && (
                 <div style={{ marginBottom: '1rem' }}>
                   <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.4rem' }}>Payment Method</label>
-                  {/* If a combined split-method string was set, show it as a badge with reset */}
+                  {/* Combined split badge — show when a split string has been confirmed */}
                   {tabPayMethod.includes('+') ? (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.4rem 0.75rem', background: '#eff6ff', border: '2px solid #2563eb', borderRadius: 8 }}>
                       <span style={{ flex: 1, fontWeight: 700, color: '#1d4ed8', fontSize: '0.8rem' }}>💳 {tabPayMethod}</span>
                       <button
-                        onClick={() => setTabPayMethod('cod')}
+                        onClick={() => { setTabPayMethod('cod'); setShowTabPaySplit(false); setTabPaySplitRows([{ method: 'cod', amount: '' }, { method: 'upi', amount: '' }]); }}
                         style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: '0.75rem', fontFamily: 'Poppins,sans-serif', fontWeight: 600 }}
                       >× Reset</button>
                     </div>
+                  ) : showTabPaySplit ? (
+                    /* ── Inline split form ── */
+                    (() => {
+                      const TAB_PAY_OPTS = [
+                        { k: 'cod', l: '💵 Cash' }, { k: 'upi', l: '📲 UPI' },
+                        { k: 'card', l: '💳 Card' }, { k: 'gpay', l: '📱 GPay' },
+                        { k: 'phonepe', l: '📱 PhonePe' }, { k: 'paytm', l: '📱 Paytm' },
+                      ];
+                      const TAB_PAY_NAMES: Record<string, string> = {
+                        cod: 'Cash', upi: 'UPI', card: 'Card', gpay: 'GPay', phonepe: 'PhonePe', paytm: 'Paytm',
+                      };
+                      const splitTotal = tabPaySplitRows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+                      const isBalanced = Math.abs(splitTotal - tabBillTotal) < 1;
+                      return (
+                        <div style={{ background: '#eff6ff', borderRadius: 10, border: '1px solid #bfdbfe', padding: '0.85rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                            <div style={{ fontWeight: 700, color: '#1d4ed8', fontSize: '0.82rem' }}>✂️ Split Payment</div>
+                            <button onClick={() => setShowTabPaySplit(false)} style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: '0.75rem', fontFamily: 'Poppins,sans-serif' }}>Cancel</button>
+                          </div>
+                          <div style={{ fontSize: '0.71rem', color: '#64748b', marginBottom: '0.5rem' }}>
+                            Total must equal ₹{tabBillTotal}.
+                          </div>
+                          {tabPaySplitRows.map((row, i) => (
+                            <div key={i} style={{ display: 'flex', gap: '0.3rem', marginBottom: '0.35rem', alignItems: 'center' }}>
+                              <select
+                                value={row.method}
+                                onChange={e => setTabPaySplitRows(prev => prev.map((r, j) => j === i ? { ...r, method: e.target.value } : r))}
+                                style={{ flex: 1.4, padding: '0.32rem 0.4rem', borderRadius: 6, border: '1.5px solid #bfdbfe', fontSize: '0.77rem', fontFamily: 'Poppins,sans-serif', background: 'white' }}
+                              >
+                                {TAB_PAY_OPTS.map(p => <option key={p.k} value={p.k}>{p.l}</option>)}
+                              </select>
+                              <input
+                                type="number"
+                                value={row.amount}
+                                onChange={e => setTabPaySplitRows(prev => prev.map((r, j) => j === i ? { ...r, amount: e.target.value } : r))}
+                                placeholder="₹ Amount"
+                                style={{ flex: 1, padding: '0.32rem 0.4rem', borderRadius: 6, border: '1.5px solid #bfdbfe', fontSize: '0.77rem', fontFamily: 'Poppins,sans-serif', minWidth: 0 }}
+                              />
+                              {tabPaySplitRows.length > 2 && (
+                                <button
+                                  onClick={() => setTabPaySplitRows(prev => prev.filter((_, j) => j !== i))}
+                                  style={{ background: '#fef2f2', border: 'none', borderRadius: 6, padding: '0.28rem 0.45rem', cursor: 'pointer', color: '#ef4444', fontWeight: 700, fontSize: '0.8rem', fontFamily: 'Poppins,sans-serif' }}
+                                >×</button>
+                              )}
+                            </div>
+                          ))}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.55rem' }}>
+                            <button
+                              onClick={() => setTabPaySplitRows(prev => [...prev, { method: 'cod', amount: '' }])}
+                              style={{ fontSize: '0.71rem', padding: '0.2rem 0.5rem', borderRadius: 6, background: '#f0f9ff', border: '1px dashed #60a5fa', cursor: 'pointer', fontFamily: 'Poppins,sans-serif', color: '#2563eb' }}
+                            >+ Add method</button>
+                            <span style={{ fontSize: '0.74rem', fontWeight: 700, color: isBalanced ? '#16a34a' : '#ef4444' }}>
+                              ₹{splitTotal} / ₹{tabBillTotal} {isBalanced ? '✅' : ''}
+                            </span>
+                          </div>
+                          <button
+                            disabled={!isBalanced}
+                            onClick={() => {
+                              const combined = tabPaySplitRows
+                                .filter(r => parseFloat(r.amount) > 0)
+                                .map(r => `${TAB_PAY_NAMES[r.method] || r.method} ₹${r.amount}`)
+                                .join(' + ');
+                              setTabPayMethod(combined);
+                              setShowTabPaySplit(false);
+                            }}
+                            style={{ ...btn('#2563eb'), width: '100%', fontSize: '0.78rem', opacity: isBalanced ? 1 : 0.5 }}
+                          >✅ Apply Split Payment</button>
+                        </div>
+                      );
+                    })()
                   ) : (
-                    <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-                      {[
-                        { k: 'cod',     l: '💵 Cash'       },
-                        { k: 'gpay',    l: '📱 Google Pay'  },
-                        { k: 'phonepe', l: '📱 PhonePe'     },
-                        { k: 'card',    l: '💳 Card'        },
-                        { k: 'upi',     l: '📲 UPI'         },
-                      ].map(p => (
-                        <button
-                          key={p.k}
-                          onClick={() => setTabPayMethod(p.k)}
-                          style={{
-                            padding: '0.35rem 0.75rem', borderRadius: 8,
-                            border: `2px solid ${tabPayMethod === p.k ? '#16a34a' : '#e5e7eb'}`,
-                            background: tabPayMethod === p.k ? '#f0fdf4' : 'white',
-                            color: tabPayMethod === p.k ? '#16a34a' : '#666',
-                            fontWeight: 700, cursor: 'pointer', fontSize: '0.78rem',
-                            fontFamily: 'Poppins,sans-serif',
-                          }}
-                        >
-                          {p.l}
-                        </button>
-                      ))}
+                    /* Single method buttons + Split toggle */
+                    <div>
+                      <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '0.35rem' }}>
+                        {[
+                          { k: 'cod',     l: '💵 Cash'      },
+                          { k: 'gpay',    l: '📱 GPay'       },
+                          { k: 'phonepe', l: '📱 PhonePe'    },
+                          { k: 'card',    l: '💳 Card'       },
+                          { k: 'upi',     l: '📲 UPI'        },
+                        ].map(p => (
+                          <button
+                            key={p.k}
+                            onClick={() => setTabPayMethod(p.k)}
+                            style={{
+                              padding: '0.35rem 0.75rem', borderRadius: 8,
+                              border: `2px solid ${tabPayMethod === p.k ? '#16a34a' : '#e5e7eb'}`,
+                              background: tabPayMethod === p.k ? '#f0fdf4' : 'white',
+                              color: tabPayMethod === p.k ? '#16a34a' : '#666',
+                              fontWeight: 700, cursor: 'pointer', fontSize: '0.78rem',
+                              fontFamily: 'Poppins,sans-serif',
+                            }}
+                          >{p.l}</button>
+                        ))}
+                      </div>
+                      <button
+                        onClick={() => { setShowTabPaySplit(true); setTabPaySplitRows([{ method: 'cod', amount: '' }, { method: 'upi', amount: '' }]); }}
+                        style={{ fontSize: '0.75rem', padding: '0.28rem 0.75rem', borderRadius: 8, background: '#eff6ff', border: '1.5px solid #bfdbfe', cursor: 'pointer', color: '#2563eb', fontWeight: 700, fontFamily: 'Poppins,sans-serif' }}
+                      >✂️ Split Payment</button>
                     </div>
                   )}
                 </div>
@@ -1600,7 +1694,7 @@ export default function ManagerPage() {
         return (
           <div
             style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}
-            onClick={e => { if (e.target === e.currentTarget && !pickupPayBusy) setPickupPayOrder(null); }}
+            onClick={e => { if (e.target === e.currentTarget && !pickupPayBusy) { setPickupPayOrder(null); setShowPickupSplit(false); setPickupSplitRows([{ method: 'cod', amount: '' }, { method: 'upi', amount: '' }]); } }}
           >
             <div style={{ background: 'white', borderRadius: 20, width: '100%', maxWidth: 'min(95vw,440px)', maxHeight: '92dvh', overflow: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.35)', fontFamily: 'Poppins,sans-serif' }}>
               {/* Header */}
@@ -1708,28 +1802,116 @@ export default function ManagerPage() {
                 {/* Payment method */}
                 <div style={{ marginBottom: '1rem' }}>
                   <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.4rem' }}>Payment Method</label>
-                  <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-                    {[
-                      { k: 'cod',     l: '💵 Cash'       },
-                      { k: 'gpay',    l: '📱 GPay'        },
-                      { k: 'phonepe', l: '📱 PhonePe'     },
-                      { k: 'card',    l: '💳 Card'        },
-                      { k: 'upi',     l: '📲 UPI'         },
-                    ].map(p => (
+                  {/* Combined split badge */}
+                  {pickupPayMethod.includes('+') ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.4rem 0.75rem', background: '#eff6ff', border: '2px solid #2563eb', borderRadius: 8 }}>
+                      <span style={{ flex: 1, fontWeight: 700, color: '#1d4ed8', fontSize: '0.8rem' }}>💳 {pickupPayMethod}</span>
                       <button
-                        key={p.k}
-                        onClick={() => setPickupPayMethod(p.k)}
-                        style={{
-                          padding: '0.35rem 0.75rem', borderRadius: 8,
-                          border: `2px solid ${pickupPayMethod === p.k ? '#16a34a' : '#e5e7eb'}`,
-                          background: pickupPayMethod === p.k ? '#f0fdf4' : 'white',
-                          color: pickupPayMethod === p.k ? '#16a34a' : '#666',
-                          fontWeight: 700, cursor: 'pointer', fontSize: '0.78rem',
-                          fontFamily: 'Poppins,sans-serif',
-                        }}
-                      >{p.l}</button>
-                    ))}
-                  </div>
+                        onClick={() => { setPickupPayMethod('cod'); setShowPickupSplit(false); setPickupSplitRows([{ method: 'cod', amount: '' }, { method: 'upi', amount: '' }]); }}
+                        style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: '0.75rem', fontFamily: 'Poppins,sans-serif', fontWeight: 600 }}
+                      >× Reset</button>
+                    </div>
+                  ) : showPickupSplit ? (
+                    /* ── Inline split form for pickup ── */
+                    (() => {
+                      const PKP_PAY_OPTS = [
+                        { k: 'cod', l: '💵 Cash' }, { k: 'upi', l: '📲 UPI' },
+                        { k: 'card', l: '💳 Card' }, { k: 'gpay', l: '📱 GPay' },
+                        { k: 'phonepe', l: '📱 PhonePe' }, { k: 'paytm', l: '📱 Paytm' },
+                      ];
+                      const PKP_PAY_NAMES: Record<string, string> = {
+                        cod: 'Cash', upi: 'UPI', card: 'Card', gpay: 'GPay', phonepe: 'PhonePe', paytm: 'Paytm',
+                      };
+                      const pkpTotal = pickupSplitRows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+                      const pkpBalanced = Math.abs(pkpTotal - finalTotal) < 1;
+                      return (
+                        <div style={{ background: '#eff6ff', borderRadius: 10, border: '1px solid #bfdbfe', padding: '0.85rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                            <div style={{ fontWeight: 700, color: '#1d4ed8', fontSize: '0.82rem' }}>✂️ Split Payment</div>
+                            <button onClick={() => setShowPickupSplit(false)} style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: '0.75rem', fontFamily: 'Poppins,sans-serif' }}>Cancel</button>
+                          </div>
+                          <div style={{ fontSize: '0.71rem', color: '#64748b', marginBottom: '0.5rem' }}>
+                            Total must equal ₹{finalTotal}.
+                          </div>
+                          {pickupSplitRows.map((row, i) => (
+                            <div key={i} style={{ display: 'flex', gap: '0.3rem', marginBottom: '0.35rem', alignItems: 'center' }}>
+                              <select
+                                value={row.method}
+                                onChange={e => setPickupSplitRows(prev => prev.map((r, j) => j === i ? { ...r, method: e.target.value } : r))}
+                                style={{ flex: 1.4, padding: '0.32rem 0.4rem', borderRadius: 6, border: '1.5px solid #bfdbfe', fontSize: '0.77rem', fontFamily: 'Poppins,sans-serif', background: 'white' }}
+                              >
+                                {PKP_PAY_OPTS.map(p => <option key={p.k} value={p.k}>{p.l}</option>)}
+                              </select>
+                              <input
+                                type="number"
+                                value={row.amount}
+                                onChange={e => setPickupSplitRows(prev => prev.map((r, j) => j === i ? { ...r, amount: e.target.value } : r))}
+                                placeholder="₹ Amount"
+                                style={{ flex: 1, padding: '0.32rem 0.4rem', borderRadius: 6, border: '1.5px solid #bfdbfe', fontSize: '0.77rem', fontFamily: 'Poppins,sans-serif', minWidth: 0 }}
+                              />
+                              {pickupSplitRows.length > 2 && (
+                                <button
+                                  onClick={() => setPickupSplitRows(prev => prev.filter((_, j) => j !== i))}
+                                  style={{ background: '#fef2f2', border: 'none', borderRadius: 6, padding: '0.28rem 0.45rem', cursor: 'pointer', color: '#ef4444', fontWeight: 700, fontSize: '0.8rem', fontFamily: 'Poppins,sans-serif' }}
+                                >×</button>
+                              )}
+                            </div>
+                          ))}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.55rem' }}>
+                            <button
+                              onClick={() => setPickupSplitRows(prev => [...prev, { method: 'cod', amount: '' }])}
+                              style={{ fontSize: '0.71rem', padding: '0.2rem 0.5rem', borderRadius: 6, background: '#f0f9ff', border: '1px dashed #60a5fa', cursor: 'pointer', fontFamily: 'Poppins,sans-serif', color: '#2563eb' }}
+                            >+ Add method</button>
+                            <span style={{ fontSize: '0.74rem', fontWeight: 700, color: pkpBalanced ? '#16a34a' : '#ef4444' }}>
+                              ₹{pkpTotal} / ₹{finalTotal} {pkpBalanced ? '✅' : ''}
+                            </span>
+                          </div>
+                          <button
+                            disabled={!pkpBalanced}
+                            onClick={() => {
+                              const combined = pickupSplitRows
+                                .filter(r => parseFloat(r.amount) > 0)
+                                .map(r => `${PKP_PAY_NAMES[r.method] || r.method} ₹${r.amount}`)
+                                .join(' + ');
+                              setPickupPayMethod(combined);
+                              setShowPickupSplit(false);
+                            }}
+                            style={{ ...btn('#2563eb'), width: '100%', fontSize: '0.78rem', opacity: pkpBalanced ? 1 : 0.5 }}
+                          >✅ Apply Split Payment</button>
+                        </div>
+                      );
+                    })()
+                  ) : (
+                    /* Single method buttons + Split toggle */
+                    <div>
+                      <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '0.35rem' }}>
+                        {[
+                          { k: 'cod',     l: '💵 Cash'      },
+                          { k: 'gpay',    l: '📱 GPay'       },
+                          { k: 'phonepe', l: '📱 PhonePe'    },
+                          { k: 'card',    l: '💳 Card'       },
+                          { k: 'upi',     l: '📲 UPI'        },
+                        ].map(p => (
+                          <button
+                            key={p.k}
+                            onClick={() => setPickupPayMethod(p.k)}
+                            style={{
+                              padding: '0.35rem 0.75rem', borderRadius: 8,
+                              border: `2px solid ${pickupPayMethod === p.k ? '#16a34a' : '#e5e7eb'}`,
+                              background: pickupPayMethod === p.k ? '#f0fdf4' : 'white',
+                              color: pickupPayMethod === p.k ? '#16a34a' : '#666',
+                              fontWeight: 700, cursor: 'pointer', fontSize: '0.78rem',
+                              fontFamily: 'Poppins,sans-serif',
+                            }}
+                          >{p.l}</button>
+                        ))}
+                      </div>
+                      <button
+                        onClick={() => { setShowPickupSplit(true); setPickupSplitRows([{ method: 'cod', amount: '' }, { method: 'upi', amount: '' }]); }}
+                        style={{ fontSize: '0.75rem', padding: '0.28rem 0.75rem', borderRadius: 8, background: '#eff6ff', border: '1.5px solid #bfdbfe', cursor: 'pointer', color: '#2563eb', fontWeight: 700, fontFamily: 'Poppins,sans-serif' }}
+                      >✂️ Split Payment</button>
+                    </div>
+                  )}
                 </div>
 
                 {/* Final total */}
@@ -1754,7 +1936,7 @@ export default function ManagerPage() {
                   {pickupPayBusy ? '⏳ Processing…' : `✅ Confirm ₹${finalTotal} Payment`}
                 </button>
                 <button
-                  onClick={() => { if (!pickupPayBusy) setPickupPayOrder(null); }}
+                  onClick={() => { if (!pickupPayBusy) { setPickupPayOrder(null); setShowPickupSplit(false); setPickupSplitRows([{ method: 'cod', amount: '' }, { method: 'upi', amount: '' }]); } }}
                   disabled={pickupPayBusy}
                   style={{ width: '100%', marginTop: '0.5rem', padding: '0.6rem', background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontFamily: 'Poppins,sans-serif', fontSize: '0.85rem', fontWeight: 600 }}
                 >✗ Cancel</button>
