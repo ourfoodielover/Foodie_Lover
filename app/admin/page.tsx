@@ -158,6 +158,19 @@ export default function AdminPage() {
   const [clearBusy,   setClearBusy]   = useState(false);
   const [clearConfirm, setClearConfirm] = useState(false);
 
+  // ── Targeted order deletion ──
+  const [delMode,     setDelMode]     = useState<'id'|'date'|'range'>('id');
+  const [delOrderId,  setDelOrderId]  = useState('');
+  const [delDate,     setDelDate]     = useState('');
+  const [delDateFrom, setDelDateFrom] = useState('');
+  const [delDateTo,   setDelDateTo]   = useState('');
+  const [delTimeFrom, setDelTimeFrom] = useState('00:00');
+  const [delTimeTo,   setDelTimeTo]   = useState('23:59');
+  const [delPin,      setDelPin]      = useState('');
+  const [delPreview,  setDelPreview]  = useState<number|null>(null);
+  const [delMsg,      setDelMsg]      = useState('');
+  const [delBusy,     setDelBusy]     = useState(false);
+
   // ── Staff management state ──
   const [staffAccounts, setStaffAccounts] = useState<StaffMember[]>([]);
   const [staffForm,  setStaffForm]  = useState({ name: '', username: '', pin: '' });
@@ -753,6 +766,65 @@ export default function AdminPage() {
       setClearMsg(`❌ ${e instanceof Error ? e.message : 'Network error'}`);
     } finally {
       setClearBusy(false);
+    }
+  }
+
+  // ── Preview count for targeted deletion ─────────────────────────────────
+  async function fetchDelPreview() {
+    setDelPreview(null);
+    if (delMode === 'id') { setDelPreview(delOrderId.trim() ? 1 : 0); return; }
+    try {
+      const params = new URLSearchParams({ mode: delMode });
+      if (delMode === 'date')  { params.set('date', delDate); }
+      if (delMode === 'range') {
+        params.set('dateFrom', delDateFrom);
+        params.set('dateTo',   delDateTo);
+        params.set('timeFrom', delTimeFrom);
+        params.set('timeTo',   delTimeTo);
+      }
+      const r = await fetch(`/api/orders/delete-selective?${params}`);
+      const j = await r.json() as { count?: number; error?: string };
+      setDelPreview(j.count ?? null);
+    } catch { setDelPreview(null); }
+  }
+
+  // ── Execute targeted deletion ─────────────────────────────────────────────
+  async function executeDelSelective() {
+    if (delPin.length < 4) { setDelMsg('❌ Enter Admin PIN (4+ digits)'); return; }
+    if (delMode === 'id' && !delOrderId.trim()) { setDelMsg('❌ Enter an order ID'); return; }
+    if (delMode === 'date' && !delDate) { setDelMsg('❌ Select a date'); return; }
+    if (delMode === 'range' && (!delDateFrom || !delDateTo)) {
+      setDelMsg('❌ Select both From and To dates'); return;
+    }
+    setDelBusy(true);
+    setDelMsg('⏳ Deleting…');
+    try {
+      const body: Record<string, string> = { pin: delPin, mode: delMode };
+      if (delMode === 'id')    body.orderId  = delOrderId.trim();
+      if (delMode === 'date')  body.date     = delDate;
+      if (delMode === 'range') {
+        body.dateFrom = delDateFrom;
+        body.dateTo   = delDateTo;
+        body.timeFrom = delTimeFrom;
+        body.timeTo   = delTimeTo;
+      }
+      const res = await fetch('/api/orders/delete-selective', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const result = await res.json() as { ok?: boolean; deleted?: number; message?: string; error?: string };
+      if (!result.ok) {
+        setDelMsg(`❌ ${result.error ?? 'Failed'}`);
+      } else {
+        setDelMsg(`✅ ${result.message}`);
+        setDelOrderId(''); setDelDate(''); setDelDateFrom(''); setDelDateTo('');
+        setDelPin(''); setDelPreview(null);
+        void refresh();
+      }
+    } catch (e) {
+      setDelMsg(`❌ ${e instanceof Error ? e.message : 'Network error'}`);
+    } finally {
+      setDelBusy(false);
     }
   }
 
@@ -2074,6 +2146,141 @@ export default function AdminPage() {
                 </a>
               ))}
             </div>
+          </div>
+
+          {/* ── Targeted Order Deletion ── */}
+          <div style={{border:'2px solid #fed7aa',borderRadius:12,padding:'1.25rem',background:'#fff7ed',marginBottom:'1.25rem'}}>
+            <div style={{display:'flex',alignItems:'center',gap:'0.6rem',marginBottom:'0.85rem'}}>
+              <span style={{fontSize:'1.3rem'}}>🎯</span>
+              <div>
+                <div style={{fontWeight:800,color:'#c2410c',fontSize:'0.92rem'}}>Delete Specific Orders</div>
+                <div style={{fontSize:'0.72rem',color:'#ea580c',marginTop:'0.08rem'}}>Delete by order ID, by date, or by date+time range (IST). Requires Admin PIN.</div>
+              </div>
+            </div>
+
+            {/* Mode selector */}
+            <div style={{display:'flex',background:'#ffe8cc',borderRadius:10,padding:'3px',marginBottom:'1rem',gap:'2px'}}>
+              {(['id','date','range'] as const).map(m=>(
+                <button key={m} onClick={()=>{setDelMode(m);setDelPreview(null);setDelMsg('');}}
+                  style={{flex:1,padding:'0.45rem 0.25rem',borderRadius:8,border:'none',cursor:'pointer',
+                    fontFamily:'Poppins,sans-serif',fontWeight:700,fontSize:'0.72rem',whiteSpace:'nowrap' as const,
+                    background:delMode===m?'white':'transparent',
+                    color:delMode===m?'#c2410c':'#888',
+                    boxShadow:delMode===m?'0 2px 8px rgba(0,0,0,0.1)':'none'}}>
+                  {m==='id'?'🆔 Order ID':m==='date'?'📅 Single Date':'🕐 Date+Time Range'}
+                </button>
+              ))}
+            </div>
+
+            {/* ── Mode: by ID ── */}
+            {delMode==='id' && (
+              <div style={{marginBottom:'0.85rem'}}>
+                <label style={{fontSize:'0.72rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.25rem'}}>Order ID</label>
+                <input
+                  value={delOrderId}
+                  onChange={e=>{setDelOrderId(e.target.value);setDelMsg('');setDelPreview(null);}}
+                  placeholder="e.g. ord_abc123"
+                  style={{...inp,fontFamily:'monospace',fontSize:'0.85rem'}}
+                />
+                <div style={{fontSize:'0.68rem',color:'#888',marginTop:'0.2rem'}}>Find it in the Orders tab — shown as the order ID on each card.</div>
+              </div>
+            )}
+
+            {/* ── Mode: by date ── */}
+            {delMode==='date' && (
+              <div style={{marginBottom:'0.85rem'}}>
+                <label style={{fontSize:'0.72rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.25rem'}}>Date (IST)</label>
+                <input
+                  type="date"
+                  value={delDate}
+                  onChange={e=>{setDelDate(e.target.value);setDelPreview(null);setDelMsg('');}}
+                  style={{...inp}}
+                />
+                {delDate && (
+                  <button onClick={fetchDelPreview} style={{...btn('#f97316'),marginTop:'0.5rem',fontSize:'0.75rem',padding:'0.35rem 0.9rem'}}>
+                    🔍 Preview count
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* ── Mode: by range ── */}
+            {delMode==='range' && (
+              <div style={{marginBottom:'0.85rem'}}>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'0.6rem',marginBottom:'0.5rem'}}>
+                  <div>
+                    <label style={{fontSize:'0.72rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.25rem'}}>From Date (IST)</label>
+                    <input type="date" value={delDateFrom} onChange={e=>{setDelDateFrom(e.target.value);setDelPreview(null);setDelMsg('');}} style={{...inp}} />
+                  </div>
+                  <div>
+                    <label style={{fontSize:'0.72rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.25rem'}}>To Date (IST)</label>
+                    <input type="date" value={delDateTo} onChange={e=>{setDelDateTo(e.target.value);setDelPreview(null);setDelMsg('');}} style={{...inp}} />
+                  </div>
+                  <div>
+                    <label style={{fontSize:'0.72rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.25rem'}}>From Time (IST 24h)</label>
+                    <input type="time" value={delTimeFrom} onChange={e=>{setDelTimeFrom(e.target.value);setDelPreview(null);}} style={{...inp}} />
+                  </div>
+                  <div>
+                    <label style={{fontSize:'0.72rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.25rem'}}>To Time (IST 24h)</label>
+                    <input type="time" value={delTimeTo} onChange={e=>{setDelTimeTo(e.target.value);setDelPreview(null);}} style={{...inp}} />
+                  </div>
+                </div>
+                {delDateFrom && delDateTo && (
+                  <button onClick={fetchDelPreview} style={{...btn('#f97316'),fontSize:'0.75rem',padding:'0.35rem 0.9rem'}}>
+                    🔍 Preview count
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Preview badge */}
+            {delPreview !== null && (
+              <div style={{
+                background: delPreview===0?'#f0fdf4':'#fff3cd',
+                border:`1px solid ${delPreview===0?'#bbf7d0':'#ffc107'}`,
+                borderRadius:8,padding:'0.5rem 0.85rem',
+                fontSize:'0.78rem',fontWeight:700,
+                color:delPreview===0?'#166534':'#856404',
+                marginBottom:'0.75rem',
+              }}>
+                {delPreview===0
+                  ? '✅ No orders match — nothing will be deleted.'
+                  : `⚠️ ${delPreview} order${delPreview!==1?'s':''} will be permanently deleted.`}
+              </div>
+            )}
+
+            {/* PIN + confirm button */}
+            <div style={{display:'flex',gap:'0.65rem',alignItems:'flex-end',flexWrap:'wrap' as const}}>
+              <div style={{flex:1,minWidth:130}}>
+                <label style={{fontSize:'0.72rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.25rem'}}>Admin PIN</label>
+                <input
+                  type="password" inputMode="numeric"
+                  value={delPin}
+                  onChange={e=>setDelPin(e.target.value.replace(/\D/g,''))}
+                  maxLength={8} placeholder="••••"
+                  style={{...inp,letterSpacing:'0.4em',textAlign:'center' as const}}
+                />
+              </div>
+              <button
+                onClick={executeDelSelective}
+                disabled={delBusy}
+                style={{
+                  ...btn('#c2410c'),padding:'0.65rem 1.1rem',
+                  fontSize:'0.82rem',whiteSpace:'nowrap' as const,
+                  opacity:delBusy?0.6:1,
+                  cursor:delBusy?'not-allowed':'pointer',
+                }}
+              >
+                {delBusy?'⏳ Deleting…':'🗑️ Delete'}
+              </button>
+            </div>
+            {delMsg && (
+              <div style={{
+                fontSize:'0.78rem',
+                color:delMsg.includes('✅')?'#16a34a':delMsg.includes('⏳')?'#555':'#ef4444',
+                marginTop:'0.5rem',fontWeight:600,
+              }}>{delMsg}</div>
+            )}
           </div>
 
           {/* ── Danger Zone: Clear All Orders ── */}
