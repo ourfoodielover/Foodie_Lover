@@ -87,9 +87,16 @@ export default function AdminPage() {
   const [section, setSection] = useState<Section>('overview');
 
   // ── Tabs / filters ──
-  const [salesTab,    setSalesTab]    = useState<'today'|'week'|'month'|'all'>('today');
-  const [orderFilter, setOrderFilter] = useState('all');
-  const [menuFilter,  setMenuFilter]  = useState('All');
+  const [salesTab,        setSalesTab]        = useState<'today'|'week'|'month'|'all'>('today');
+  const [orderFilter,     setOrderFilter]     = useState('all');
+  const [ordersDateFilter,setOrdersDateFilter]= useState<'today'|'yesterday'|'week'|'month'|'all'>('today');
+  const [menuFilter,      setMenuFilter]      = useState('All');
+
+  // ── Historical orders (sales report + orders section) ──
+  // orders     = today only, kept fresh by 3-second polling (live dashboard)
+  // histOrders = scoped to the selected period, fetched on demand
+  const [histOrders,    setHistOrders]    = useState<Order[]>([]);
+  const [histLoading,   setHistLoading]   = useState(false);
 
   // ── Modals ──
   const [selOrder,      setSelOrder]      = useState<Order|null>(null);
@@ -188,11 +195,9 @@ export default function AdminPage() {
   const refresh = useCallback(async () => {
     // ── Orders: fetched from Supabase (NOT localStorage) ──────────────────────
     try {
-      // Fetch ALL of today's orders (active + completed + cancelled) so that
-      // admin analytics (EOD totals, cancel rate, waiter stats, discount log)
-      // have access to the full picture.  We bound by "since midnight today" so
-      // we never pull unbounded history. The server caps at 200 rows.
-      const liveOrders = await getOrders({ since: todayMidnightIST().toISOString(), limit: 200 });
+      // Fetch ALL of today's orders for the live dashboard (active + completed + cancelled).
+      // Bounded to today midnight so polling stays fast. Historical views use histOrders.
+      const liveOrders = await getOrders({ since: todayMidnightIST().toISOString(), limit: 500 });
       setOrders(liveOrders);
 
       // Compute online/pickup/delivery stats from the same live data.
@@ -338,6 +343,44 @@ export default function AdminPage() {
     clearSession('admin');
     router.replace('/admin/login');
   }
+
+  // ── Historical orders fetch — called when sales tab or orders date filter changes ──
+  // Returns `since` ISO string for a given period label.
+  function sinceForPeriod(period: 'today'|'yesterday'|'week'|'month'|'all'): string|undefined {
+    const now = new Date();
+    if (period === 'today')     return todayMidnightIST().toISOString();
+    if (period === 'yesterday') {
+      const d = todayMidnightIST(); d.setDate(d.getDate() - 1); return d.toISOString();
+    }
+    if (period === 'week')  { const d = new Date(now); d.setDate(d.getDate() - 7);  return d.toISOString(); }
+    if (period === 'month') { const d = new Date(now); d.setDate(d.getDate() - 30); return d.toISOString(); }
+    return undefined; // 'all' — no since filter
+  }
+
+  const fetchHistoricalOrders = useCallback(async (period: 'today'|'yesterday'|'week'|'month'|'all') => {
+    setHistLoading(true);
+    try {
+      const since = sinceForPeriod(period);
+      const data = await getOrders({ since, limit: 1000 });
+      setHistOrders(data);
+    } catch (e) {
+      console.error('[Admin] Failed to load historical orders:', e);
+    } finally {
+      setHistLoading(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Trigger historical fetch whenever the sales tab or orders date filter changes
+  useEffect(() => {
+    if (!authChecked) return;
+    void fetchHistoricalOrders(salesTab === 'today' ? 'today' : salesTab as 'week'|'month'|'all');
+  }, [salesTab, authChecked, fetchHistoricalOrders]);
+
+  useEffect(() => {
+    if (!authChecked) return;
+    void fetchHistoricalOrders(ordersDateFilter);
+  }, [ordersDateFilter, authChecked, fetchHistoricalOrders]);
 
   // ─── Today stats (IST — avoids UTC midnight mismatch) ────────────────────
   // todayOrders: all non-cancelled, non-void orders for today
@@ -577,20 +620,8 @@ export default function AdminPage() {
   }
 
   // ─── Sales data ───────────────────────────────────────────────────────────
-  // Filter live Supabase orders by the selected time period (IST-aware)
-  function filterByPeriod(allOrders: Order[], period: typeof salesTab): Order[] {
-    const now = new Date();
-    return allOrders.filter(o => {
-      const ts = new Date(o.timestamp);
-      if (period === 'today') return isToday(o.timestamp);
-      if (period === 'week')  { const s = new Date(now); s.setDate(s.getDate() - 7);  return ts >= s; }
-      if (period === 'month') { const s = new Date(now); s.setDate(s.getDate() - 30); return ts >= s; }
-      return true; // 'all'
-    });
-  }
-  // Exclude cancelled and void orders from Sales Report — they don't represent real revenue.
-  // filterByPeriod scopes to the selected time window; we then strip non-revenue statuses.
-  const periodOrders = filterByPeriod(orders, salesTab).filter(o => !['cancelled','void'].includes(o.status));
+  // histOrders is already server-scoped to the selected period; just strip non-revenue rows.
+  const periodOrders = histOrders.filter(o => !['cancelled','void'].includes(o.status));
   const pTotal  = periodOrders.reduce((s,o)=>s+(o.total||0),0);
   const pGross  = periodOrders.reduce((s,o)=>s+(o.subtotal||o.total||0),0);
   const pDisc   = periodOrders.reduce((s,o)=>s+(o.discount||0),0);
@@ -641,10 +672,10 @@ export default function AdminPage() {
     return Object.entries(map).map(([k,v])=>({label:k,orders:v.o,net:v.n,disc:v.d}));
   })();
 
-  // ─── Fraud data ───────────────────────────────────────────────────────────
-  const discountOrders  = orders.filter(o=>(o.discount||0)>0).sort((a,b)=>new Date(b.timestamp).getTime()-new Date(a.timestamp).getTime());
-  const cancelledOrders = orders.filter(o=>o.status==='cancelled').sort((a,b)=>new Date(b.timestamp).getTime()-new Date(a.timestamp).getTime());
-  const cancelRate      = orders.length>0?Math.round((cancelledOrders.length/orders.length)*100):0;
+  // ─── Fraud data (uses histOrders so period filter applies) ───────────────
+  const discountOrders  = histOrders.filter(o=>(o.discount||0)>0).sort((a,b)=>new Date(b.timestamp).getTime()-new Date(a.timestamp).getTime());
+  const cancelledOrders = histOrders.filter(o=>o.status==='cancelled').sort((a,b)=>new Date(b.timestamp).getTime()-new Date(a.timestamp).getTime());
+  const cancelRate      = histOrders.length>0?Math.round((cancelledOrders.length/histOrders.length)*100):0;
   const highDiscOrders  = discountOrders.filter(o=>(o.discount||0)/((o.subtotal||o.total)||1)>0.3);
   const todayDiscTotal  = orders.filter(o=>isToday(o.timestamp)).reduce((s,o)=>s+(o.discount||0),0);
   const alerts:string[] = [];
@@ -656,7 +687,7 @@ export default function AdminPage() {
   // orders from getOrders() is already newest-first (API uses order('created_at', { ascending: false })).
   // Previously used .slice(-60).reverse() which grabbed the OLDEST 60 then flipped them — now fixed to
   // take the most-recent 60 directly with .slice(0, 60) (no reverse needed).
-  const filteredOrders = (orderFilter==='all' ? orders : orders.filter(o=>o.status===orderFilter)).slice(0, 60);
+  const filteredOrders = (orderFilter==='all' ? histOrders : histOrders.filter(o=>o.status===orderFilter)).slice(0, 200);
   const menuItems      = menuFilter==='All' ? menu : menu.filter(m=>m.category===menuFilter);
 
   // ─── Nav button ───────────────────────────────────────────────────────────
@@ -1120,9 +1151,18 @@ export default function AdminPage() {
         {/* ═══════════ ORDERS ═══════════ */}
         {section==='orders' && (
           <div style={card()}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'1rem',flexWrap:'wrap',gap:'0.5rem'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'0.6rem',flexWrap:'wrap',gap:'0.5rem'}}>
               <h2 style={{fontFamily:"'Playfair Display',serif",fontSize:'1.05rem',fontWeight:700,color:'#1A0800',margin:0}}>🧾 All Orders</h2>
-              <div style={{display:'flex',gap:'0.35rem',flexWrap:'wrap'}}>
+              {/* Date range selector */}
+              <div style={{display:'flex',gap:'0.3rem',flexWrap:'wrap'}}>
+                {([['today','Today'],['yesterday','Yesterday'],['week','Last 7 Days'],['month','Last 30 Days'],['all','All Time']] as const).map(([k,l])=>(
+                  <button key={k} onClick={()=>setOrdersDateFilter(k)} style={{...tabB(ordersDateFilter===k),padding:'0.28rem 0.7rem',fontSize:'0.72rem'}}>
+                    {histLoading && ordersDateFilter===k ? '⏳' : l}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{display:'flex',gap:'0.35rem',flexWrap:'wrap',marginBottom:'1rem'}}>
                 {[
                   {k:'all',            l:'All'},
                   {k:'awaiting_waiter',l:'Awaiting Waiter'},
@@ -1139,8 +1179,8 @@ export default function AdminPage() {
                 ].map(({k,l})=>(
                   <button key={k} onClick={()=>setOrderFilter(k)} style={{...tabB(orderFilter===k),padding:'0.28rem 0.7rem',fontSize:'0.72rem'}}>{l}</button>
                 ))}
-              </div>
             </div>
+            {histLoading && <div style={{color:'#E65C00',fontSize:'0.8rem',marginBottom:'0.5rem'}}>⏳ Loading orders…</div>}
             <div style={{overflowX:'auto'}}>
               <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.81rem'}}>
                 <thead><tr style={{background:'#FFF5EB'}}>
@@ -1150,7 +1190,7 @@ export default function AdminPage() {
                 </tr></thead>
                 <tbody>
                   {!filteredOrders.length
-                    ? <tr><td colSpan={12} style={{textAlign:'center',color:'#999',padding:'2rem'}}>No orders</td></tr>
+                    ? <tr><td colSpan={12} style={{textAlign:'center',color:'#999',padding:'2rem'}}>{histLoading ? '⏳ Loading…' : 'No orders found for this period'}</td></tr>
                     : filteredOrders.map(order=>{
                         const t      = fmtTime(order.timestamp);
                         // Each order type has its own status flow — must NOT share delivery/pickup flows.

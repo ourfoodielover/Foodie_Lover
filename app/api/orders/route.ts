@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
     // Without a LIMIT this becomes a full table scan in production.
     // Portals (waiter, kitchen, delivery) pass limit=100 for active orders only.
     // Manager analytics use a higher limit or the /api/analytics route instead.
-    const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '150'), 200);
+    const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '150'), 1000);
 
     // ── "active" flag: exclude terminal statuses ───────────────────────────────
     // Portals that only care about in-flight orders pass active=1 to avoid
