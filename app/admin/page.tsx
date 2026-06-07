@@ -83,7 +83,7 @@ export default function AdminPage() {
   const [authChecked, setAuthChecked]   = useState(false);
 
   // ── Navigation ──
-  type Section = 'overview'|'orders'|'sales'|'menu'|'tables'|'fraud'|'staff'|'email';
+  type Section = 'overview'|'orders'|'sales'|'menu'|'offers'|'tables'|'fraud'|'staff'|'email';
   const [section, setSection] = useState<Section>('overview');
 
   // ── Tabs / filters ──
@@ -210,6 +210,22 @@ export default function AdminPage() {
   const [secMsg,         setSecMsg]         = useState('');
   const [secSetup,       setSecSetup]       = useState<{ question: string; setupAt: string } | null>(null);
 
+  // ── Offer rules state ──
+  interface OfferRule {
+    id: string;
+    name: string;
+    type: 'percent' | 'flat';
+    value: number;
+    minOrder: number;
+    maxDiscount: number;
+    applyTo: 'all' | 'dine-in' | 'pickup' | 'delivery';
+    active: boolean;
+  }
+  const [offerRules,     setOfferRules]     = useState<OfferRule[]>([]);
+  const [offerForm,      setOfferForm]      = useState<Omit<OfferRule,'id'>>({ name:'', type:'percent', value:10, minOrder:0, maxDiscount:0, applyTo:'all', active:true });
+  const [offerMsg,       setOfferMsg]       = useState('');
+  const [offerBusy,      setOfferBusy]      = useState(false);
+
   // ── Data refresh ──
   const refresh = useCallback(async () => {
     // ── Orders: fetched from Supabase (NOT localStorage) ──────────────────────
@@ -330,6 +346,13 @@ export default function AdminPage() {
     if (!s) { router.replace('/admin/login'); return; }
     setAuthSession(s);
     setAuthChecked(true);
+    // Load offer rules once on mount
+    fetch('/api/offers')
+      .then(r => r.json())
+      .then((data: OfferRule[] | { error: string }) => {
+        if (Array.isArray(data)) setOfferRules(data);
+      })
+      .catch(e => console.error('[admin] failed to load offers:', e));
   }, [router]);
 
   useEffect(() => {
@@ -1012,6 +1035,7 @@ export default function AdminPage() {
         <NavBtn id="orders"   label="🧾 Orders"           />
         <NavBtn id="sales"    label="📊 Sales Report"     />
         <NavBtn id="menu"     label="🍽️ Menu Management" />
+        <NavBtn id="offers"   label="🎁 Offers"           />
         <NavBtn id="tables"   label="🪑 Tables"           />
         <NavBtn id="fraud"    label="🔍 Transparency"     />
         <NavBtn id="staff"    label="👥 Staff"            />
@@ -1639,6 +1663,117 @@ export default function AdminPage() {
                 ))}
               </div>
             )}
+          </div>
+        </>}
+
+        {/* ═══════════ OFFERS / DISCOUNT RULES ═══════════ */}
+        {section==='offers' && <>
+          {/* Create new offer */}
+          <div style={card('#E65C00')}>
+            <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:'1rem',fontWeight:700,marginBottom:'1rem',color:'#1A0800'}}>🎁 Create New Offer</h3>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'0.75rem',marginBottom:'0.75rem'}}>
+              <div style={{gridColumn:'1/-1'}}>
+                <label style={{fontSize:'0.75rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.25rem'}}>Offer Name</label>
+                <input value={offerForm.name} onChange={e=>setOfferForm(f=>({...f,name:e.target.value}))} placeholder="e.g. 10% off above ₹2000" style={{...inp}} />
+              </div>
+              <div>
+                <label style={{fontSize:'0.75rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.25rem'}}>Type</label>
+                <select value={offerForm.type} onChange={e=>setOfferForm(f=>({...f,type:e.target.value as 'percent'|'flat'}))} style={{...inp}}>
+                  <option value="percent">Percent (%)</option>
+                  <option value="flat">Flat (₹)</option>
+                </select>
+              </div>
+              <div>
+                <label style={{fontSize:'0.75rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.25rem'}}>Value ({offerForm.type==='percent'?'%':'₹'})</label>
+                <input type="number" value={offerForm.value} onChange={e=>setOfferForm(f=>({...f,value:parseFloat(e.target.value)||0}))} placeholder="10" min="0" style={{...inp}} />
+              </div>
+              <div>
+                <label style={{fontSize:'0.75rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.25rem'}}>Min Order ₹</label>
+                <input type="number" value={offerForm.minOrder} onChange={e=>setOfferForm(f=>({...f,minOrder:parseFloat(e.target.value)||0}))} placeholder="0 = always" min="0" style={{...inp}} />
+              </div>
+              <div>
+                <label style={{fontSize:'0.75rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.25rem'}}>Max Discount ₹ (0=no cap)</label>
+                <input type="number" value={offerForm.maxDiscount} onChange={e=>setOfferForm(f=>({...f,maxDiscount:parseFloat(e.target.value)||0}))} placeholder="0 = no cap" min="0" style={{...inp}} />
+              </div>
+              <div>
+                <label style={{fontSize:'0.75rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.25rem'}}>Apply To</label>
+                <select value={offerForm.applyTo} onChange={e=>setOfferForm(f=>({...f,applyTo:e.target.value as OfferRule['applyTo']}))} style={{...inp}}>
+                  <option value="all">All Orders</option>
+                  <option value="dine-in">Dine-in</option>
+                  <option value="pickup">Pickup</option>
+                  <option value="delivery">Delivery</option>
+                </select>
+              </div>
+              <div style={{display:'flex',alignItems:'center',gap:'0.5rem'}}>
+                <input type="checkbox" id="offerActive" checked={offerForm.active} onChange={e=>setOfferForm(f=>({...f,active:e.target.checked}))} style={{width:16,height:16}} />
+                <label htmlFor="offerActive" style={{fontSize:'0.82rem',fontWeight:600,color:'#555',cursor:'pointer'}}>Active</label>
+              </div>
+            </div>
+            {offerMsg && <div style={{fontSize:'0.8rem',marginBottom:'0.5rem',color:offerMsg.includes('✅')?'#16a34a':'#ef4444'}}>{offerMsg}</div>}
+            <button
+              disabled={offerBusy||!offerForm.name.trim()}
+              onClick={async () => {
+                if (!offerForm.name.trim()) { setOfferMsg('❌ Name is required'); return; }
+                setOfferBusy(true); setOfferMsg('');
+                try {
+                  const newRule: OfferRule = { ...offerForm, id: 'off_'+Date.now().toString(36) };
+                  const res  = await fetch('/api/offers', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ rule: newRule }) });
+                  const data = await res.json() as OfferRule[] | { error: string };
+                  if (Array.isArray(data)) { setOfferRules(data); setOfferMsg('✅ Offer created!'); setOfferForm({ name:'', type:'percent', value:10, minOrder:0, maxDiscount:0, applyTo:'all', active:true }); }
+                  else setOfferMsg(`❌ ${(data as {error:string}).error}`);
+                } catch(e) { setOfferMsg('❌ ' + (e instanceof Error ? e.message : String(e))); }
+                finally { setOfferBusy(false); }
+              }}
+              style={{...btn(), opacity:offerBusy?0.7:1}}
+            >{offerBusy?'⏳ Saving…':'✅ Create Offer'}</button>
+          </div>
+
+          {/* Existing offers list */}
+          <div style={card('#8b5cf6')}>
+            <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:'0.98rem',fontWeight:700,marginBottom:'0.75rem',color:'#1A0800'}}>📋 Existing Offers</h3>
+            {!offerRules.length
+              ? <div style={{color:'#999',fontSize:'0.85rem'}}>No offers created yet</div>
+              : <div style={{display:'flex',flexDirection:'column',gap:'0.65rem'}}>
+                  {offerRules.map(rule=>(
+                    <div key={rule.id} style={{background:'white',border:'1px solid #e5e7eb',borderRadius:10,padding:'0.85rem',display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:'0.75rem',opacity:rule.active?1:0.6}}>
+                      <div style={{flex:1}}>
+                        <div style={{fontWeight:800,fontSize:'0.88rem',color:'#1A0800',marginBottom:'0.2rem'}}>{rule.name}</div>
+                        <div style={{fontSize:'0.72rem',color:'#64748b',display:'flex',flexWrap:'wrap',gap:'0.5rem'}}>
+                          <span style={{background:'#f0fdf4',color:'#16a34a',borderRadius:6,padding:'0.1rem 0.4rem',fontWeight:700}}>
+                            {rule.type==='percent'?`${rule.value}% off`:`₹${rule.value} off`}
+                          </span>
+                          {rule.minOrder>0 && <span style={{background:'#eff6ff',color:'#2563eb',borderRadius:6,padding:'0.1rem 0.4rem',fontWeight:700}}>Min ₹{rule.minOrder}</span>}
+                          {rule.maxDiscount>0 && <span style={{background:'#fef3c7',color:'#d97706',borderRadius:6,padding:'0.1rem 0.4rem',fontWeight:700}}>Cap ₹{rule.maxDiscount}</span>}
+                          <span style={{background:'#f5f3ff',color:'#7c3aed',borderRadius:6,padding:'0.1rem 0.4rem',fontWeight:700}}>{rule.applyTo}</span>
+                        </div>
+                      </div>
+                      <div style={{display:'flex',flexDirection:'column',gap:'0.35rem',alignItems:'flex-end',flexShrink:0}}>
+                        <button
+                          onClick={async()=>{
+                            try {
+                              const res  = await fetch('/api/offers', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ id: rule.id, updates: { active: !rule.active } }) });
+                              const data = await res.json() as OfferRule[];
+                              if (Array.isArray(data)) setOfferRules(data);
+                            } catch(e) { alert(String(e)); }
+                          }}
+                          style={{...btn(rule.active?'#e5e7eb':'#16a34a',rule.active?'#555':'white'),padding:'0.25rem 0.7rem',fontSize:'0.72rem'}}
+                        >{rule.active?'⏸ Disable':'✅ Enable'}</button>
+                        <button
+                          onClick={async()=>{
+                            if (!confirm(`Delete offer "${rule.name}"?`)) return;
+                            try {
+                              const res  = await fetch('/api/offers', { method:'DELETE', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ id: rule.id }) });
+                              const data = await res.json() as OfferRule[];
+                              if (Array.isArray(data)) setOfferRules(data);
+                            } catch(e) { alert(String(e)); }
+                          }}
+                          style={{...btn('#ef4444'),padding:'0.25rem 0.7rem',fontSize:'0.72rem'}}
+                        >🗑 Delete</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+            }
           </div>
         </>}
 

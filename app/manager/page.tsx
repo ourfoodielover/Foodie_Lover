@@ -15,6 +15,17 @@ import {
   getActiveIssues, resolveIssue, OrderIssue,
   getMenu as getMenuApi, saveMenuItem as saveMenuItemApi, deleteMenuItem as deleteMenuItemApi,
 } from '@/lib/api';
+
+interface OfferRule {
+  id: string;
+  name: string;
+  type: 'percent' | 'flat';
+  value: number;
+  minOrder: number;
+  maxDiscount: number;
+  applyTo: 'all' | 'dine-in' | 'pickup' | 'delivery';
+  active: boolean;
+}
 // lib/storage only used for: (none — all data is now Supabase-backed)
 // Keeping this comment to clarify the migration is complete.
 import { useRealtime } from '@/lib/realtime-client';
@@ -106,6 +117,20 @@ export default function ManagerPage() {
   // Errors
   const [fetchError, setFetchError]           = useState('');
 
+  // Offer rules (loaded from /api/offers)
+  const [offerRules, setOfferRules]           = useState<OfferRule[]>([]);
+
+  // Pickup payment modal
+  const [pickupPayOrder, setPickupPayOrder]   = useState<Order | null>(null);
+  const [pickupPayMethod, setPickupPayMethod] = useState('cod');
+  const [pickupDiscAmt, setPickupDiscAmt]     = useState('');
+  const [pickupDiscNote, setPickupDiscNote]   = useState('');
+  const [pickupDiscPin, setPickupDiscPin]     = useState('');
+  const [pickupPayMsg, setPickupPayMsg]       = useState('');
+  const [pickupPayBusy, setPickupPayBusy]     = useState(false);
+  const [pickupDiscApplied, setPickupDiscApplied] = useState<{ amount: number; reason: string } | null>(null);
+  const [showPickupDiscForm, setShowPickupDiscForm] = useState(false);
+
   // Section navigation
   type ManagerSection = 'billing' | 'menu';
   const [managerSection, setManagerSection]   = useState<ManagerSection>('billing');
@@ -126,6 +151,13 @@ export default function ManagerPage() {
     if (!s) { router.replace('/manager/login'); return; }
     setSession(s);
     setAuthChecked(true);
+    // Load offer rules once on mount
+    fetch('/api/offers')
+      .then(r => r.json())
+      .then((data: OfferRule[] | { error: string }) => {
+        if (Array.isArray(data)) setOfferRules(data);
+      })
+      .catch(e => console.error('[manager] failed to load offers:', e));
   }, [router]);
 
   // ── Data refresh ──────────────────────────────────────────────────────────
@@ -292,15 +324,76 @@ export default function ManagerPage() {
     }
   }
 
+  // ── Offer rule helpers ────────────────────────────────────────────────────
+  function getApplicableOffers(total: number, orderType: 'all' | 'dine-in' | 'pickup' | 'delivery'): Array<{ offer: OfferRule; discountAmount: number }> {
+    return offerRules
+      .filter(o => o.active && total >= o.minOrder && (o.applyTo === 'all' || o.applyTo === orderType))
+      .map(offer => {
+        let discountAmount = 0;
+        if (offer.type === 'percent') {
+          discountAmount = Math.round((total * offer.value) / 100);
+          if (offer.maxDiscount > 0) discountAmount = Math.min(discountAmount, offer.maxDiscount);
+        } else {
+          discountAmount = offer.value;
+        }
+        discountAmount = Math.min(discountAmount, total);
+        return { offer, discountAmount };
+      });
+  }
+
   // ── Complete a pickup order at the counter ────────────────────────────────
-  // Pickup orders land at 'served' when kitchen is done and waiter notifies the
-  // customer. The counter/manager collects payment here and marks it 'completed',
-  // which fires the PaymentCompleted event — lighting up the final tracker step.
-  async function completePickupOrder(orderId: string) {
+  // Opens the pickup payment modal instead of immediately completing.
+  function completePickupOrder(order: Order) {
+    setPickupPayOrder(order);
+    setPickupPayMethod('cod');
+    setPickupDiscAmt('');
+    setPickupDiscNote('');
+    setPickupDiscPin('');
+    setPickupPayMsg('');
+    setPickupDiscApplied(null);
+    setShowPickupDiscForm(false);
+  }
+
+  // ── Actually complete the pickup order (called from modal) ────────────────
+  async function doCompletePickup() {
+    if (!pickupPayOrder) return;
+    setPickupPayBusy(true);
+    setPickupPayMsg('');
     try {
-      await updateOrderStatus(orderId, 'completed', session?.name || 'Counter');
+      // If manual discount is being applied, verify manager PIN
+      if (showPickupDiscForm && pickupDiscAmt && parseFloat(pickupDiscAmt) > 0 && !pickupDiscApplied) {
+        const verifyRes = await fetch('/api/auth/verify-pin', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ role: 'manager', pin: pickupDiscPin }),
+        });
+        const verifyResult = await verifyRes.json() as { ok: boolean; error?: string };
+        if (!verifyResult.ok) {
+          setPickupPayMsg(`❌ ${verifyResult.error ?? 'Wrong manager PIN'}`);
+          setPickupPayBusy(false);
+          return;
+        }
+        const amt = parseFloat(pickupDiscAmt);
+        if (!isNaN(amt) && amt > 0) {
+          setPickupDiscApplied({ amount: Math.min(amt, pickupPayOrder.total), reason: pickupDiscNote || 'Manager discount' });
+        }
+      }
+      const discAmt    = pickupDiscApplied?.amount ?? 0;
+      const discReason = pickupDiscApplied?.reason ?? '';
+      await updateOrderStatus(
+        pickupPayOrder.id, 'completed', session?.name || 'Counter',
+        { paymentMethod: pickupPayMethod, discount: discAmt, discountReason: discReason },
+      );
+      setPickupPayOrder(null);
+      setPickupPayMsg('');
       await refresh();
-    } catch (e) { console.error('[completePickupOrder]', e); }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Unknown error';
+      console.error('[doCompletePickup]', e);
+      setPickupPayMsg(`❌ Could not complete order: ${msg}`);
+    } finally {
+      setPickupPayBusy(false);
+    }
   }
 
   // ── Split bill actions (all Supabase-backed) ─────────────────────────────
@@ -825,10 +918,10 @@ export default function ManagerPage() {
                       {/* 'served' = customer at counter — counter collects payment and marks completed */}
                       {o.status === 'served' && (
                         <button
-                          onClick={() => completePickupOrder(o.id)}
+                          onClick={() => completePickupOrder(o)}
                           style={{ background: '#16a34a', color: 'white', border: 'none', borderRadius: 6, padding: '0.2rem 0.5rem', fontWeight: 700, cursor: 'pointer', fontFamily: 'Poppins,sans-serif', fontSize: '0.68rem', whiteSpace: 'nowrap' }}
                         >
-                          ✅ Collected & Paid
+                          💳 Collect Payment
                         </button>
                       )}
                     </div>
@@ -1334,6 +1427,26 @@ export default function ManagerPage() {
               {/* Discount section */}
               {selTab.status !== 'closed' && (
                 <div style={{ marginBottom: '1rem' }}>
+                  {/* Available Offers */}
+                  {getApplicableOffers(tabBillTotal, 'dine-in').length > 0 && (
+                    <div style={{ marginBottom: '0.65rem', padding: '0.75rem', background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 10 }}>
+                      <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#16a34a', marginBottom: '0.4rem' }}>🎁 Available Offers</div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                        {getApplicableOffers(tabBillTotal, 'dine-in').map(({ offer, discountAmount }) => (
+                          <div key={offer.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'white', borderRadius: 8, padding: '0.35rem 0.6rem', border: '1px solid #bbf7d0' }}>
+                            <div>
+                              <div style={{ fontWeight: 700, fontSize: '0.77rem', color: '#1A0800' }}>{offer.name}</div>
+                              <div style={{ fontSize: '0.68rem', color: '#64748b' }}>Saves ₹{discountAmount}</div>
+                            </div>
+                            <button
+                              onClick={() => { setTabDiscAmt(String(discountAmount)); setTabDiscNote(offer.name); setShowDiscForm(true); }}
+                              style={{ ...btn('#16a34a'), padding: '0.25rem 0.65rem', fontSize: '0.7rem' }}
+                            >⚡ Apply</button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <button
                     onClick={() => setShowDiscForm(!showDiscForm)}
                     style={{ ...btn('#f5f0e8', '#E65C00'), fontSize: '0.78rem', width: '100%', border: '1px solid #F9A826' }}
@@ -1477,6 +1590,179 @@ export default function ManagerPage() {
           </div>
         </div>
       )}
+
+      {/* ══════════════════ PICKUP PAYMENT MODAL ══════════════════ */}
+      {pickupPayOrder && (() => {
+        const o = pickupPayOrder;
+        const discAmt = pickupDiscApplied?.amount ?? 0;
+        const finalTotal = Math.max(0, o.total - discAmt);
+        const applicable = getApplicableOffers(o.total, 'pickup');
+        return (
+          <div
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}
+            onClick={e => { if (e.target === e.currentTarget && !pickupPayBusy) setPickupPayOrder(null); }}
+          >
+            <div style={{ background: 'white', borderRadius: 20, width: '100%', maxWidth: 'min(95vw,440px)', maxHeight: '92dvh', overflow: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.35)', fontFamily: 'Poppins,sans-serif' }}>
+              {/* Header */}
+              <div style={{ background: 'linear-gradient(135deg,#16a34a,#15803d)', color: 'white', padding: '1.1rem 1.4rem', borderRadius: '20px 20px 0 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div style={{ fontWeight: 900, fontSize: '1.05rem' }}>🏪 Pickup Order #{o.orderNum || o.id.slice(-4)}</div>
+                  <div style={{ fontSize: '0.82rem', opacity: 0.9 }}>₹{o.total} · {o.customerName}</div>
+                </div>
+                <button onClick={() => { if (!pickupPayBusy) setPickupPayOrder(null); }} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', color: 'white', fontSize: '1.4rem', cursor: 'pointer', borderRadius: 8, lineHeight: 1, padding: '0.15rem 0.4rem' }}>×</button>
+              </div>
+              <div style={{ padding: '1.2rem 1.4rem' }}>
+
+                {/* Items list */}
+                <div style={{ marginBottom: '0.85rem' }}>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#6B5246', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.4rem' }}>Order Items</div>
+                  {(o.items || []).map((item, i) => (
+                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.3rem 0', borderBottom: '1px solid #f3f4f6', fontSize: '0.82rem' }}>
+                      <span>{item.name}{item.variant ? ` (${item.variant})` : ''} × {item.qty || 1}</span>
+                      <span style={{ fontWeight: 700 }}>₹{(item.price || 0) * (item.qty || 1)}</span>
+                    </div>
+                  ))}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.4rem', fontWeight: 700, fontSize: '0.85rem' }}>
+                    <span>Subtotal</span>
+                    <span>₹{o.total}</span>
+                  </div>
+                </div>
+
+                {/* Available offers */}
+                {applicable.length > 0 && (
+                  <div style={{ marginBottom: '0.85rem', padding: '0.75rem', background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 10 }}>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#16a34a', marginBottom: '0.4rem' }}>🎁 Available Offers</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                      {applicable.map(({ offer, discountAmount }) => (
+                        <div key={offer.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'white', borderRadius: 8, padding: '0.35rem 0.6rem', border: '1px solid #bbf7d0' }}>
+                          <div>
+                            <div style={{ fontWeight: 700, fontSize: '0.77rem', color: '#1A0800' }}>{offer.name}</div>
+                            <div style={{ fontSize: '0.68rem', color: '#64748b' }}>Saves ₹{discountAmount}</div>
+                          </div>
+                          <button
+                            onClick={() => setPickupDiscApplied({ amount: discountAmount, reason: offer.name })}
+                            style={{ ...btn('#16a34a'), padding: '0.25rem 0.65rem', fontSize: '0.7rem' }}
+                          >⚡ Apply</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Applied offer badge */}
+                {pickupDiscApplied && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#dcfce7', border: '1px solid #86efac', borderRadius: 10, padding: '0.55rem 0.85rem', marginBottom: '0.75rem' }}>
+                    <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#16a34a' }}>✅ Offer applied: {pickupDiscApplied.reason} — −₹{pickupDiscApplied.amount}</span>
+                    <button onClick={() => setPickupDiscApplied(null)} style={{ background: 'none', border: 'none', color: '#16a34a', cursor: 'pointer', fontWeight: 900, fontSize: '1rem', lineHeight: 1 }}>×</button>
+                  </div>
+                )}
+
+                {/* Manual discount toggle */}
+                <div style={{ marginBottom: '0.85rem' }}>
+                  <button
+                    onClick={() => setShowPickupDiscForm(!showPickupDiscForm)}
+                    style={{ ...btn('#f5f0e8', '#E65C00'), fontSize: '0.78rem', width: '100%', border: '1px solid #F9A826' }}
+                  >
+                    🏷️ {showPickupDiscForm ? 'Hide' : 'Manual'} Discount
+                  </button>
+                  {showPickupDiscForm && (
+                    <div style={{ marginTop: '0.65rem', padding: '0.85rem', background: '#fffbeb', borderRadius: 10, border: '1px solid #fde68a' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                        <div>
+                          <label style={{ fontSize: '0.72rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.25rem' }}>Amount (₹)</label>
+                          <input type="number" value={pickupDiscAmt} onChange={e => setPickupDiscAmt(e.target.value)} placeholder="e.g. 50" style={{ ...inp, fontSize: '0.82rem' }} />
+                        </div>
+                        <div>
+                          <label style={{ fontSize: '0.72rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.25rem' }}>Reason</label>
+                          <input value={pickupDiscNote} onChange={e => setPickupDiscNote(e.target.value)} placeholder="e.g. Loyalty" style={{ ...inp, fontSize: '0.82rem' }} />
+                        </div>
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '0.72rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.25rem' }}>Manager PIN</label>
+                        <input type="password" value={pickupDiscPin} onChange={e => setPickupDiscPin(e.target.value)} placeholder="••••" maxLength={6}
+                          style={{ ...inp, letterSpacing: '0.4em', textAlign: 'center', fontSize: '0.82rem' }} />
+                      </div>
+                      <button
+                        onClick={async () => {
+                          const amt = parseFloat(pickupDiscAmt);
+                          if (isNaN(amt) || amt <= 0) { setPickupPayMsg('❌ Enter a valid amount'); return; }
+                          setPickupPayMsg('⏳ Verifying…');
+                          try {
+                            const res = await fetch('/api/auth/verify-pin', {
+                              method: 'POST', headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ role: 'manager', pin: pickupDiscPin }),
+                            });
+                            const result = await res.json() as { ok: boolean; error?: string };
+                            if (!result.ok) { setPickupPayMsg(`❌ ${result.error ?? 'Wrong manager PIN'}`); return; }
+                            setPickupDiscApplied({ amount: Math.min(amt, o.total), reason: pickupDiscNote || 'Manager discount' });
+                            setPickupPayMsg('');
+                            setShowPickupDiscForm(false);
+                          } catch { setPickupPayMsg('❌ Could not verify PIN. Try again.'); }
+                        }}
+                        style={{ ...btn('#f59e0b', '#1A0800'), width: '100%', marginTop: '0.5rem', fontSize: '0.82rem' }}
+                      >Apply Discount</button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Payment method */}
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.4rem' }}>Payment Method</label>
+                  <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                    {[
+                      { k: 'cod',     l: '💵 Cash'       },
+                      { k: 'gpay',    l: '📱 GPay'        },
+                      { k: 'phonepe', l: '📱 PhonePe'     },
+                      { k: 'card',    l: '💳 Card'        },
+                      { k: 'upi',     l: '📲 UPI'         },
+                    ].map(p => (
+                      <button
+                        key={p.k}
+                        onClick={() => setPickupPayMethod(p.k)}
+                        style={{
+                          padding: '0.35rem 0.75rem', borderRadius: 8,
+                          border: `2px solid ${pickupPayMethod === p.k ? '#16a34a' : '#e5e7eb'}`,
+                          background: pickupPayMethod === p.k ? '#f0fdf4' : 'white',
+                          color: pickupPayMethod === p.k ? '#16a34a' : '#666',
+                          fontWeight: 700, cursor: 'pointer', fontSize: '0.78rem',
+                          fontFamily: 'Poppins,sans-serif',
+                        }}
+                      >{p.l}</button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Final total */}
+                <div style={{ background: '#f5f0e8', borderRadius: 10, padding: '0.75rem 1rem', marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontWeight: 700, fontSize: '0.9rem', color: '#1A0800' }}>Final Amount</span>
+                  <span style={{ fontWeight: 900, fontSize: '1.2rem', color: '#E65C00' }}>₹{finalTotal}</span>
+                </div>
+
+                {/* Messages */}
+                {pickupPayMsg && (
+                  <div style={{ marginBottom: '0.75rem', fontSize: '0.82rem', fontWeight: 600, color: pickupPayMsg.includes('✅') ? '#16a34a' : '#dc2626', background: pickupPayMsg.includes('✅') ? '#f0fdf4' : '#fef2f2', borderRadius: 8, padding: '0.5rem 0.75rem' }}>
+                    {pickupPayMsg}
+                  </div>
+                )}
+
+                {/* Confirm button */}
+                <button
+                  onClick={() => void doCompletePickup()}
+                  disabled={pickupPayBusy}
+                  style={{ ...btn('#16a34a'), width: '100%', padding: '0.85rem', fontSize: '0.95rem', borderRadius: 12, opacity: pickupPayBusy ? 0.7 : 1 }}
+                >
+                  {pickupPayBusy ? '⏳ Processing…' : `✅ Confirm ₹${finalTotal} Payment`}
+                </button>
+                <button
+                  onClick={() => { if (!pickupPayBusy) setPickupPayOrder(null); }}
+                  disabled={pickupPayBusy}
+                  style={{ width: '100%', marginTop: '0.5rem', padding: '0.6rem', background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontFamily: 'Poppins,sans-serif', fontSize: '0.85rem', fontWeight: 600 }}
+                >✗ Cancel</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Pre-close Email Modal ─────────────────────────────────────────────── */}
       {/* Shown when manager clicks "Collect & Close Tab" — intercepts to offer   */}

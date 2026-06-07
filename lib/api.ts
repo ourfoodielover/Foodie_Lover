@@ -290,7 +290,7 @@ export async function updateOrderStatus(
   id:     string,
   status: string,
   by:     string,
-  opts?:  { note?: string; deliveryPerson?: string; cancelReason?: string },
+  opts?:  { note?: string; deliveryPerson?: string; cancelReason?: string; paymentMethod?: string; discount?: number; discountReason?: string },
 ): Promise<Order> {
   return apiFetch<Order>(`/api/orders/${id}`, {
     method: 'PATCH',
