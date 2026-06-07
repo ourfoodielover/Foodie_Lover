@@ -9,10 +9,11 @@ import { todayMidnightIST, isToday, clockIST, fmtTime } from '@/lib/date';
 import {
   getTabs, getOrders, closeTab, applyTabDiscount,
   updateOrderStatus,
-  CustomerTab, Order,
+  CustomerTab, Order, MenuItem,
   sendEmailReceipt,
   getSplitBillForTabApi, createSplitBillApi, markSplitEntryPaidApi, SplitBillData,
   getActiveIssues, resolveIssue, OrderIssue,
+  getMenu as getMenuApi, saveMenuItem as saveMenuItemApi, deleteMenuItem as deleteMenuItemApi,
 } from '@/lib/api';
 // lib/storage only used for: (none — all data is now Supabase-backed)
 // Keeping this comment to clarify the migration is complete.
@@ -36,6 +37,17 @@ const STATUS_LABEL: Record<string, string> = {
   re_serve_required: '🚨 Re-Serve Required',
   cancelled: 'Cancelled', void: 'Void',
 };
+
+const CATEGORIES = [
+  'Veg Starters','Non Veg Starters',
+  'Veg Biryani','Non Veg Biryani',
+  'Main Course Veg','Main Course Non Veg',
+  'Tandoori Specials','Rice Items',
+  'Indian Breads','Egg Specials',
+  'Pot Specials','Arabic Mandi',
+];
+const BADGE_LABEL: Record<string,string> = { bestseller:'⭐ Bestseller', popular:'🔥 Popular', chef:"👨‍🍳 Chef's Special", famous:'🏆 Famous', new:'✨ New' };
+const emptyItem = (): Partial<MenuItem> => ({ category: CATEGORIES[0], name: '', desc: '', price: 0, img: '', badge: '', available: true, variants: [] });
 
 export default function ManagerPage() {
   const router = useRouter();
@@ -89,6 +101,20 @@ export default function ManagerPage() {
   // Errors
   const [fetchError, setFetchError]           = useState('');
 
+  // Section navigation
+  type ManagerSection = 'billing' | 'menu';
+  const [managerSection, setManagerSection]   = useState<ManagerSection>('billing');
+
+  // Menu management
+  const [menu,           setMenu]             = useState<MenuItem[]>([]);
+  const [menuFilter,     setMenuFilter]       = useState('All');
+  const [menuModal,      setMenuModal]        = useState<{open:boolean;item:Partial<MenuItem>;isEdit:boolean}>({open:false,item:emptyItem(),isEdit:false});
+  const [modalVariants,  setModalVariants]    = useState<{name:string;price:string}[]>([{name:'',price:''}]);
+  const [imgUploading,   setImgUploading]     = useState(false);
+  const [seedingMenu,    setSeedingMenu]      = useState(false);
+  const [seedMsg,        setSeedMsg]          = useState('');
+  const [csvImportMsg,   setCsvImportMsg]     = useState('');
+
   // ── Auth ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     const s = getSession('manager');
@@ -104,13 +130,15 @@ export default function ManagerPage() {
       // Fetch ALL of today's orders (active + completed + cancelled) so the
       // EOD report has access to completed-order revenue and void counts.
       // Bounded by midnight-today to avoid loading unbounded history.
-      const [allTabs, allOrders, issues] = await Promise.all([
+      const [allTabs, allOrders, issues, menuItems] = await Promise.all([
         getTabs(),
         getOrders({ since: todayMidnightIST().toISOString(), limit: 200 }),
         getActiveIssues(),
+        getMenuApi(),
       ]);
       setTabs(allTabs);
       setOrders(allOrders);
+      setMenu(menuItems as MenuItem[]);
       // Admin PIN is NOT loaded into client state — verified server-side only.
       // Only escalated issues go to manager (open ones are waiter/delivery responsibility)
       setEscalatedIssues(issues.filter(i => i.escalated || i.status === 'escalated'));
@@ -381,11 +409,123 @@ export default function ManagerPage() {
   const revenueDelivery = todayDelivery.filter(o => o.status === 'completed').reduce((s, o) => s + (o.total || 0), 0);
   const hasNonDineIn    = activePickup.length > 0 || activeDelivery.length > 0 || todayPickup.length > 0 || todayDelivery.length > 0;
 
+  // ── Menu CRUD ─────────────────────────────────────────────────────────────
+  function addVariantRow() { setModalVariants(v => [...v, {name:'',price:''}]); }
+  function removeVariantRow(idx: number) { setModalVariants(v => v.filter((_,i)=>i!==idx)); }
+  function updateVariantRow(idx: number, field: 'name'|'price', val: string) {
+    setModalVariants(v => v.map((r,i)=>i===idx?{...r,[field]:val}:r));
+  }
+
+  async function saveItem() {
+    const it = menuModal.item;
+    if (!it.name?.trim()) { alert('Item name required'); return; }
+    const filled = modalVariants.filter(v=>v.name.trim()||v.price.trim());
+    if (!filled.length) { alert('Add at least one pricing variant'); return; }
+    for (const v of filled) {
+      if (!v.name.trim()) { alert('Each variant needs a name (e.g. Half, Full, Regular)'); return; }
+      const p = parseFloat(v.price);
+      if (isNaN(p)||p<=0) { alert(`Invalid price for variant "${v.name}"`); return; }
+    }
+    const variants = filled.map(v=>({ name:v.name.trim(), price:parseFloat(v.price) }));
+    try {
+      await saveMenuItemApi({
+        id:        menuModal.isEdit ? it.id : undefined,
+        name:      it.name     || '',
+        category:  it.category || CATEGORIES[0],
+        price:     variants[0].price,
+        variants,
+        desc:      it.desc     || '',
+        img:       it.img      || '',
+        badge:     it.badge    || '',
+        available: it.available !== false,
+      });
+      setMenuModal({open:false,item:emptyItem(),isEdit:false});
+      setModalVariants([{name:'',price:''}]);
+      void refresh();
+    } catch (e) { alert('Failed to save: ' + (e instanceof Error ? e.message : String(e))); }
+  }
+
+  async function uploadMenuImage(file: File) {
+    if (file.size > 5*1024*1024) { alert('Image must be under 5 MB'); return; }
+    setImgUploading(true);
+    try {
+      const form = new FormData(); form.append('file', file);
+      const res  = await fetch('/api/menu/upload', { method:'POST', body:form });
+      const data = await res.json() as { ok:boolean; url?:string; error?:string };
+      if (!res.ok||!data.url) throw new Error(data.error ?? 'Upload failed');
+      setMenuModal(m=>({...m,item:{...m.item,img:data.url}}));
+    } catch (e) { alert('Upload failed: ' + (e instanceof Error ? e.message : String(e))); }
+    finally { setImgUploading(false); }
+  }
+
+  async function importMenuCatalog() {
+    if (!confirm('Add all missing menu items from the complete catalog?\n\nExisting items will NOT be changed.')) return;
+    setSeedingMenu(true); setSeedMsg('');
+    try {
+      const res  = await fetch('/api/menu/seed');
+      const data = await res.json() as { ok:boolean; inserted?:number; skipped?:number; error?:string };
+      if (!res.ok||!data.ok) throw new Error(data.error ?? 'Seed failed');
+      setSeedMsg(`✅ ${data.inserted} items added, ${data.skipped} already existed.`);
+      void refresh();
+    } catch (e) { setSeedMsg('❌ ' + (e instanceof Error ? e.message : String(e))); }
+    finally { setSeedingMenu(false); }
+  }
+
+  function downloadCsvTemplate() {
+    const rows = [
+      'name,category,description,badge,available,variants,image_url',
+      '"Chicken Dum Biryani","Non Veg Biryani","Authentic Hyderabadi Dum Biryani","bestseller","true","Half:140|Full:260","https://images.unsplash.com/photo-1589302168068-964664d93dc0?w=400"',
+      '"Roti","Indian Breads","Soft whole wheat flatbread","","true","Regular:10",""',
+    ];
+    const blob = new Blob([rows.join('\n')], {type:'text/csv'});
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = 'menu-import-template.csv'; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function importMenuFromCsv(file: File) {
+    setCsvImportMsg('⏳ Importing…');
+    try {
+      const text  = await file.text();
+      const lines = text.trim().split('\n').filter(l=>l.trim());
+      if (lines.length < 2) { setCsvImportMsg('❌ CSV must have at least a header row and one data row'); return; }
+      const header = lines[0].split(',').map(h=>h.trim().toLowerCase().replace(/^"|"$/g,''));
+      const idx    = (n: string) => header.indexOf(n);
+      let inserted = 0, failed = 0;
+      for (const line of lines.slice(1)) {
+        const c = line.match(/("(?:[^"]|"")*"|[^,]*)/g)?.map(v=>v.replace(/^"|"$/g,'').replace(/""/g,'"')) ?? [];
+        const name = c[idx('name')]?.trim() ?? '';
+        if (!name) continue;
+        const category = c[idx('category')]?.trim() || CATEGORIES[0];
+        let variants: {name:string;price:number}[] = [];
+        const vStr = c[idx('variants')]?.trim() ?? '';
+        if (vStr) {
+          variants = vStr.split('|').map(v=>{const [n,p]=v.split(':');return{name:(n??'').trim(),price:parseFloat(p??'0')};}).filter(v=>v.name&&!isNaN(v.price)&&v.price>0);
+        }
+        if (!variants.length) variants = [{name:'Regular',price:0}];
+        try {
+          await saveMenuItemApi({ name, category, desc:c[idx('description')]??'', badge:c[idx('badge')]??'', img:c[idx('image_url')]??'', available:(c[idx('available')]??'true').toLowerCase()!=='false', variants, price:variants[0].price });
+          inserted++;
+        } catch { failed++; }
+      }
+      setCsvImportMsg(`✅ Imported ${inserted} items${failed?`, ${failed} failed`:''}.`);
+      void refresh();
+    } catch (e) { setCsvImportMsg('❌ ' + (e instanceof Error ? e.message : String(e))); }
+  }
+
+  const menuItems = menuFilter==='All' ? menu : menu.filter(m=>m.category===menuFilter);
+
   // ── Styles ────────────────────────────────────────────────────────────────
   const btn = (bg = '#E65C00', c = 'white'): React.CSSProperties => ({
     background: bg, color: c, border: 'none', borderRadius: 8,
     fontWeight: 700, cursor: 'pointer', fontFamily: 'Poppins,sans-serif',
     padding: '0.5rem 1rem', fontSize: '0.82rem',
+  });
+  const tabB = (active: boolean): React.CSSProperties => ({
+    background: active ? '#E65C00' : '#f5f0e8', color: active ? 'white' : '#6B5246',
+    border: 'none', borderRadius: 8, fontWeight: 700, cursor: 'pointer',
+    fontFamily: 'Poppins,sans-serif', padding: '0.4rem 0.85rem', fontSize: '0.8rem',
   });
   const inp: React.CSSProperties = {
     width: '100%', padding: '0.6rem 0.75rem',
@@ -422,6 +562,12 @@ export default function ManagerPage() {
               💰 {awaitingTabs.length} Awaiting Payment
             </div>
           )}
+          <button onClick={()=>setManagerSection('billing')} style={{...btn(managerSection==='billing'?'#059669':'#065f46','#6ee7b7'),border:`1px solid ${managerSection==='billing'?'#34d399':'#6ee7b7'}`,fontSize:'0.72rem'}}>
+            💳 Billing
+          </button>
+          <button onClick={()=>setManagerSection('menu')} style={{...btn(managerSection==='menu'?'#d97706':'#065f46','#fde68a'),border:`1px solid ${managerSection==='menu'?'#fbbf24':'#6ee7b7'}`,fontSize:'0.72rem'}}>
+            🍽️ Menu
+          </button>
           <button onClick={() => router.push('/manager/tables')} style={{ ...btn('#065f46', '#6ee7b7'), border: '1px solid #6ee7b7', fontSize: '0.72rem' }}>
             🪑 Table Map
           </button>
@@ -561,8 +707,86 @@ export default function ManagerPage() {
         </div>
       )}
 
+      {/* ═══════════════════════ MENU MANAGEMENT SECTION ═══════════════════════ */}
+      {managerSection === 'menu' && (
+        <div style={{ padding: '1rem 1.5rem' }}>
+          {/* Toolbar */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.85rem', flexWrap: 'wrap', gap: '0.6rem' }}>
+            <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+              {['All', ...CATEGORIES].map(c => (
+                <button key={c} onClick={() => setMenuFilter(c)} style={tabB(menuFilter === c)}>{c}</button>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' as const }}>
+              <button onClick={importMenuCatalog} disabled={seedingMenu} style={{ ...btn('#8b5cf6'), fontSize: '0.78rem' }}>
+                {seedingMenu ? '⏳ Loading…' : '📥 Import Catalog'}
+              </button>
+              <label style={{ ...btn('#16a34a'), fontSize: '0.78rem', cursor: 'pointer' as const, display: 'inline-flex', alignItems: 'center' as const }}>
+                📤 Import CSV
+                <input type="file" accept=".csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) { void importMenuFromCsv(f); e.target.value = ''; } }} />
+              </label>
+              <button onClick={downloadCsvTemplate} style={{ ...btn('#6b7280'), fontSize: '0.78rem' }}>⬇️ CSV Template</button>
+              <button onClick={() => { setMenuModal({ open: true, item: emptyItem(), isEdit: false }); setModalVariants([{ name: '', price: '' }]); }} style={{ ...btn(), display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                <span style={{ fontSize: '1.1rem', lineHeight: 1 }}>＋</span> Add Item
+              </button>
+            </div>
+          </div>
+
+          {/* Import messages */}
+          {(seedMsg || csvImportMsg) && (() => {
+            const message = seedMsg || csvImportMsg;
+            const bg  = message.startsWith('✅') ? '#dcfce7' : message.startsWith('⏳') ? '#eff6ff' : '#fef2f2';
+            const clr = message.startsWith('✅') ? '#16a34a' : message.startsWith('⏳') ? '#2563eb' : '#ef4444';
+            return (
+              <div style={{ padding: '0.6rem 0.85rem', borderRadius: 8, background: bg, color: clr, fontWeight: 700, fontSize: '0.82rem', marginBottom: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>{message}</span>
+                <button onClick={() => { setSeedMsg(''); setCsvImportMsg(''); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', fontSize: '1.1rem', lineHeight: 1 }}>×</button>
+              </div>
+            );
+          })()}
+
+          {/* Menu grid */}
+          {!menuItems.length
+            ? <div style={{ textAlign: 'center', color: '#999', padding: '3rem', background: 'white', borderRadius: 12 }}>No items in this category</div>
+            : <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(255px,1fr))', gap: '1rem' }}>
+                {menuItems.map(item => (
+                  <div key={item.id} style={{ background: 'white', borderRadius: 12, overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.08)', opacity: item.available === false ? 0.55 : 1, transition: 'opacity .2s' }}>
+                    <div style={{ position: 'relative', height: '145px', background: '#f5f0e8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2.5rem' }}>
+                      {item.img && <img src={item.img} alt={item.name} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />}
+                      {!item.img && '🍽️'}
+                      {item.badge && <span style={{ position: 'absolute', top: 8, left: 8, background: '#E65C00', color: 'white', fontSize: '0.6rem', padding: '0.18rem 0.45rem', borderRadius: 8, fontWeight: 700, zIndex: 1 }}>{BADGE_LABEL[item.badge] || item.badge}</span>}
+                      {item.available === false && <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 700, fontSize: '0.82rem', zIndex: 1 }}>UNAVAILABLE</div>}
+                    </div>
+                    <div style={{ padding: '0.85rem' }}>
+                      <div style={{ fontSize: '0.62rem', color: '#888', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{item.category}</div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.4rem', margin: '0.2rem 0 0.25rem' }}>
+                        <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#1A0800' }}>{item.name}</div>
+                        <div style={{ fontWeight: 900, color: '#E65C00', fontSize: '0.88rem', whiteSpace: 'nowrap' }}>
+                          {item.variants && item.variants.length > 0
+                            ? item.variants.length === 1
+                              ? `₹${item.variants[0].price}`
+                              : `₹${item.variants[0].price}–₹${item.variants[item.variants.length - 1].price}`
+                            : `₹${item.price}`}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: '0.73rem', color: '#888', marginBottom: '0.75rem', lineHeight: '1.4' }}>{item.desc}</div>
+                      <div style={{ display: 'flex', gap: '0.35rem' }}>
+                        <button onClick={() => { setMenuModal({ open: true, item: { ...item }, isEdit: true }); setModalVariants(item.variants && item.variants.length > 0 ? item.variants.map(v => ({ name: v.name, price: String(v.price) })) : [{ name: 'Regular', price: String(item.price) }]); }} style={{ ...btn('#3b82f6'), padding: '0.3rem 0.75rem', fontSize: '0.75rem', flex: 1 }}>✏️ Edit</button>
+                        <button onClick={() => { saveMenuItemApi({ id: item.id, available: item.available === false }).then(() => refresh()).catch(e => alert(String(e))); }} style={{ ...btn(item.available === false ? '#16a34a' : '#6b7280'), padding: '0.3rem 0.65rem', fontSize: '0.75rem' }}>{item.available === false ? '✅' : '⏸'}</button>
+                        <button onClick={() => { if (confirm(`Delete "${item.name}"?`)) { deleteMenuItemApi(item.id).then(() => refresh()).catch(e => alert(String(e))); } }} style={{ ...btn('#ef4444'), padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}>🗑</button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+          }
+        </div>
+      )}
+
+      {/* ══════════════════════════ BILLING SECTION ══════════════════════════ */}
+
       {/* ── Pickup & Delivery Panel ── */}
-      {(hasNonDineIn || true) && (
+      {managerSection === 'billing' && (hasNonDineIn || true) && (
         <div style={{ padding: '0.75rem 1.5rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
           {/* Pickup Orders */}
           <div style={{ background: 'white', borderRadius: 12, border: '2px solid #16a34a', overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
@@ -681,6 +905,9 @@ export default function ManagerPage() {
           </button>
         </div>
       )}
+
+      {/* ─────────────── BILLING CONTENT ─────────────── */}
+      {managerSection === 'billing' && <>
 
       {/* Filter tabs */}
       <div style={{ padding: '0.75rem 1.5rem', display: 'flex', gap: '0.5rem', overflowX: 'auto' }}>
@@ -1213,6 +1440,79 @@ export default function ManagerPage() {
           </div>
         </div>
       )}
+
+      </> /* end managerSection === 'billing' */}
+
+      {/* ══════════════════ MENU ITEM MODAL ══════════════════ */}
+      {menuModal.open && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }} onClick={() => setMenuModal({ open: false, item: emptyItem(), isEdit: false })}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'white', borderRadius: 16, width: '100%', maxWidth: 510, maxHeight: '92vh', overflow: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+            <div style={{ background: 'linear-gradient(135deg,#1A0800,#E65C00)', color: 'white', padding: '1.1rem 1.6rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderRadius: '16px 16px 0 0', position: 'sticky', top: 0, zIndex: 2 }}>
+              <span style={{ fontFamily: "'Playfair Display',serif", fontWeight: 900, fontSize: '1.05rem' }}>{menuModal.isEdit ? '✏️ Edit Menu Item' : '➕ Add New Item'}</span>
+              <button onClick={() => setMenuModal({ open: false, item: emptyItem(), isEdit: false })} style={{ background: 'none', border: 'none', color: 'white', fontSize: '1.5rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
+            </div>
+            <div style={{ padding: '1.4rem' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem', marginBottom: '0.85rem' }}>
+                <div>
+                  <label style={{ fontSize: '0.76rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.28rem' }}>Category *</label>
+                  <select value={menuModal.item.category || CATEGORIES[0]} onChange={e => setMenuModal(m => ({ ...m, item: { ...m.item, category: e.target.value } }))} style={{ ...inp }}>
+                    {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.76rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.28rem' }}>Badge</label>
+                  <select value={menuModal.item.badge || ''} onChange={e => setMenuModal(m => ({ ...m, item: { ...m.item, badge: e.target.value } }))} style={{ ...inp }}>
+                    <option value="">— None —</option>
+                    {Object.entries(BADGE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div style={{ marginBottom: '0.85rem' }}>
+                <label style={{ fontSize: '0.76rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.28rem' }}>Item Name *</label>
+                <input value={menuModal.item.name || ''} onChange={e => setMenuModal(m => ({ ...m, item: { ...m.item, name: e.target.value } }))} placeholder="e.g. Hyderabadi Chicken Biryani" style={{ ...inp }} />
+              </div>
+              <div style={{ marginBottom: '0.85rem' }}>
+                <label style={{ fontSize: '0.76rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.28rem' }}>Description</label>
+                <textarea value={menuModal.item.desc || ''} onChange={e => setMenuModal(m => ({ ...m, item: { ...m.item, desc: e.target.value } }))} placeholder="Short appetizing description…" rows={2} style={{ ...inp, resize: 'vertical' as const }} />
+              </div>
+              <div style={{ marginBottom: '0.85rem' }}>
+                <label style={{ fontSize: '0.76rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.28rem' }}>Pricing Variants * <span style={{ fontWeight: 400, color: '#999' }}>(e.g. Half / Full / 1 Piece)</span></label>
+                {modalVariants.map((v, i) => (
+                  <div key={i} style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.4rem', alignItems: 'center' }}>
+                    <input value={v.name} onChange={e => updateVariantRow(i, 'name', e.target.value)} placeholder="Name (e.g. Half)" style={{ ...inp, flex: 2, padding: '0.45rem 0.6rem' }} />
+                    <div style={{ position: 'relative', flex: 1 }}>
+                      <span style={{ position: 'absolute', left: '0.5rem', top: '50%', transform: 'translateY(-50%)', color: '#888', fontSize: '0.82rem' }}>₹</span>
+                      <input type="number" value={v.price} onChange={e => updateVariantRow(i, 'price', e.target.value)} placeholder="0" min="1" style={{ ...inp, paddingLeft: '1.4rem', padding: '0.45rem 0.4rem 0.45rem 1.4rem' }} />
+                    </div>
+                    {modalVariants.length > 1 && <button onClick={() => removeVariantRow(i)} style={{ background: '#fef2f2', border: '1px solid #fca5a5', color: '#ef4444', borderRadius: 6, cursor: 'pointer', padding: '0.35rem 0.5rem', fontSize: '0.85rem', flexShrink: 0 }}>🗑</button>}
+                  </div>
+                ))}
+                <button onClick={addVariantRow} style={{ width: '100%', background: '#f0fdf4', border: '1px dashed #16a34a', color: '#16a34a', borderRadius: 8, cursor: 'pointer', padding: '0.4rem', fontSize: '0.8rem', fontWeight: 700, fontFamily: 'Poppins,sans-serif', marginTop: '0.2rem' }}>＋ Add Variant</button>
+              </div>
+              <div style={{ marginBottom: '1.1rem' }}>
+                <label style={{ fontSize: '0.76rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.28rem' }}>Image <span style={{ fontWeight: 400, color: '#999' }}>(paste URL or upload)</span></label>
+                <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', marginBottom: '0.35rem' }}>
+                  <input value={menuModal.item.img || ''} onChange={e => setMenuModal(m => ({ ...m, item: { ...m.item, img: e.target.value } }))} placeholder="https://images.unsplash.com/…" style={{ ...inp, flex: 1 }} />
+                  <label style={{ ...btn('#8b5cf6'), cursor: 'pointer' as const, whiteSpace: 'nowrap' as const, flexShrink: 0, fontSize: '0.78rem', opacity: imgUploading ? 0.6 : 1, display: 'inline-flex', alignItems: 'center' as const }}>
+                    {imgUploading ? '⏳' : '📤 Upload'}
+                    <input type="file" accept="image/*" style={{ display: 'none' }} disabled={imgUploading} onChange={e => { const f = e.target.files?.[0]; if (f) { void uploadMenuImage(f); e.target.value = ''; } }} />
+                  </label>
+                </div>
+                {menuModal.item.img && (
+                  <div style={{ width: '100%', height: '130px', borderRadius: 8, overflow: 'hidden', background: '#f5f0e8' }}>
+                    <img src={menuModal.item.img} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                  </div>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: '0.65rem' }}>
+                <button onClick={() => setMenuModal({ open: false, item: emptyItem(), isEdit: false })} style={{ ...btn('#e5e7eb', '#555'), flex: 1 }}>Cancel</button>
+                <button onClick={saveItem} style={{ ...btn(), flex: 2 }}>{menuModal.isEdit ? '💾 Save Changes' : '✅ Add to Menu'}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
