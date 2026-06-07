@@ -156,7 +156,7 @@ function TablePageInner() {
   // 'menu'     = browsing menu
   // 'cart'     = reviewing cart
   // 'tracking' = order tracking / my tab
-  type View = 'loading' | 'landing' | 'join' | 'menu' | 'cart' | 'tracking';
+  type View = 'loading' | 'not_found' | 'landing' | 'join' | 'menu' | 'cart' | 'tracking';
   const [view, setView]                   = useState<View>('loading');
 
   // ── Device & identity ──
@@ -241,7 +241,14 @@ function TablePageInner() {
         const match = allTables.find(
           (t: ApiTable) => sameTable(t.id, tableId) || sameTable(t.name, tableId),
         );
-        if (match) { setTableCapacity(match.capacity); setTableName(match.name || tableId); }
+        if (match) {
+          setTableCapacity(match.capacity);
+          setTableName(match.name || tableId);
+        } else {
+          // Table ID from URL does not exist in the database — show error page
+          setView('not_found');
+          return;
+        }
       } catch { setMenu([]); }
 
       // ── STEP 1: Does THIS device already have an active Supabase session? ──
@@ -864,6 +871,28 @@ function TablePageInner() {
       </div>
     )
     : null;
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // ─── VIEW: Not Found ─────────────────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════════════════
+  if (view === 'not_found') {
+    return (
+      <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg,#1A0800,#3D1C00)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'Poppins,sans-serif', padding: '2rem' }}>
+        <div style={{ textAlign: 'center', color: 'white', maxWidth: 360 }}>
+          <div style={{ fontSize: '4rem', marginBottom: '1rem' }}>🔍</div>
+          <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.4rem', fontWeight: 900, color: '#F9A826', marginBottom: '0.5rem' }}>
+            Table Not Found
+          </div>
+          <div style={{ fontSize: '0.88rem', color: '#d4a46a', lineHeight: 1.6, marginBottom: '1.5rem' }}>
+            This table ({tableId}) does not exist. Please scan the correct QR code at your table.
+          </div>
+          <div style={{ background: 'rgba(249,168,38,0.12)', border: '1px solid #F9A82640', borderRadius: 12, padding: '0.85rem 1.25rem', fontSize: '0.8rem', color: '#F9A826' }}>
+            If you believe this is a mistake, please ask a staff member for assistance.
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // ══════════════════════════════════════════════════════════════════════════════
   // ─── VIEW: Loading ───────────────────────────────────────────────────────────

@@ -465,7 +465,7 @@ function TrackInner() {
     order.status === 'prepared' && orderType === 'delivery'       ? 'Being dispatched shortly…' :
     order.status === 'served'   && orderType === 'pickup'         ? 'Your order is at the counter — please collect! 🏪' :
     isOutForDeliv                                                  ? 'On the way! Arriving soon…' :
-    isDelivered                                                    ? 'Arrived at your door! Please confirm below.' :
+    isDelivered                                                    ? 'Your order has been delivered! 🎉' :
     isCompleted && orderType === 'delivery'                        ? 'Delivery confirmed — thank you! 🎉' :
     isCompleted                                                    ? 'Order completed — thank you for dining with us! 🎉' :
     '';
@@ -608,53 +608,7 @@ function TrackInner() {
           </div>
         </div>
 
-        {/* Customer confirmation — DELIVERY ONLY */}
-        {orderType === 'delivery' && isDelivered && !confirmed && order.status !== 're_serve_required' && (
-          <div style={{ background: 'white', borderRadius: 16, padding: '1.25rem', boxShadow: '0 4px 20px rgba(0,0,0,0.08)', marginBottom: '1.25rem', border: `2px solid ${accentColor}` }}>
-            <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
-              <div style={{ fontSize: '2rem', marginBottom: '0.35rem' }}>
-                {activeIssue ? '🔄' : '🏠'}
-              </div>
-              <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '1rem' }}>
-                {activeIssue ? 'Your order has been re-delivered!' : 'Your order has been delivered!'}
-              </div>
-              <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '0.25rem' }}>
-                Did you receive your order correctly?
-              </div>
-              {activeIssue && (
-                <div style={{ fontSize: '0.72rem', background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: 8, padding: '0.35rem 0.6rem', marginTop: '0.5rem', color: '#92400e' }}>
-                  Re-delivery attempt #{activeIssue.retryCount} of {ISSUE_MAX_RETRIES}
-                </div>
-              )}
-            </div>
-            <div style={{ display: 'flex', gap: '0.65rem' }}>
-              <button
-                onClick={() => void handleDeliveryNotReceived()}
-                disabled={notRecvBusy}
-                style={{ flex: 1, background: notRecvBusy ? '#f3f4f6' : '#fef2f2', color: '#ef4444', border: '2px solid #fecaca', padding: '0.75rem', borderRadius: 12, fontWeight: 700, fontSize: '0.9rem', cursor: notRecvBusy ? 'not-allowed' : 'pointer', fontFamily: 'Poppins,sans-serif', opacity: notRecvBusy ? 0.6 : 1 }}
-              >
-                {notRecvBusy ? '⏳…' : '❌ Not received'}
-              </button>
-              <button
-                onClick={() => void handleConfirm()}
-                disabled={notRecvBusy}
-                style={{ flex: 1, background: accentColor, color: 'white', border: 'none', padding: '0.75rem', borderRadius: 12, fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer', fontFamily: 'Poppins,sans-serif' }}
-              >
-                ✅ Yes, received!
-              </button>
-            </div>
-            {notRecvMsg && (
-              <div style={{ marginTop: '0.75rem', background: notRecvMsg.startsWith('🚨') ? '#fef2f2' : '#fef3c7', borderRadius: 8, padding: '0.6rem', fontSize: '0.78rem', color: notRecvMsg.startsWith('🚨') ? '#ef4444' : '#92400e', fontWeight: 600 }}>
-                {notRecvMsg}
-              </div>
-            )}
-            {reportMsg && (
-              <div style={{ marginTop: '0.75rem', background: '#fef2f2', borderRadius: 8, padding: '0.6rem', fontSize: '0.78rem', color: '#ef4444', fontWeight: 600 }}>
-                {reportMsg}
-              </div>
-            )}
-          </div>
-        )}
+        {/* Customer confirmation removed — delivery partner now confirms delivery + payment */}
 
         {/* Re-delivery in progress banner — shown while issue is being actioned */}
         {/* re_serve_required = waiter hasn't clicked Re-Serve yet             */}

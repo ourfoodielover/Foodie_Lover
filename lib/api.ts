@@ -623,6 +623,34 @@ export async function markOrderDelivered(orderId: string, deliveryName: string):
   return updateOrderStatus(orderId, 'delivered', deliveryName);
 }
 
+/**
+ * Delivery partner confirms delivery AND records payment method in one action.
+ * Step 1: PATCH status=delivered with paymentMethod (saves to DB, records deliveredAt).
+ * Step 2: PATCH status=completed (auto-complete — fires receipt email, no customer confirm needed).
+ * paymentMethod may be a combined string for split payments, e.g. "Cash ₹500 + UPI ₹300".
+ */
+export async function markOrderDeliveredWithPayment(
+  orderId: string,
+  deliveryName: string,
+  paymentMethod: string,
+): Promise<Order> {
+  // Step 1: mark delivered + save payment method
+  await apiFetch<Order>(`/api/orders/${orderId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      status:         'delivered',
+      by:             deliveryName,
+      paymentMethod,
+      deliveryPerson: deliveryName,
+    }),
+  });
+  // Step 2: auto-complete the order (fires receipt email to customer)
+  return apiFetch<Order>(`/api/orders/${orderId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status: 'completed', by: deliveryName }),
+  });
+}
+
 // ─── Track / Verify ───────────────────────────────────────────────────────────
 export async function verifyTrackingToken(orderId: string, token: string): Promise<Order | null> {
   try {

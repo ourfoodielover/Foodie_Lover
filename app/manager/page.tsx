@@ -82,12 +82,17 @@ export default function ManagerPage() {
   const [preCloseSending,   setPreCloseSending]   = useState(false);
   const [preCloseMsg,       setPreCloseMsg]       = useState('');
 
-  // Split billing
+  // Split billing — by person
   const [splitBill, setSplitBill]             = useState<SplitBillData | null>(null);
   const [showSplitModal, setShowSplitModal]   = useState(false);
   const [splitCount, setSplitCount]           = useState('2');
   const [splitPayEntry, setSplitPayEntry]     = useState<string | null>(null);
   const [splitPayMethod, setSplitPayMethod]   = useState('cod');
+  // Split billing — by method
+  const [showSplitMethod, setShowSplitMethod] = useState(false);
+  const [splitMethodRows, setSplitMethodRows] = useState<{ method: string; amount: string }[]>([
+    { method: 'cod', amount: '' }, { method: 'upi', amount: '' },
+  ]);
 
   // End-of-day report
   const [showEOD, setShowEOD]                 = useState(false);
@@ -276,6 +281,7 @@ export default function ManagerPage() {
         setTabCloseConfirm(false);
         setSplitBill(null);
         setShowSplitModal(false);
+        setShowSplitMethod(false);
       }, 1800);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
@@ -718,14 +724,6 @@ export default function ManagerPage() {
               ))}
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' as const }}>
-              <button onClick={importMenuCatalog} disabled={seedingMenu} style={{ ...btn('#8b5cf6'), fontSize: '0.78rem' }}>
-                {seedingMenu ? '⏳ Loading…' : '📥 Import Catalog'}
-              </button>
-              <label style={{ ...btn('#16a34a'), fontSize: '0.78rem', cursor: 'pointer' as const, display: 'inline-flex', alignItems: 'center' as const }}>
-                📤 Import CSV
-                <input type="file" accept=".csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) { void importMenuFromCsv(f); e.target.value = ''; } }} />
-              </label>
-              <button onClick={downloadCsvTemplate} style={{ ...btn('#6b7280'), fontSize: '0.78rem' }}>⬇️ CSV Template</button>
               <button onClick={() => { setMenuModal({ open: true, item: emptyItem(), isEdit: false }); setModalVariants([{ name: '', price: '' }]); }} style={{ ...btn(), display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                 <span style={{ fontSize: '1.1rem', lineHeight: 1 }}>＋</span> Add Item
               </button>
@@ -961,6 +959,7 @@ export default function ManagerPage() {
                 setTabBillMsg('');
                 setTabCloseConfirm(false);
                 setShowSplitModal(false);
+                setShowSplitMethod(false);
                 setSplitPayEntry(null);
                 loadSplitForTab(tab.id);
               }}
@@ -1003,7 +1002,7 @@ export default function ManagerPage() {
       {selTab && (
         <div
           style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 200 }}
-          onClick={() => { setSelTab(null); setTabCloseConfirm(false); setSplitBill(null); setShowSplitModal(false); }}
+          onClick={() => { setSelTab(null); setTabCloseConfirm(false); setSplitBill(null); setShowSplitModal(false); setShowSplitMethod(false); }}
         >
           <div
             onClick={e => e.stopPropagation()}
@@ -1020,7 +1019,7 @@ export default function ManagerPage() {
                   {selTab.status === 'awaiting_payment' ? '💳 Bill Requested' : selTab.status === 'open' ? '🟢 Open Tab' : '✅ Closed'}
                 </div>
               </div>
-              <button onClick={() => { setSelTab(null); setTabCloseConfirm(false); setSplitBill(null); setShowSplitModal(false); }} style={{ background: 'none', border: 'none', color: 'white', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
+              <button onClick={() => { setSelTab(null); setTabCloseConfirm(false); setSplitBill(null); setShowSplitModal(false); setShowSplitMethod(false); }} style={{ background: 'none', border: 'none', color: 'white', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto', padding: '1.25rem 1.5rem' }}>
@@ -1087,14 +1086,26 @@ export default function ManagerPage() {
               {/* ── Split Billing Section ── */}
               {selTab.status !== 'closed' && (
                 <div style={{ marginBottom: '1rem' }}>
-                  {!splitBill ? (
+                  {!splitBill && !showSplitMethod ? (
                     !showSplitModal ? (
-                      <button
-                        onClick={() => setShowSplitModal(true)}
-                        style={{ ...btn('#f0fdf4', '#16a34a'), fontSize: '0.78rem', width: '100%', border: '1px solid #86efac' }}
-                      >
-                        ✂️ Split Bill
-                      </button>
+                      /* ── Choice: Split by Person or Split by Method ── */
+                      <div style={{ display: 'flex', gap: '0.4rem' }}>
+                        <button
+                          onClick={() => setShowSplitModal(true)}
+                          style={{ ...btn('#f0fdf4', '#16a34a'), fontSize: '0.78rem', flex: 1, border: '1px solid #86efac' }}
+                        >
+                          👥 Split by Person
+                        </button>
+                        <button
+                          onClick={() => {
+                            setSplitMethodRows([{ method: 'cod', amount: '' }, { method: 'upi', amount: '' }]);
+                            setShowSplitMethod(true);
+                          }}
+                          style={{ ...btn('#eff6ff', '#2563eb'), fontSize: '0.78rem', flex: 1, border: '1px solid #bfdbfe' }}
+                        >
+                          💳 Split by Method
+                        </button>
+                      </div>
                     ) : (
                       <div style={{ background: '#f0fdf4', borderRadius: 10, border: '1px solid #86efac', padding: '1rem', marginBottom: '0.5rem' }}>
                         <div style={{ fontWeight: 700, color: '#064e3b', fontSize: '0.85rem', marginBottom: '0.5rem' }}>✂️ Split Equally Between</div>
@@ -1126,14 +1137,90 @@ export default function ManagerPage() {
                         </div>
                       </div>
                     )
+                  ) : showSplitMethod ? (
+                    /* ── Split by Method form ── */
+                    (() => {
+                      const PAY_OPTS = [
+                        { k: 'cod',     l: '💵 Cash'    },
+                        { k: 'upi',     l: '📲 UPI'     },
+                        { k: 'card',    l: '💳 Card'    },
+                        { k: 'gpay',    l: '📱 GPay'    },
+                        { k: 'phonepe', l: '📱 PhonePe' },
+                        { k: 'paytm',   l: '📱 Paytm'  },
+                      ];
+                      const PAY_NAMES: Record<string, string> = {
+                        cod: 'Cash', upi: 'UPI', card: 'Card', gpay: 'GPay', phonepe: 'PhonePe', paytm: 'Paytm',
+                      };
+                      const splitTotal = splitMethodRows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+                      const isBalanced = Math.abs(splitTotal - tabBillTotal) < 1;
+                      return (
+                        <div style={{ background: '#eff6ff', borderRadius: 10, border: '1px solid #bfdbfe', padding: '1rem', marginBottom: '0.5rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
+                            <div style={{ fontWeight: 700, color: '#1d4ed8', fontSize: '0.85rem' }}>💳 Split by Payment Method</div>
+                            <button onClick={() => setShowSplitMethod(false)} style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: '0.75rem' }}>Cancel</button>
+                          </div>
+                          <div style={{ fontSize: '0.72rem', color: '#64748b', marginBottom: '0.5rem' }}>
+                            Enter the amount paid by each method. Total must equal ₹{tabBillTotal}.
+                          </div>
+                          {splitMethodRows.map((row, i) => (
+                            <div key={i} style={{ display: 'flex', gap: '0.3rem', marginBottom: '0.4rem', alignItems: 'center' }}>
+                              <select
+                                value={row.method}
+                                onChange={e => setSplitMethodRows(prev => prev.map((r, j) => j === i ? { ...r, method: e.target.value } : r))}
+                                style={{ flex: 1.3, padding: '0.35rem 0.4rem', borderRadius: 6, border: '1.5px solid #bfdbfe', fontSize: '0.78rem', fontFamily: 'Poppins,sans-serif', background: 'white' }}
+                              >
+                                {PAY_OPTS.map(p => <option key={p.k} value={p.k}>{p.l}</option>)}
+                              </select>
+                              <input
+                                type="number"
+                                value={row.amount}
+                                onChange={e => setSplitMethodRows(prev => prev.map((r, j) => j === i ? { ...r, amount: e.target.value } : r))}
+                                placeholder="₹ Amount"
+                                style={{ flex: 1, padding: '0.35rem 0.4rem', borderRadius: 6, border: '1.5px solid #bfdbfe', fontSize: '0.78rem', fontFamily: 'Poppins,sans-serif', minWidth: 0 }}
+                              />
+                              {splitMethodRows.length > 2 && (
+                                <button
+                                  onClick={() => setSplitMethodRows(prev => prev.filter((_, j) => j !== i))}
+                                  style={{ background: '#fef2f2', border: 'none', borderRadius: 6, padding: '0.3rem 0.5rem', cursor: 'pointer', color: '#ef4444', fontWeight: 700, fontSize: '0.8rem', fontFamily: 'Poppins,sans-serif' }}
+                                >×</button>
+                              )}
+                            </div>
+                          ))}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
+                            <button
+                              onClick={() => setSplitMethodRows(prev => [...prev, { method: 'cod', amount: '' }])}
+                              style={{ fontSize: '0.72rem', padding: '0.2rem 0.5rem', borderRadius: 6, background: '#f0f9ff', border: '1px dashed #60a5fa', cursor: 'pointer', fontFamily: 'Poppins,sans-serif', color: '#2563eb' }}
+                            >+ Add method</button>
+                            <span style={{ fontSize: '0.75rem', fontWeight: 700, color: isBalanced ? '#16a34a' : '#ef4444' }}>
+                              ₹{splitTotal} / ₹{tabBillTotal} {isBalanced ? '✅' : ''}
+                            </span>
+                          </div>
+                          <button
+                            disabled={!isBalanced}
+                            onClick={() => {
+                              // Format combined payment string: "Cash ₹500 + UPI ₹300"
+                              const combined = splitMethodRows
+                                .filter(r => parseFloat(r.amount) > 0)
+                                .map(r => `${PAY_NAMES[r.method] || r.method} ₹${r.amount}`)
+                                .join(' + ');
+                              setTabPayMethod(combined);
+                              setShowSplitMethod(false);
+                            }}
+                            style={{ ...btn('#2563eb'), width: '100%', fontSize: '0.78rem', opacity: isBalanced ? 1 : 0.5 }}
+                          >
+                            ✅ Confirm — Use Combined Payment
+                          </button>
+                        </div>
+                      );
+                    })()
                   ) : (
-                    /* Split bill UI */
+                    /* Split bill by-person UI */
                     <div style={{ background: '#f0fdf4', borderRadius: 10, border: '1px solid #86efac', padding: '1rem', marginBottom: '0.5rem' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                        <div style={{ fontWeight: 700, color: '#064e3b', fontSize: '0.85rem' }}>✂️ Split Bill ({splitBill.entries.length} persons)</div>
+                        <div style={{ fontWeight: 700, color: '#064e3b', fontSize: '0.85rem' }}>✂️ Split Bill ({splitBill!.entries.length} persons)</div>
                         <button onClick={() => setSplitBill(null)} style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: '0.75rem' }}>Reset</button>
                       </div>
-                      {splitBill.entries.map((entry, i) => (
+                      {splitBill!.entries.map((entry, i) => (
                         <div key={i} style={{ marginBottom: '0.5rem' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', background: entry.paid ? '#dcfce7' : 'white', borderRadius: 8, border: `1px solid ${entry.paid ? '#86efac' : '#d1d5db'}` }}>
                             <div>
@@ -1204,30 +1291,41 @@ export default function ManagerPage() {
               {selTab.status !== 'closed' && (
                 <div style={{ marginBottom: '1rem' }}>
                   <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.4rem' }}>Payment Method</label>
-                  <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-                    {[
-                      { k: 'cod',     l: '💵 Cash'       },
-                      { k: 'gpay',    l: '📱 Google Pay'  },
-                      { k: 'phonepe', l: '📱 PhonePe'     },
-                      { k: 'card',    l: '💳 Card'        },
-                      { k: 'upi',     l: '📲 UPI'         },
-                    ].map(p => (
+                  {/* If a combined split-method string was set, show it as a badge with reset */}
+                  {tabPayMethod.includes('+') ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.4rem 0.75rem', background: '#eff6ff', border: '2px solid #2563eb', borderRadius: 8 }}>
+                      <span style={{ flex: 1, fontWeight: 700, color: '#1d4ed8', fontSize: '0.8rem' }}>💳 {tabPayMethod}</span>
                       <button
-                        key={p.k}
-                        onClick={() => setTabPayMethod(p.k)}
-                        style={{
-                          padding: '0.35rem 0.75rem', borderRadius: 8,
-                          border: `2px solid ${tabPayMethod === p.k ? '#16a34a' : '#e5e7eb'}`,
-                          background: tabPayMethod === p.k ? '#f0fdf4' : 'white',
-                          color: tabPayMethod === p.k ? '#16a34a' : '#666',
-                          fontWeight: 700, cursor: 'pointer', fontSize: '0.78rem',
-                          fontFamily: 'Poppins,sans-serif',
-                        }}
-                      >
-                        {p.l}
-                      </button>
-                    ))}
-                  </div>
+                        onClick={() => setTabPayMethod('cod')}
+                        style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: '0.75rem', fontFamily: 'Poppins,sans-serif', fontWeight: 600 }}
+                      >× Reset</button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                      {[
+                        { k: 'cod',     l: '💵 Cash'       },
+                        { k: 'gpay',    l: '📱 Google Pay'  },
+                        { k: 'phonepe', l: '📱 PhonePe'     },
+                        { k: 'card',    l: '💳 Card'        },
+                        { k: 'upi',     l: '📲 UPI'         },
+                      ].map(p => (
+                        <button
+                          key={p.k}
+                          onClick={() => setTabPayMethod(p.k)}
+                          style={{
+                            padding: '0.35rem 0.75rem', borderRadius: 8,
+                            border: `2px solid ${tabPayMethod === p.k ? '#16a34a' : '#e5e7eb'}`,
+                            background: tabPayMethod === p.k ? '#f0fdf4' : 'white',
+                            color: tabPayMethod === p.k ? '#16a34a' : '#666',
+                            fontWeight: 700, cursor: 'pointer', fontSize: '0.78rem',
+                            fontFamily: 'Poppins,sans-serif',
+                          }}
+                        >
+                          {p.l}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 

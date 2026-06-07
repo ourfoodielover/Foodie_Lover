@@ -4,7 +4,7 @@ export const dynamic = 'force-dynamic';
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  getDeliveryQueue, markOrderPickedUp, markOrderDelivered, Order,
+  getDeliveryQueue, markOrderPickedUp, markOrderDeliveredWithPayment, Order,
   getActiveIssues, startReserving, OrderIssue,
 } from '@/lib/api';
 import { useRealtime } from '@/lib/realtime-client';
@@ -40,12 +40,22 @@ export default function DeliveryPage() {
   const [reDeliveryIssues, setReDeliveryIssues] = useState<OrderIssue[]>([]);
   const [nowMs, setNowMs]                 = useState(() => Date.now());
   const [filter, setFilter]               = useState<'all' | 'ready' | 'enroute' | 'done' | 'redeliver'>('all');
-  const [confirmPick,   setConfirmPick]   = useState<string | null>(null);
-  const [confirmDeliv,  setConfirmDeliv]  = useState<string | null>(null);
+  const [confirmPick,    setConfirmPick]    = useState<string | null>(null);
   const [confirmRedeliv, setConfirmRedeliv] = useState<string | null>(null);  // issueId
-  const [actionMsg, setActionMsg]         = useState('');
-  const [expandedId, setExpandedId]       = useState<string | null>(null);
-  const [fetchError, setFetchError]       = useState('');
+  const [actionMsg, setActionMsg]          = useState('');
+  const [expandedId, setExpandedId]        = useState<string | null>(null);
+  const [fetchError, setFetchError]        = useState('');
+
+  // ── Payment confirmation flow ──────────────────────────────────────────────
+  // payModal = orderId of the order being confirmed + total for validation
+  const [payModal,      setPayModal]      = useState<string | null>(null);
+  const [payModalTotal, setPayModalTotal] = useState(0);
+  const [payMethod,     setPayMethod]     = useState('cod');
+  const [useSplit,      setUseSplit]      = useState(false);
+  const [splitRows,     setSplitRows]     = useState<{ method: string; amount: string }[]>([
+    { method: 'cod', amount: '' }, { method: 'upi', amount: '' },
+  ]);
+  const [payBusy,       setPayBusy]       = useState(false);
 
   useEffect(() => {
     const s = getSession('delivery');
@@ -117,14 +127,57 @@ export default function DeliveryPage() {
     }
   }
 
-  async function doDelivered(orderId: string) {
+  const PAY_NAMES: Record<string, string> = {
+    cod: 'Cash', upi: 'UPI', card: 'Card', gpay: 'GPay', phonepe: 'PhonePe', paytm: 'Paytm',
+  };
+
+  function openPayModal(orderId: string, total: number) {
+    setPayModal(orderId);
+    setPayModalTotal(total);
+    setPayMethod('cod');
+    setUseSplit(false);
+    setSplitRows([{ method: 'cod', amount: '' }, { method: 'upi', amount: '' }]);
+  }
+
+  async function doDeliveredWithPayment() {
+    if (!payModal) return;
+    const deliveryName = session?.name || 'Delivery';
+
+    // Build final payment method string
+    let finalPayMethod: string;
+    if (useSplit) {
+      const total = splitRows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+      if (Math.abs(total - payModalTotal) > 1) {
+        setActionMsg(`⚠️ Split amounts (₹${total}) must equal order total ₹${payModalTotal}`);
+        setTimeout(() => setActionMsg(''), 5000);
+        return;
+      }
+      const missingAmount = splitRows.some(r => !r.amount || parseFloat(r.amount) <= 0);
+      if (missingAmount) {
+        setActionMsg('⚠️ Please enter an amount for each payment method');
+        setTimeout(() => setActionMsg(''), 4000);
+        return;
+      }
+      finalPayMethod = splitRows.map(r => `${PAY_NAMES[r.method] || r.method} ₹${r.amount}`).join(' + ');
+    } else {
+      finalPayMethod = payMethod;
+    }
+
+    setPayBusy(true);
     try {
-      await markOrderDelivered(orderId, session?.name || 'Delivery');
-      setActionMsg('📦 Marked as delivered — customer will confirm.');
-      setTimeout(() => setActionMsg(''), 3000);
-      setConfirmDeliv(null);
+      await markOrderDeliveredWithPayment(payModal, deliveryName, finalPayMethod);
+      setActionMsg('✅ Order delivered & completed! Payment recorded.');
+      setTimeout(() => setActionMsg(''), 4000);
+      setPayModal(null);
       await refresh();
-    } catch (e) { console.error(e); }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      console.error('[delivery] doDeliveredWithPayment failed:', err);
+      setActionMsg(`⚠️ Could not complete delivery: ${msg}. Please try again.`);
+      setTimeout(() => setActionMsg(''), 6000);
+    } finally {
+      setPayBusy(false);
+    }
   }
 
   async function doReDeliver(issueId: string) {
@@ -437,26 +490,135 @@ export default function DeliveryPage() {
                 )}
 
                 {order.status === 'out_for_delivery' && (
-                  confirmDeliv === order.id ? (
-                    <div style={{ background: '#eff6ff', borderRadius: 10, padding: '0.65rem', border: '1px solid #bfdbfe' }}>
-                      <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#1d4ed8', marginBottom: '0.4rem' }}>
-                        Confirm delivery to customer?
+                  payModal === order.id ? (
+                    /* ── Payment + Delivery Confirmation Modal ── */
+                    <div style={{ background: '#eff6ff', borderRadius: 10, padding: '0.75rem', border: '1px solid #bfdbfe' }}>
+                      <div style={{ fontSize: '0.82rem', fontWeight: 800, color: '#1d4ed8', marginBottom: '0.55rem' }}>
+                        💳 Confirm Delivery &amp; Payment
+                        <span style={{ fontWeight: 500, color: '#2563eb', marginLeft: '0.4rem', fontSize: '0.74rem' }}>
+                          Total: ₹{payModalTotal}
+                        </span>
                       </div>
-                      <div style={{ display: 'flex', gap: '0.4rem' }}>
-                        <button onClick={() => doDelivered(order.id)} style={{ ...btn('#2563eb'), flex: 1 }}>✅ Yes, Delivered</button>
-                        <button onClick={() => setConfirmDeliv(null)} style={{ ...btn('#e5e7eb', '#555'), flex: 1 }}>Cancel</button>
+
+                      {/* Payment method — REQUIRED */}
+                      {!useSplit && (
+                        <>
+                          <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#555', marginBottom: '0.3rem' }}>
+                            Payment Method <span style={{ color: '#ef4444' }}>*</span>
+                          </div>
+                          <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap', marginBottom: '0.55rem' }}>
+                            {[
+                              { k: 'cod',     l: '💵 Cash'    },
+                              { k: 'upi',     l: '📲 UPI'     },
+                              { k: 'card',    l: '💳 Card'    },
+                              { k: 'gpay',    l: '📱 GPay'    },
+                              { k: 'phonepe', l: '📱 PhonePe' },
+                              { k: 'paytm',   l: '📱 Paytm'  },
+                            ].map(p => (
+                              <button
+                                key={p.k}
+                                onClick={() => setPayMethod(p.k)}
+                                style={{
+                                  padding: '0.22rem 0.5rem', borderRadius: 6, cursor: 'pointer',
+                                  border: `2px solid ${payMethod === p.k ? '#2563eb' : '#d1d5db'}`,
+                                  background: payMethod === p.k ? '#dbeafe' : 'white',
+                                  color: payMethod === p.k ? '#1d4ed8' : '#555',
+                                  fontWeight: 700, fontSize: '0.68rem',
+                                  fontFamily: 'Poppins,sans-serif',
+                                }}
+                              >{p.l}</button>
+                            ))}
+                          </div>
+                        </>
+                      )}
+
+                      {/* Split toggle */}
+                      <button
+                        onClick={() => setUseSplit(v => !v)}
+                        style={{
+                          padding: '0.22rem 0.6rem', borderRadius: 6, fontSize: '0.68rem',
+                          border: `1.5px solid ${useSplit ? '#2563eb' : '#d1d5db'}`,
+                          background: useSplit ? '#dbeafe' : 'white',
+                          color: useSplit ? '#1d4ed8' : '#666',
+                          fontWeight: 700, cursor: 'pointer',
+                          fontFamily: 'Poppins,sans-serif', marginBottom: '0.45rem',
+                        }}
+                      >✂️ {useSplit ? '✓ Split Payment' : 'Split Payment'}</button>
+
+                      {/* Split rows */}
+                      {useSplit && (
+                        <div style={{ marginBottom: '0.45rem', background: '#f8faff', borderRadius: 8, padding: '0.5rem', border: '1px solid #bfdbfe' }}>
+                          {splitRows.map((row, i) => (
+                            <div key={i} style={{ display: 'flex', gap: '0.25rem', marginBottom: '0.3rem', alignItems: 'center' }}>
+                              <select
+                                value={row.method}
+                                onChange={e => setSplitRows(prev => prev.map((r, j) => j === i ? { ...r, method: e.target.value } : r))}
+                                style={{ flex: 1.2, padding: '0.28rem 0.4rem', borderRadius: 6, border: '1.5px solid #bfdbfe', fontSize: '0.7rem', fontFamily: 'Poppins,sans-serif', background: 'white' }}
+                              >
+                                {[
+                                  { k: 'cod',     l: '💵 Cash'    },
+                                  { k: 'upi',     l: '📲 UPI'     },
+                                  { k: 'card',    l: '💳 Card'    },
+                                  { k: 'gpay',    l: '📱 GPay'    },
+                                  { k: 'phonepe', l: '📱 PhonePe' },
+                                  { k: 'paytm',   l: '📱 Paytm'  },
+                                ].map(p => <option key={p.k} value={p.k}>{p.l}</option>)}
+                              </select>
+                              <input
+                                type="number"
+                                value={row.amount}
+                                onChange={e => setSplitRows(prev => prev.map((r, j) => j === i ? { ...r, amount: e.target.value } : r))}
+                                placeholder="₹ Amount"
+                                style={{ flex: 1, padding: '0.28rem 0.4rem', borderRadius: 6, border: '1.5px solid #bfdbfe', fontSize: '0.7rem', fontFamily: 'Poppins,sans-serif', minWidth: 0 }}
+                              />
+                              {splitRows.length > 2 && (
+                                <button
+                                  onClick={() => setSplitRows(prev => prev.filter((_, j) => j !== i))}
+                                  style={{ background: '#fef2f2', border: 'none', borderRadius: 6, padding: '0.28rem 0.45rem', cursor: 'pointer', color: '#ef4444', fontFamily: 'Poppins,sans-serif', fontWeight: 700, fontSize: '0.75rem' }}
+                                >×</button>
+                              )}
+                            </div>
+                          ))}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.2rem' }}>
+                            <button
+                              onClick={() => setSplitRows(prev => [...prev, { method: 'cod', amount: '' }])}
+                              style={{ fontSize: '0.68rem', padding: '0.18rem 0.45rem', borderRadius: 6, background: '#f0f9ff', border: '1px dashed #60a5fa', cursor: 'pointer', fontFamily: 'Poppins,sans-serif', color: '#2563eb' }}
+                            >+ Add method</button>
+                            <span style={{ fontSize: '0.68rem', color: splitRows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0) === payModalTotal ? '#16a34a' : '#64748b', fontWeight: 600 }}>
+                              ₹{splitRows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0)} / ₹{payModalTotal}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.1rem' }}>
+                        <button
+                          onClick={() => void doDeliveredWithPayment()}
+                          disabled={payBusy}
+                          style={{ ...btn('#2563eb'), flex: 2, padding: '0.5rem', opacity: payBusy ? 0.6 : 1 }}
+                        >
+                          {payBusy ? '⏳ Processing…' : '✅ Confirm Delivery'}
+                        </button>
+                        <button
+                          onClick={() => { setPayModal(null); setUseSplit(false); }}
+                          style={{ ...btn('#e5e7eb', '#555'), flex: 1, padding: '0.5rem' }}
+                        >Cancel</button>
                       </div>
                     </div>
                   ) : (
-                    <button onClick={() => setConfirmDeliv(order.id)} style={{ ...btn('#2563eb'), width: '100%', padding: '0.65rem', borderRadius: 10, fontSize: '0.88rem' }}>
+                    <button
+                      onClick={() => openPayModal(order.id, order.total)}
+                      style={{ ...btn('#2563eb'), width: '100%', padding: '0.65rem', borderRadius: 10, fontSize: '0.88rem' }}
+                    >
                       🏠 Mark as Delivered
                     </button>
                   )
                 )}
 
                 {order.status === 'delivered' && (
+                  /* Edge case: order stuck in 'delivered' — offer manual complete */
                   <div style={{ background: '#f5f3ff', border: '1px solid #ddd6fe', borderRadius: 10, padding: '0.6rem', textAlign: 'center', fontSize: '0.78rem', color: '#7c3aed', fontWeight: 700 }}>
-                    📦 Delivered — Waiting for customer confirmation on tracking page
+                    📦 Order delivered — finalising…
                   </div>
                 )}
 
