@@ -6,6 +6,13 @@ import { NetworkBanner } from "@/components/NetworkBanner";
 export const metadata: Metadata = {
   title: "Foodie Lover — Restaurant Management",
   description: "Full restaurant management system",
+  icons: {
+    icon: [
+      { url: '/icon.svg', type: 'image/svg+xml' },
+    ],
+    shortcut: '/icon.svg',
+    apple: '/icon.svg',
+  },
 };
 
 export const viewport: Viewport = {
