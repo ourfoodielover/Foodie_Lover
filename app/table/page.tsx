@@ -204,6 +204,10 @@ function TablePageInner() {
   // Variant picker modal state
   const [variantModal, setVariantModal]   = useState<{open:boolean;item:MenuItem|null;selected:string}>({open:false,item:null,selected:''});
 
+  // ── Offers ──
+  interface OfferRule { id: string; name: string; type: 'percent'|'flat'; value: number; minOrder: number; maxDiscount: number; applyTo: 'all'|'dine-in'|'pickup'|'delivery'; active: boolean; }
+  const [offerRules, setOfferRules]       = useState<OfferRule[]>([]);
+
   // ── Orders ──
   const [orders, setOrders]               = useState<Order[]>([]);
 
@@ -230,12 +234,13 @@ function TablePageInner() {
     setDeviceId(did);
 
     void (async () => {
-      // Load menu + table capacity concurrently
+      // Load menu + table capacity + offers concurrently
       try {
         const [menuItems, allTables] = await Promise.all([
           getMenuApi(),
           getTablesApi(),
         ]);
+        fetch('/api/offers').then(r => r.json()).then(d => { if (Array.isArray(d)) setOfferRules(d); }).catch(() => {});
         setMenu(menuItems.filter(m => m.available));
         // Find this table's capacity (match by DB id or name/number)
         const match = allTables.find(
@@ -704,6 +709,17 @@ function TablePageInner() {
   const cartEntries = Object.values(cart);
   const cartTotal   = cartEntries.reduce((s, e) => s + e.variantPrice * e.qty, 0);
   const cartCount   = cartEntries.reduce((s, e) => s + e.qty, 0);
+
+  // ─── Offers helpers ────────────────────────────────────────────────────────
+  function getDineInOffers(total: number) {
+    return offerRules
+      .filter(r => r.active && (r.applyTo === 'all' || r.applyTo === 'dine-in'))
+      .map(r => {
+        const raw = r.type === 'percent' ? Math.round((total * r.value) / 100) : r.value;
+        const discountAmount = r.maxDiscount > 0 ? Math.min(raw, r.maxDiscount) : raw;
+        return { offer: r, discountAmount, qualifying: total >= r.minOrder };
+      });
+  }
 
   function updateCartQty(key: string, delta: number) {
     setCart(prev => {
@@ -1375,6 +1391,31 @@ function TablePageInner() {
               style={{ width: '100%', boxSizing: 'border-box', padding: '0.6rem 0.75rem', border: '2px solid #e5e7eb', borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '0.85rem', resize: 'none' }} />
           </div>
 
+          {/* Available Offers — informational for dine-in (discount applied by manager at billing) */}
+          {(() => {
+            const dineOffers = getDineInOffers(cartTotal);
+            if (!dineOffers.length && !getDineInOffers(cartTotal).some(x => !x.qualifying)) return null;
+            const qualifying = dineOffers.filter(x => x.qualifying);
+            const almost = offerRules
+              .filter(r => r.active && (r.applyTo === 'all' || r.applyTo === 'dine-in') && cartTotal < r.minOrder && cartTotal >= r.minOrder * 0.6)
+              .map(r => ({ offer: r, needed: r.minOrder - cartTotal }));
+            if (!qualifying.length && !almost.length) return null;
+            return (
+              <div style={{ marginBottom: '0.75rem' }}>
+                {qualifying.map(({ offer, discountAmount }) => (
+                  <div key={offer.id} style={{ background: '#f0fdf4', border: '1.5px solid #86efac', borderRadius: 10, padding: '0.5rem 0.75rem', marginBottom: '0.4rem' }}>
+                    <div style={{ fontWeight: 800, color: '#16a34a', fontSize: '0.8rem' }}>🎁 {offer.name} — Save ₹{discountAmount}</div>
+                    <div style={{ fontSize: '0.7rem', color: '#166534' }}>Will be applied at billing by staff</div>
+                  </div>
+                ))}
+                {almost.map(({ offer, needed }) => (
+                  <div key={offer.id} style={{ background: '#fffbeb', border: '1.5px solid #fde68a', borderRadius: 10, padding: '0.45rem 0.75rem', marginBottom: '0.4rem' }}>
+                    <div style={{ fontSize: '0.76rem', fontWeight: 700, color: '#92400e' }}>🛒 Add ₹{needed} more to unlock <span style={{ color: '#d97706' }}>{offer.name}</span></div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
           <div style={{ background: 'white', borderRadius: 12, padding: '0.85rem 1rem', marginBottom: '0.75rem', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', color: '#666', marginBottom: '0.25rem' }}>
               <span>{cartCount} item{cartCount !== 1 ? 's' : ''}</span><span>₹{cartTotal}</span>

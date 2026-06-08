@@ -6,6 +6,17 @@ import { getMenu, createOrder, lookupOrderByContact, MenuItem } from '@/lib/api'
 import { safeApiCall } from '@/lib/safe-api';
 import { validateIndianPhone, validateEmail, normaliseIndianPhone } from '@/lib/validation';
 
+interface OfferRule {
+  id: string;
+  name: string;
+  type: 'percent' | 'flat';
+  value: number;
+  minOrder: number;
+  maxDiscount: number;
+  applyTo: 'all' | 'dine-in' | 'pickup' | 'delivery';
+  active: boolean;
+}
+
 const CATEGORIES = [
   'All',
   'Veg Starters','Non Veg Starters',
@@ -257,9 +268,39 @@ export default function OnlineOrderPage() {
   const searchRef      = useRef<HTMLInputElement>(null);
   const categoryBarRef = useRef<HTMLDivElement>(null);
 
+  const [offerRules, setOfferRules] = useState<OfferRule[]>([]);
+
   useEffect(() => {
     getMenu().then(setMenu).catch(() => setMenu([]));
+    fetch('/api/offers').then(r => r.json()).then(d => { if (Array.isArray(d)) setOfferRules(d); }).catch(() => {});
   }, []);
+
+  /** Returns all qualifying offers for the given cart total + order type. */
+  function getOffers(total: number, orderType: string) {
+    return offerRules
+      .filter(r => r.active && (r.applyTo === 'all' || r.applyTo === orderType))
+      .map(r => {
+        const raw = r.type === 'percent' ? Math.round((total * r.value) / 100) : r.value;
+        const discountAmount = r.maxDiscount > 0 ? Math.min(raw, r.maxDiscount) : raw;
+        return { offer: r, discountAmount };
+      })
+      .filter(x => total >= x.offer.minOrder);
+  }
+
+  /** Returns the best (highest discount) qualifying offer. */
+  function getBestOffer(total: number, orderType: string) {
+    const all = getOffers(total, orderType);
+    if (!all.length) return null;
+    return all.reduce((best, x) => x.discountAmount > best.discountAmount ? x : best);
+  }
+
+  /** Teaser: offers that are close but not yet qualifying (within 40% of minOrder). */
+  function getTeaserOffers(total: number, orderType: string) {
+    return offerRules
+      .filter(r => r.active && (r.applyTo === 'all' || r.applyTo === orderType))
+      .filter(r => total < r.minOrder && total >= r.minOrder * 0.6)
+      .map(r => ({ offer: r, needed: r.minOrder - total }));
+  }
 
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
@@ -285,6 +326,9 @@ export default function OnlineOrderPage() {
 
   const cartTotal = cart.reduce((s, c) => s + c.variantPrice * c.qty, 0);
   const cartCount = cart.reduce((s, c) => s + c.qty, 0);
+  const bestOffer  = getBestOffer(cartTotal, form.type);
+  const discountAmt = bestOffer?.discountAmount ?? 0;
+  const finalTotal  = Math.max(0, cartTotal - discountAmt);
 
   function itemCartQty(itemId: string) {
     return cart.filter(c => c.itemId === itemId).reduce((s, c) => s + c.qty, 0);
@@ -429,7 +473,8 @@ export default function OnlineOrderPage() {
         phone:           normaliseIndianPhone(form.phone) ?? form.phone.trim(),
         items,
         subtotal:        cartTotal,
-        total:           cartTotal,
+        total:           finalTotal,
+        ...(discountAmt > 0 && { discount: discountAmt, discountReason: bestOffer!.offer.name }),
         deliveryAddress: form.type === 'delivery' ? form.address.trim() : undefined,
         paymentMethod:   form.payment,
         source:          'online',
@@ -965,10 +1010,40 @@ export default function OnlineOrderPage() {
             </div>
             {cart.length > 0 && (
               <div style={{ padding: '1rem 1.4rem', borderTop: '2px solid #fff5ed', background: '#fffaf7' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 900, fontSize: '1rem', marginBottom: '0.85rem', color: '#1a1a2e' }}>
-                  <span>Total</span>
-                  <span style={{ color: PRIMARY }}>₹{cartTotal}</span>
-                </div>
+                {/* Applied offer */}
+                {bestOffer && (
+                  <div style={{ background: '#f0fdf4', border: '1.5px solid #86efac', borderRadius: 10, padding: '0.5rem 0.75rem', marginBottom: '0.6rem' }}>
+                    <div style={{ fontWeight: 800, color: '#16a34a', fontSize: '0.8rem' }}>🎁 {bestOffer.offer.name}</div>
+                    <div style={{ fontSize: '0.73rem', color: '#166534' }}>−₹{bestOffer.discountAmount} discount applied</div>
+                  </div>
+                )}
+                {/* Teaser offers */}
+                {getTeaserOffers(cartTotal, form.type).map(({ offer, needed }) => (
+                  <div key={offer.id} style={{ background: '#fffbeb', border: '1.5px solid #fde68a', borderRadius: 10, padding: '0.45rem 0.75rem', marginBottom: '0.5rem' }}>
+                    <div style={{ fontSize: '0.76rem', fontWeight: 700, color: '#92400e' }}>
+                      🛒 Add ₹{needed} more for <span style={{ color: '#d97706' }}>{offer.name}</span>
+                    </div>
+                  </div>
+                ))}
+                {/* Total */}
+                {discountAmt > 0 ? (
+                  <div style={{ marginBottom: '0.75rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.84rem', color: '#888', marginBottom: '0.15rem' }}>
+                      <span>Subtotal</span><span>₹{cartTotal}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.84rem', color: '#16a34a', fontWeight: 700, marginBottom: '0.15rem' }}>
+                      <span>Discount</span><span>−₹{discountAmt}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 900, fontSize: '1rem', color: '#1a1a2e', borderTop: '2px solid #fff5ed', paddingTop: '0.35rem', marginTop: '0.25rem' }}>
+                      <span>Total</span><span style={{ color: PRIMARY }}>₹{finalTotal}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 900, fontSize: '1rem', marginBottom: '0.75rem', color: '#1a1a2e' }}>
+                    <span>Total</span>
+                    <span style={{ color: PRIMARY }}>₹{cartTotal}</span>
+                  </div>
+                )}
                 <button
                   onClick={() => { setCartOpen(false); setShowCheckout(true); }}
                   style={{ width: '100%', background: GRAD, color: 'white', border: 'none', padding: '0.8rem', borderRadius: 14, fontWeight: 800, fontSize: '1rem', cursor: 'pointer', fontFamily: 'Poppins,sans-serif', boxShadow: '0 3px 12px rgba(230,92,0,0.3)' }}
@@ -1098,8 +1173,28 @@ export default function OnlineOrderPage() {
                     <span style={{ fontWeight: 600 }}>₹{c.variantPrice * c.qty}</span>
                   </div>
                 ))}
-                <div style={{ borderTop: `2px solid ${PRIMARY}22`, marginTop: '0.5rem', paddingTop: '0.5rem', display: 'flex', justifyContent: 'space-between', fontWeight: 900, color: PRIMARY, fontSize: '1rem' }}>
-                  <span>Total</span><span>₹{cartTotal}</span>
+                {/* Applied offer row */}
+                {bestOffer && (
+                  <div style={{ marginTop: '0.4rem', background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 8, padding: '0.4rem 0.6rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#16a34a' }}>🎁 {bestOffer.offer.name}</span>
+                    <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#16a34a' }}>−₹{bestOffer.discountAmount}</span>
+                  </div>
+                )}
+                {/* Teaser offers */}
+                {getTeaserOffers(cartTotal, form.type).map(({ offer, needed }) => (
+                  <div key={offer.id} style={{ marginTop: '0.35rem', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '0.35rem 0.6rem' }}>
+                    <span style={{ fontSize: '0.73rem', fontWeight: 600, color: '#92400e' }}>🛒 Add ₹{needed} more → {offer.name}</span>
+                  </div>
+                ))}
+                <div style={{ borderTop: `2px solid ${PRIMARY}22`, marginTop: '0.5rem', paddingTop: '0.5rem' }}>
+                  {discountAmt > 0 && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem', color: '#888', marginBottom: '0.15rem' }}>
+                      <span>Subtotal</span><span>₹{cartTotal}</span>
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 900, color: PRIMARY, fontSize: '1rem' }}>
+                    <span>Total</span><span>₹{finalTotal}</span>
+                  </div>
                 </div>
               </div>
 
@@ -1108,7 +1203,7 @@ export default function OnlineOrderPage() {
                 disabled={isSubmitting}
                 style={{ width: '100%', background: isSubmitting ? '#ccc' : GRAD, color: 'white', border: 'none', padding: '0.9rem', borderRadius: 14, fontWeight: 800, fontSize: '1rem', cursor: isSubmitting ? 'not-allowed' : 'pointer', fontFamily: 'Poppins,sans-serif', boxShadow: isSubmitting ? 'none' : '0 3px 16px rgba(230,92,0,0.35)', transition: 'all 0.15s' }}
               >
-                {isSubmitting ? '⏳ Placing Order…' : `✅ Place Order — ₹${cartTotal}`}
+                {isSubmitting ? '⏳ Placing Order…' : `✅ Place Order — ₹${finalTotal}`}
               </button>
             </div>
           </div>
