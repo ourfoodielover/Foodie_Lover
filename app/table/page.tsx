@@ -19,6 +19,7 @@ import {
   recordWaiterCall,
   getLastWaiterCallAt,
   verifyTabPin,
+  verifyPersonalPin,
   createOrderEvent,
   reportNotReceived,
   resolveIssue,
@@ -32,6 +33,7 @@ import {
 // ── localStorage ─ ONLY device identity (not business data) ──────────────────
 import { getOrCreateDeviceId } from '@/lib/storage';
 import { validateEmail } from '@/lib/validation';
+import { MENU_CATEGORIES_WITH_ALL } from '@/lib/categories';
 
 // ─── TabUI — normalised tab shape used throughout this component ───────────────
 type TabStatus = 'open' | 'awaiting_payment' | 'closed';
@@ -71,15 +73,7 @@ type MenuItem    = ApiMenuItem;
 type Order       = ApiOrder;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const CATEGORIES = [
-  'All',
-  'Veg Starters','Non Veg Starters',
-  'Veg Biryani','Non Veg Biryani',
-  'Main Course Veg','Main Course Non Veg',
-  'Tandoori Specials','Rice Items',
-  'Indian Breads','Egg Specials',
-  'Pot Specials','Arabic Mandi',
-];
+const CATEGORIES = MENU_CATEGORIES_WITH_ALL;
 const BADGE_LABEL: Record<string, string> = {
   bestseller: '⭐ Bestseller', popular: '🔥 Popular',
   chef: "👨‍🍳 Chef's Special", famous: '🏆 Famous', new: '✨ New',
@@ -178,6 +172,7 @@ function TablePageInner() {
 
   // ── Resume-session mode (host returning on a different/cleared device) ──
   const [resumeMode, setResumeMode]       = useState(false);
+  const [resumeName, setResumeName]       = useState('');  // customer's own name for Mode B recovery
   const [resumePin, setResumePin]         = useState('');
   const [resumePinError, setResumePinError] = useState('');
   const [resumeBusy, setResumeBusy]       = useState(false);
@@ -397,8 +392,8 @@ function TablePageInner() {
         pin,
         email:        emailTrimmed || undefined,
       });
-      // Register device — best-effort: tab already created so don't block if this fails
-      void registerTabDevice({ tabId: apiTab.id, deviceId, customerName: name, tableId }).catch(e => {
+      // Register device with personal PIN — best-effort: tab already created so don't block if this fails
+      void registerTabDevice({ tabId: apiTab.id, deviceId, customerName: name, tableId, personalPin: pin }).catch(e => {
         console.warn('[handleStartSession] registerTabDevice failed (non-fatal):', e);
       });
       setTabId(apiTab.id);
@@ -421,6 +416,11 @@ function TablePageInner() {
     if (!name) { setNameError('Please enter your name'); return; }
     if (name.length < 2) { setNameError('Name must be at least 2 characters'); return; }
 
+    // Validate personal PIN (required for session recovery)
+    const personalPin = pinInput.trim();
+    if (!personalPin) { setPinError('Set a 4-digit PIN — you will use it to recover your session'); return; }
+    if (!/^\d{4}$/.test(personalPin)) { setPinError('PIN must be exactly 4 digits'); return; }
+
     if (!existingTabForJoin) { setView('landing'); return; }
     const joinTab = existingTabForJoin;
 
@@ -436,17 +436,8 @@ function TablePageInner() {
         return;
       }
 
-      // Verify PIN via Supabase — no localStorage needed.
-      // If the tab has a PIN set, the joiner must enter it.
-      if (apiTab.pin) {
-        const pin = pinInput.trim();
-        if (!pin) { setPinError('Enter the table PIN (ask the person who started the session)'); return; }
-        const valid = await verifyTabPin(joinTab.id, pin);
-        if (!valid) {
-          setPinError('Incorrect PIN — ask the table host for the 4-digit PIN');
-          return;
-        }
-      }
+      // No shared-PIN check needed — the QR code is the access boundary.
+      // Each customer sets their own personal PIN for individual session recovery.
 
       // Validate joiner's party size against table capacity from Supabase
       const joinerParty = Math.max(1, parseInt(joinerPartyInput) || 1);
@@ -459,11 +450,11 @@ function TablePageInner() {
         );
         return;
       }
-      // Update party_size in Supabase (replaces addPartyToTab localStorage)
+      // Update party_size in Supabase
       await updateTabApi(joinTab.id, { partySize: (apiTab.partySize ?? 0) + joinerParty });
 
-      // Register device in Supabase tab_devices (replaces registerDevice localStorage)
-      await registerTabDevice({ tabId: joinTab.id, deviceId, customerName: name, tableId });
+      // Register device with personal PIN (stored in tab_devices.personal_pin)
+      await registerTabDevice({ tabId: joinTab.id, deviceId, customerName: name, tableId, personalPin });
       setTabId(joinTab.id);
       setCustomerName(name);
       setTab(toTabUI(apiTab));
@@ -479,12 +470,15 @@ function TablePageInner() {
     }
   }
 
-  // ─── HANDLER: Resume session (host returning on cleared/different device) ─────
-  // Customer is the original session host but lost their device record.
-  // They enter their PIN to prove ownership and re-register this device.
+  // ─── HANDLER: Resume session (any customer returning on a cleared/different device) ─
+  // Each customer can enter their own name + personal PIN to independently recover their session.
+  // Falls back to tab PIN for legacy sessions (created before personal_pin support).
   async function handleResumeSession() {
     if (!existingTabForJoin) { setView('landing'); return; }
     const joinTab = existingTabForJoin;
+
+    const name = resumeName.trim();
+    if (!name) { setResumePinError('Enter the name you used when joining this table'); return; }
 
     const pin = resumePin.trim();
     if (!pin) { setResumePinError('Enter your 4-digit PIN to restore your session'); return; }
@@ -492,32 +486,36 @@ function TablePageInner() {
     setResumeBusy(true);
     setResumePinError('');
     try {
-      const valid = await verifyTabPin(joinTab.id, pin);
-      if (!valid) {
-        setResumePinError('Incorrect PIN — enter the PIN you set when starting this session');
+      // Verify via personal PIN (or fall back to tab PIN for legacy sessions)
+      const result = await verifyPersonalPin({ tableId, customerName: name, pin });
+      if (!result.ok) {
+        setResumePinError('Incorrect name or PIN — enter the name and PIN you used when joining');
         setResumeBusy(false);
         return;
       }
 
-      // PIN verified — fetch fresh tab data
+      const restoredTabId   = result.tabId ?? joinTab.id;
+      const restoredName    = result.customerName ?? name;
+
+      // Fetch fresh tab data
       const tabs   = await getTabsApi();
-      const apiTab = tabs.find(t => t.id === joinTab.id && t.status !== 'closed');
+      const apiTab = tabs.find(t => t.id === restoredTabId && t.status !== 'closed');
       if (!apiTab) {
         setResumePinError('This session has already been closed. Please start a new one.');
         setResumeBusy(false);
         return;
       }
 
-      // Re-register this device (best-effort) and restore session state
-      void registerTabDevice({ tabId: joinTab.id, deviceId, customerName: joinTab.customerName, tableId }).catch(() => {});
+      // Re-register this device with personal PIN (preserves their PIN in tab_devices)
+      void registerTabDevice({ tabId: restoredTabId, deviceId, customerName: restoredName, tableId, personalPin: pin }).catch(() => {});
 
-      setTabId(joinTab.id);
-      setCustomerName(joinTab.customerName);
+      setTabId(restoredTabId);
+      setCustomerName(restoredName);
       setTab(toTabUI(apiTab));
       confirmedRef.current = new Set<string>();
 
       // Restore waiter-call cooldown
-      const lastCallAt = await getLastWaiterCallAt(joinTab.id).catch(() => null);
+      const lastCallAt = await getLastWaiterCallAt(restoredTabId).catch(() => null);
       if (lastCallAt) {
         const elapsed = Math.floor((Date.now() - new Date(lastCallAt).getTime()) / 1000);
         setCallCooldown(Math.max(0, 60 - elapsed));
@@ -1066,7 +1064,7 @@ function TablePageInner() {
           <div style={{ display: 'flex', background: '#f5f5f5', borderRadius: 12, padding: '3px', marginBottom: '1.4rem', gap: '2px' }}>
             <button
               className="mode-tab"
-              onClick={() => { setResumeMode(false); setResumePinError(''); setResumePin(''); }}
+              onClick={() => { setResumeMode(false); setResumePinError(''); setResumePin(''); setResumeName(''); }}
               style={{
                 flex: 1, padding: '0.5rem', borderRadius: 10, border: 'none', cursor: 'pointer',
                 fontFamily: 'Poppins,sans-serif', fontWeight: 700, fontSize: '0.75rem',
@@ -1133,22 +1131,21 @@ function TablePageInner() {
                 );
               })()}
 
-              {existingTabForJoin?.tableSessionPin && (
-                <div style={{ marginBottom: '1.25rem' }}>
-                  <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>
-                    🔐 Table PIN <span style={{ fontWeight: 400, color: '#888' }}>(ask the table host)</span>
-                  </label>
-                  <input
-                    type="tel" inputMode="numeric" maxLength={4}
-                    value={pinInput}
-                    onChange={e => { setPinInput(e.target.value.replace(/\D/g, '').slice(0, 4)); setPinError(''); }}
-                    onKeyDown={e => e.key === 'Enter' && handleJoinSession()}
-                    placeholder="••••"
-                    style={{ width: '100%', boxSizing: 'border-box', padding: '0.7rem 0.9rem', border: `2px solid ${pinError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '1.1rem', outline: 'none', letterSpacing: '0.3rem', fontWeight: 700 }}
-                  />
-                  {pinError && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem' }}>{pinError}</div>}
-                </div>
-              )}
+              {/* Personal PIN — everyone sets their own PIN for session recovery */}
+              <div style={{ marginBottom: '1.25rem' }}>
+                <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>
+                  🔐 Set Your PIN <span style={{ fontWeight: 400, color: '#888' }}>(4 digits — you'll use this to recover your session)</span>
+                </label>
+                <input
+                  type="tel" inputMode="numeric" maxLength={4}
+                  value={pinInput}
+                  onChange={e => { setPinInput(e.target.value.replace(/\D/g, '').slice(0, 4)); setPinError(''); }}
+                  onKeyDown={e => e.key === 'Enter' && handleJoinSession()}
+                  placeholder="e.g. 5678"
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '0.7rem 0.9rem', border: `2px solid ${pinError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '1.1rem', outline: 'none', letterSpacing: '0.3rem', fontWeight: 700 }}
+                />
+                {pinError && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem' }}>{pinError}</div>}
+              </div>
 
               <button
                 onClick={handleJoinSession}
@@ -1162,17 +1159,33 @@ function TablePageInner() {
             </>
           )}
 
-          {/* ── MODE B: Restore my session with PIN ── */}
+          {/* ── MODE B: Restore my session with name + personal PIN ── */}
           {resumeMode && (
             <>
               <div style={{ background: 'linear-gradient(135deg,#f0f9ff,#e0f2fe)', border: '1px solid #bae6fd', borderRadius: 10, padding: '0.65rem 0.9rem', marginBottom: '1.1rem', fontSize: '0.75rem', color: '#0369a1', fontWeight: 600, lineHeight: 1.5 }}>
-                🔑 You started this session but your browser lost the connection.<br/>
-                Enter your 4-digit PIN to get back in without joining as a new person.
+                🔑 Your browser lost the connection.<br/>
+                Enter your name and PIN to get back in without joining as a new person.
               </div>
 
+              {/* Name field */}
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>
+                  Your Name
+                </label>
+                <input
+                  value={resumeName}
+                  onChange={e => { setResumeName(e.target.value); setResumePinError(''); }}
+                  onKeyDown={e => e.key === 'Enter' && !resumeBusy && handleResumeSession()}
+                  placeholder="e.g. Sarah"
+                  autoFocus={resumeMode}
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '0.7rem 0.9rem', border: `2px solid ${resumePinError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '0.95rem', outline: 'none' }}
+                />
+              </div>
+
+              {/* Personal PIN */}
               <div style={{ marginBottom: '1.25rem' }}>
                 <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>
-                  🔐 Your Session PIN
+                  🔐 Your PIN
                 </label>
                 <input
                   type="tel" inputMode="numeric" maxLength={4}
@@ -1180,7 +1193,6 @@ function TablePageInner() {
                   onChange={e => { setResumePin(e.target.value.replace(/\D/g, '').slice(0, 4)); setResumePinError(''); }}
                   onKeyDown={e => e.key === 'Enter' && !resumeBusy && handleResumeSession()}
                   placeholder="••••"
-                  autoFocus={resumeMode}
                   style={{ width: '100%', boxSizing: 'border-box', padding: '0.8rem', border: `2px solid ${resumePinError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '1.4rem', outline: 'none', letterSpacing: '0.5rem', fontWeight: 900, textAlign: 'center' }}
                 />
                 {resumePinError && (
@@ -1197,7 +1209,7 @@ function TablePageInner() {
               </button>
 
               <p style={{ textAlign: 'center', fontSize: '0.72rem', color: '#aaa', marginTop: '0.75rem', margin: '0.75rem 0 0' }}>
-                This restores your original session without adding extra guests.
+                Enter the name and PIN you used when joining this table.
               </p>
             </>
           )}

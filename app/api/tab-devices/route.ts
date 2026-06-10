@@ -73,17 +73,25 @@ export async function POST(req: NextRequest) {
 
     const rid = (body.restaurantId as string | undefined) ?? 'rest_default';
 
+    // personal_pin: the individual customer's 4-digit PIN for per-person session recovery.
+    // Falls back to '' if not supplied (backward compat with older sessions).
+    const personalPin = typeof body.personalPin === 'string' ? body.personalPin.trim() : '';
+
     // Upsert: if this device is already registered to this tab, update customer_name / joined_at.
+    // Only overwrite personal_pin if a non-empty value is supplied (avoid clearing it on re-register).
+    const upsertRow: Record<string, unknown> = {
+      id:            newId('DEV'),
+      restaurant_id: rid,
+      tab_id:        body.tabId,
+      device_id:     body.deviceId,
+      customer_name: body.customerName ?? '',
+      table_id:      body.tableId ?? null,
+      joined_at:     new Date().toISOString(),
+    };
+    if (personalPin) upsertRow.personal_pin = personalPin;
+
     const { error } = await sb.from('tab_devices').upsert(
-      {
-        id:            newId('DEV'),
-        restaurant_id: rid,
-        tab_id:        body.tabId,
-        device_id:     body.deviceId,
-        customer_name: body.customerName ?? '',
-        table_id:      body.tableId ?? null,
-        joined_at:     new Date().toISOString(),
-      },
+      upsertRow,
       { onConflict: 'tab_id,device_id' },
     );
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });

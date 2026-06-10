@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { getSession, clearSession, AuthSession } from '@/lib/auth';
 import { formatTableName } from '@/lib/format';
 import { todayMidnightIST, isToday, clockIST, fmtTime } from '@/lib/date';
+import { MENU_CATEGORIES } from '@/lib/categories';
 import {
   getTabs, getOrders, closeTab, applyTabDiscount,
   updateOrderStatus,
@@ -49,14 +50,7 @@ const STATUS_LABEL: Record<string, string> = {
   cancelled: 'Cancelled', void: 'Void',
 };
 
-const CATEGORIES = [
-  'Veg Starters','Non Veg Starters',
-  'Veg Biryani','Non Veg Biryani',
-  'Main Course Veg','Main Course Non Veg',
-  'Tandoori Specials','Rice Items',
-  'Indian Breads','Egg Specials',
-  'Pot Specials','Arabic Mandi',
-];
+const CATEGORIES = MENU_CATEGORIES;
 const BADGE_LABEL: Record<string,string> = { bestseller:'⭐ Bestseller', popular:'🔥 Popular', chef:"👨‍🍳 Chef's Special", famous:'🏆 Famous', new:'✨ New' };
 const emptyItem = (): Partial<MenuItem> => ({ category: CATEGORIES[0], name: '', desc: '', price: 0, img: '', badge: '', available: true, variants: [] });
 

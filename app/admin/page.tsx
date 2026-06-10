@@ -27,6 +27,7 @@ import {
   fmtDateLong, fmtDate, fmtTime, fmtDateTime, fmtDateTimeShort,
   getISTHour, fmtMonthYear, toISTDate,
 } from '@/lib/date';
+import { MENU_CATEGORIES } from '@/lib/categories';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 // Dine-in flow:  awaiting_waiter→pending→preparing→prepared→served→completed
@@ -36,14 +37,7 @@ import {
 const STATUS_FLOW_DINE_IN  = ['awaiting_waiter','pending','preparing','prepared','served','completed'] as const;
 const STATUS_FLOW_PICKUP   = ['pending','preparing','prepared','served','completed'] as const;
 const STATUS_FLOW_DELIVERY = ['pending','preparing','prepared','out_for_delivery','delivered','completed'] as const;
-const CATEGORIES  = [
-  'Veg Starters','Non Veg Starters',
-  'Veg Biryani','Non Veg Biryani',
-  'Main Course Veg','Main Course Non Veg',
-  'Tandoori Specials','Rice Items',
-  'Indian Breads','Egg Specials',
-  'Pot Specials','Arabic Mandi',
-];
+const CATEGORIES = MENU_CATEGORIES;
 const BADGE_LABEL : Record<string,string> = { bestseller:'⭐ Bestseller', popular:'🔥 Popular', chef:"👨‍🍳 Chef's Special", famous:'🏆 Famous', new:'✨ New' };
 const STATUS_COLOR: Record<string,string> = {
   awaiting_waiter:   '#f59e0b', pending:'#f59e0b', preparing:'#3b82f6',

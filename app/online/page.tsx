@@ -5,6 +5,7 @@ import { useState, useEffect, useRef, useCallback, FormEvent } from 'react';
 import { getMenu, createOrder, lookupOrderByContact, MenuItem } from '@/lib/api';
 import { safeApiCall } from '@/lib/safe-api';
 import { validateIndianPhone, validateEmail, normaliseIndianPhone } from '@/lib/validation';
+import { MENU_CATEGORIES_WITH_ALL } from '@/lib/categories';
 
 interface OfferRule {
   id: string;
@@ -17,15 +18,7 @@ interface OfferRule {
   active: boolean;
 }
 
-const CATEGORIES = [
-  'All',
-  'Veg Starters','Non Veg Starters',
-  'Veg Biryani','Non Veg Biryani',
-  'Main Course Veg','Main Course Non Veg',
-  'Tandoori Specials','Rice Items',
-  'Indian Breads','Egg Specials',
-  'Pot Specials','Arabic Mandi',
-];
+const CATEGORIES = MENU_CATEGORIES_WITH_ALL;
 const BADGE_CONFIG: Record<string, { label: string; bg: string; color: string }> = {
   bestseller: { label: '⭐ Bestseller', bg: '#fef3c7', color: '#d97706' },
   popular:    { label: '🔥 Popular',    bg: '#fee2e2', color: '#dc2626' },

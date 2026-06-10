@@ -677,11 +677,35 @@ export async function customerConfirmDelivery(orderId: string): Promise<Order> {
 
 export async function registerTabDevice(params: {
   tabId: string; deviceId: string; customerName: string; tableId?: string;
+  /** Individual customer's 4-digit PIN for per-person session recovery. */
+  personalPin?: string;
 }): Promise<void> {
   await apiFetch<{ ok: boolean }>('/api/tab-devices', {
     method: 'POST',
     body:   JSON.stringify({ ...params, restaurantId: rid() }),
   });
+}
+
+/**
+ * Verifies a customer's personal PIN (stored in tab_devices.personal_pin).
+ * Used by the "It's my session" Mode B recovery flow.
+ * Falls back to verifying against the shared tab PIN for legacy sessions.
+ *
+ * Returns { ok, tabId, customerName } on success.
+ */
+export async function verifyPersonalPin(params: {
+  tableId: string;
+  customerName: string;
+  pin: string;
+}): Promise<{ ok: boolean; tabId?: string; customerName?: string; error?: string }> {
+  try {
+    return await apiFetch<{ ok: boolean; tabId?: string; customerName?: string; error?: string }>(
+      '/api/tab-devices/verify',
+      { method: 'POST', body: JSON.stringify(params) },
+    );
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Unknown error' };
+  }
 }
 
 export async function getTabDevices(tabId: string): Promise<TabDevice[]> {
