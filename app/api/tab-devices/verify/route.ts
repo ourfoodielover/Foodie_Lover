@@ -1,20 +1,18 @@
 /**
  * POST /api/tab-devices/verify
  *
- * Per-customer session recovery via individual personal PIN.
- * Used by the "It's my session" Mode B flow on the table QR page.
+ * Per-customer session recovery via Name + PIN.
+ *
+ * ARCHITECTURE: every customer who orders at a table gets their OWN
+ * independent `customer_tabs` row (table_id is shared, everything else
+ * — pin, customer_name, total, discount, orders — is per-customer).
+ * So recovering a session is simply: find an open/awaiting_payment tab
+ * at this table whose customer_name + pin match what the customer enters.
  *
  * Body: { tableId: string, customerName: string, pin: string }
  *
- * Lookup strategy:
- *   1. Find an open tab for the table.
- *   2. Find a tab_devices row for that tab where:
- *        LOWER(customer_name) = LOWER(customerName)  AND  personal_pin = pin
- *   3. If not found (legacy session without personal_pin): fall back to
- *      verifying against customer_tabs.pin (shared tab/host PIN).
- *
- * Returns: { ok: true, tabId, customerName, tabDevice } on success
- *          { ok: false, error: string }               on failure
+ * Returns: { ok: true, tabId, customerName } on success
+ *          { ok: false, error: string }      on failure
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -43,10 +41,12 @@ export async function POST(req: NextRequest) {
     const sb  = getServerClient();
     const rid = process.env.NEXT_PUBLIC_RESTAURANT_ID ?? 'rest_default';
 
-    // ── Step 1: Find the open tab for this table ────────────────────────────
+    // ── Find an open/awaiting-payment tab at this table whose own
+    //    customer_name + pin match what was entered. Each tab belongs
+    //    to exactly one customer, so this is always a 1:1 match. ──────
     const { data: tabs, error: tabErr } = await sb
       .from('customer_tabs')
-      .select('id, status, customer_name, pin')
+      .select('id, status, customer_name, pin, table_id')
       .eq('restaurant_id', rid)
       .eq('table_id', tableId)
       .in('status', ['open', 'awaiting_payment']);
@@ -56,48 +56,22 @@ export async function POST(req: NextRequest) {
       return err('No active session found at this table', 404);
     }
 
-    // Most recently opened tab first (handle edge case of multiple open tabs)
-    const tab = tabs[0];
+    const nameNorm = customerName.trim().toLowerCase();
+    const pinNorm  = pin.trim();
+    const match = tabs.find(t =>
+      (t.customer_name ?? '').trim().toLowerCase() === nameNorm &&
+      (t.pin ?? '') === pinNorm,
+    );
 
-    // ── Step 2: Look up personal PIN in tab_devices ─────────────────────────
-    const { data: devices, error: devErr } = await sb
-      .from('tab_devices')
-      .select('id, device_id, customer_name, personal_pin')
-      .eq('tab_id', tab.id)
-      .ilike('customer_name', customerName.trim())
-      .eq('personal_pin', pin.trim());
-
-    if (devErr) return NextResponse.json({ ok: false, error: devErr.message }, { status: 500 });
-
-    if (devices && devices.length > 0) {
-      // Personal PIN matched — return the session
-      const device = devices[0] as { id: string; device_id: string; customer_name: string; personal_pin: string };
-      return NextResponse.json({
-        ok:           true,
-        tabId:        tab.id,
-        customerName: device.customer_name as string,
-        tabDevice:    device,
-      });
+    if (!match) {
+      return err('Incorrect name or PIN', 401);
     }
 
-    // ── Step 3: Backward-compat fallback — legacy session (no personal_pin) ─
-    // Only allow this for the session creator (whose name is in customer_tabs.customer_name)
-    // and whose PIN is the shared tab PIN.
-    if (
-      tab.pin &&
-      tab.pin === pin.trim() &&
-      (tab.customer_name ?? '').toLowerCase() === customerName.trim().toLowerCase()
-    ) {
-      return NextResponse.json({
-        ok:           true,
-        tabId:        tab.id,
-        customerName: tab.customer_name as string,
-        tabDevice:    null, // no device row to restore — caller must re-register
-      });
-    }
-
-    // Nothing matched
-    return NextResponse.json({ ok: false, error: 'Incorrect name or PIN' }, { status: 401 });
+    return NextResponse.json({
+      ok:           true,
+      tabId:        match.id,
+      customerName: match.customer_name as string,
+    });
 
   } catch (e) {
     console.error('[POST /api/tab-devices/verify]', e);

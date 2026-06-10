@@ -164,22 +164,16 @@ function TablePageInner() {
 
   // ── Welcome-back overlay ──
   const [welcomeBack, setWelcomeBack]     = useState(false);
-  const [existingTabForJoin, setExistingTabForJoin] = useState<TabUI | null>(null);
 
   // ── PIN security ──
   const [pinInput, setPinInput]           = useState('');
   const [pinError, setPinError]           = useState('');
 
-  // ── Resume-session mode (host returning on a different/cleared device) ──
-  const [resumeMode, setResumeMode]       = useState(false);
-  const [resumeName, setResumeName]       = useState('');  // customer's own name for Mode B recovery
+  // ── Resume-session ("Recover My Session" — Name + PIN) ──
+  const [resumeName, setResumeName]       = useState('');
   const [resumePin, setResumePin]         = useState('');
   const [resumePinError, setResumePinError] = useState('');
   const [resumeBusy, setResumeBusy]       = useState(false);
-
-  // ── Joiner party size ──
-  const [joinerPartyInput, setJoinerPartyInput] = useState('1');
-  const [joinerPartyError, setJoinerPartyError] = useState('');
 
   // ── Tab ──
   const [tabId, setTabId]                 = useState<string | null>(null);
@@ -283,19 +277,10 @@ function TablePageInner() {
         }
       } catch { /* treat as no existing session — fall through */ }
 
-      // ── STEP 2: Is there already an OPEN session at this table? ────────────
-      try {
-        const tabs    = await getTabsApi();
-        // sameTable() handles id/name format mismatches: "T04" ≡ "T4" ≡ "tbl_04"
-        const openTab = tabs.find(t => sameTable(t.tableId, tableId) && t.status === 'open');
-        if (openTab) {
-          setExistingTabForJoin(toTabUI(openTab));
-          setView('join');
-          return;
-        }
-      } catch {}
-
-      // ── STEP 3: No session exists — show landing form ────────────────────
+      // ── STEP 2: No active session for this device — show landing form. ─────
+      // NOTE: other customers may already have open tabs at this table — that's
+      // fine. Each customer gets their own independent session/tab; table_id
+      // is only a shared physical-location label, never a shared session.
       setView('landing');
     })();
   }, [tableId]);
@@ -374,16 +359,10 @@ function TablePageInner() {
     const party = Math.max(1, parseInt(partyInput) || 1);
 
     try {
-      // Re-check Supabase: race condition — another device may have just opened
-      const tabs    = await getTabsApi();
-      const raceTab = tabs.find(t => sameTable(t.tableId, tableId) && t.status === 'open');
-      if (raceTab) {
-        setExistingTabForJoin(toTabUI(raceTab));
-        setPinInput(''); setPinError('');
-        setView('join'); return;
-      }
-
-      // Create the tab in Supabase — PIN stored server-side in customer_tabs.pin
+      // Always create a brand-new, independent tab for this customer.
+      // table_id is shared (physical location only) — every other field
+      // (pin, customer_name, total, discount, orders) is this customer's alone.
+      // PIN stored server-side in customer_tabs.pin
       const emailTrimmed = emailInput.trim();
       const apiTab = await createTabApi({
         tableId,
@@ -410,75 +389,13 @@ function TablePageInner() {
     }
   }
 
-  // ─── HANDLER: Join existing session (new device at occupied table) ─────────
-  async function handleJoinSession() {
-    const name = nameInput.trim();
-    if (!name) { setNameError('Please enter your name'); return; }
-    if (name.length < 2) { setNameError('Name must be at least 2 characters'); return; }
-
-    // Validate personal PIN (required for session recovery)
-    const personalPin = pinInput.trim();
-    if (!personalPin) { setPinError('Set a 4-digit PIN — you will use it to recover your session'); return; }
-    if (!/^\d{4}$/.test(personalPin)) { setPinError('PIN must be exactly 4 digits'); return; }
-
-    if (!existingTabForJoin) { setView('landing'); return; }
-    const joinTab = existingTabForJoin;
-
-    try {
-      // Re-validate the session is still open in Supabase
-      const tabs   = await getTabsApi();
-      const apiTab = tabs.find(t => t.id === joinTab.id && t.status === 'open');
-      if (!apiTab) {
-        // Session closed between page load and join attempt — restart
-        setExistingTabForJoin(null);
-        setNameInput(name);
-        setView('landing');
-        return;
-      }
-
-      // No shared-PIN check needed — the QR code is the access boundary.
-      // Each customer sets their own personal PIN for individual session recovery.
-
-      // Validate joiner's party size against table capacity from Supabase
-      const joinerParty = Math.max(1, parseInt(joinerPartyInput) || 1);
-      const remaining   = Math.max(0, tableCapacity - (apiTab.partySize ?? 0));
-      if (joinerParty > remaining) {
-        setJoinerPartyError(
-          remaining === 0
-            ? 'This table is full — no more seats available'
-            : `Only ${remaining} seat${remaining !== 1 ? 's' : ''} remaining at this table`,
-        );
-        return;
-      }
-      // Update party_size in Supabase
-      await updateTabApi(joinTab.id, { partySize: (apiTab.partySize ?? 0) + joinerParty });
-
-      // Register device with personal PIN (stored in tab_devices.personal_pin)
-      await registerTabDevice({ tabId: joinTab.id, deviceId, customerName: name, tableId, personalPin });
-      setTabId(joinTab.id);
-      setCustomerName(name);
-      setTab(toTabUI(apiTab));
-      confirmedRef.current = new Set<string>();
-      setNameError('');
-      setPinError('');
-      setJoinerPartyError('');
-      setView('menu');
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Unknown error';
-      console.error('[handleJoinSession] failed:', err);
-      setNameError(`Could not join session: ${msg}. Please try again.`);
-    }
-  }
-
-  // ─── HANDLER: Resume session (any customer returning on a cleared/different device) ─
-  // Each customer can enter their own name + personal PIN to independently recover their session.
-  // Falls back to tab PIN for legacy sessions (created before personal_pin support).
+  // ─── HANDLER: Resume session (customer returning on a cleared/different device) ─
+  // Each customer's session is its own independent tab. Recovery looks up
+  // THIS table's tabs for one whose own customer_name + pin match what was
+  // entered — exactly the "Name + PIN" recovery that has always existed.
   async function handleResumeSession() {
-    if (!existingTabForJoin) { setView('landing'); return; }
-    const joinTab = existingTabForJoin;
-
     const name = resumeName.trim();
-    if (!name) { setResumePinError('Enter the name you used when joining this table'); return; }
+    if (!name) { setResumePinError('Enter the name you used when starting your order'); return; }
 
     const pin = resumePin.trim();
     if (!pin) { setResumePinError('Enter your 4-digit PIN to restore your session'); return; }
@@ -486,16 +403,15 @@ function TablePageInner() {
     setResumeBusy(true);
     setResumePinError('');
     try {
-      // Verify via personal PIN (or fall back to tab PIN for legacy sessions)
       const result = await verifyPersonalPin({ tableId, customerName: name, pin });
       if (!result.ok) {
-        setResumePinError('Incorrect name or PIN — enter the name and PIN you used when joining');
+        setResumePinError('Incorrect name or PIN — enter the name and PIN you used when starting your order');
         setResumeBusy(false);
         return;
       }
 
-      const restoredTabId   = result.tabId ?? joinTab.id;
-      const restoredName    = result.customerName ?? name;
+      const restoredTabId = result.tabId as string;
+      const restoredName  = result.customerName ?? name;
 
       // Fetch fresh tab data
       const tabs   = await getTabsApi();
@@ -506,7 +422,7 @@ function TablePageInner() {
         return;
       }
 
-      // Re-register this device with personal PIN (preserves their PIN in tab_devices)
+      // Re-link this device to the recovered tab so next visit restores instantly
       void registerTabDevice({ tabId: restoredTabId, deviceId, customerName: restoredName, tableId, personalPin: pin }).catch(() => {});
 
       setTabId(restoredTabId);
@@ -961,7 +877,7 @@ function TablePageInner() {
 
           <div style={{ marginBottom: '1rem' }}>
             <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>
-              🔐 Table PIN <span style={{ fontWeight: 400, color: '#888' }}>(4 digits — share with your group)</span>
+              🔐 Set Your PIN <span style={{ fontWeight: 400, color: '#888' }}>(4 digits — yours alone, for session recovery)</span>
             </label>
             <input
               type="tel" inputMode="numeric" maxLength={4}
@@ -1020,20 +936,24 @@ function TablePageInner() {
           </button>
 
           <p style={{ textAlign: 'center', fontSize: '0.7rem', color: '#bbb', marginTop: '0.85rem', lineHeight: 1.5 }}>
-            Your device is remembered — tap &quot;It&apos;s my session&quot; on the next visit to restore it.
+            Your device is remembered — your session restores automatically next time.
           </p>
+
+          <button
+            onClick={() => { setResumeName(''); setResumePin(''); setResumePinError(''); setView('join'); }}
+            style={{ width: '100%', marginTop: '0.9rem', padding: '0.6rem', fontSize: '0.8rem', borderRadius: 10, border: '2px solid #f1f1f1', background: 'transparent', color: '#888', cursor: 'pointer', fontFamily: 'Poppins,sans-serif', fontWeight: 700 }}
+          >
+            🔑 Already started an order here? Recover session
+          </button>
         </div>
       </div>
     );
   }
 
   // ══════════════════════════════════════════════════════════════════════════════
-  // ─── VIEW: Join (new device joining an existing session) ──────────────────────
+  // ─── VIEW: Recover session (Name + PIN — for a customer's own independent tab) ─
   // ══════════════════════════════════════════════════════════════════════════════
   if (view === 'join') {
-    const existingCustomerName = existingTabForJoin?.customerName || 'someone';
-    const guestCount = existingTabForJoin ? codiners.length : 0;
-
     return (
       <div style={{ minHeight: '100vh', background: 'linear-gradient(160deg,#1A0800 0%,#3D1C00 60%,#1A0800 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', fontFamily: 'Poppins,sans-serif' }}>
         <style>{`
@@ -1047,172 +967,64 @@ function TablePageInner() {
           {/* Header */}
           <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
             <div style={{ width: 56, height: 56, borderRadius: '50%', background: 'linear-gradient(135deg,#E65C00,#F9A826)', margin: '0 auto 0.6rem', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.6rem' }}>
-              {resumeMode ? '🔑' : '🤝'}
+              🔑
             </div>
             <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.4rem', fontWeight: 900, color: '#1A0800' }}>
-              {resumeMode ? 'Restore My Session' : `Table ${tableName || tableId}`}
+              Recover My Session
             </div>
-            {!resumeMode && (
-              <div style={{ color: '#666', fontSize: '0.82rem', marginTop: '0.3rem', lineHeight: 1.5 }}>
-                <span style={{ fontWeight: 700, color: '#E65C00' }}>{existingCustomerName}</span> has an open session here.
-                {guestCount > 1 && ` (${guestCount} at this table)`}
-              </div>
+          </div>
+
+          <div style={{ background: 'linear-gradient(135deg,#f0f9ff,#e0f2fe)', border: '1px solid #bae6fd', borderRadius: 10, padding: '0.65rem 0.9rem', marginBottom: '1.1rem', fontSize: '0.75rem', color: '#0369a1', fontWeight: 600, lineHeight: 1.5 }}>
+            🔑 Lost your session? Enter the name and PIN you used when you started your order at this table.
+          </div>
+
+          {/* Name field */}
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>
+              Your Name
+            </label>
+            <input
+              value={resumeName}
+              onChange={e => { setResumeName(e.target.value); setResumePinError(''); }}
+              onKeyDown={e => e.key === 'Enter' && !resumeBusy && handleResumeSession()}
+              placeholder="e.g. Sarah"
+              autoFocus
+              style={{ width: '100%', boxSizing: 'border-box', padding: '0.7rem 0.9rem', border: `2px solid ${resumePinError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '0.95rem', outline: 'none' }}
+            />
+          </div>
+
+          {/* Personal PIN */}
+          <div style={{ marginBottom: '1.25rem' }}>
+            <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>
+              🔐 Your PIN
+            </label>
+            <input
+              type="tel" inputMode="numeric" maxLength={4}
+              value={resumePin}
+              onChange={e => { setResumePin(e.target.value.replace(/\D/g, '').slice(0, 4)); setResumePinError(''); }}
+              onKeyDown={e => e.key === 'Enter' && !resumeBusy && handleResumeSession()}
+              placeholder="••••"
+              style={{ width: '100%', boxSizing: 'border-box', padding: '0.8rem', border: `2px solid ${resumePinError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '1.4rem', outline: 'none', letterSpacing: '0.5rem', fontWeight: 900, textAlign: 'center' }}
+            />
+            {resumePinError && (
+              <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.3rem', fontWeight: 600 }}>{resumePinError}</div>
             )}
           </div>
 
-          {/* Mode toggle tabs */}
-          <div style={{ display: 'flex', background: '#f5f5f5', borderRadius: 12, padding: '3px', marginBottom: '1.4rem', gap: '2px' }}>
-            <button
-              className="mode-tab"
-              onClick={() => { setResumeMode(false); setResumePinError(''); setResumePin(''); setResumeName(''); }}
-              style={{
-                flex: 1, padding: '0.5rem', borderRadius: 10, border: 'none', cursor: 'pointer',
-                fontFamily: 'Poppins,sans-serif', fontWeight: 700, fontSize: '0.75rem',
-                background: !resumeMode ? 'white' : 'transparent',
-                color: !resumeMode ? '#E65C00' : '#888',
-                boxShadow: !resumeMode ? '0 2px 8px rgba(0,0,0,0.1)' : 'none',
-              }}
-            >
-              🤝 Join as new person
-            </button>
-            <button
-              className="mode-tab"
-              onClick={() => { setResumeMode(true); setNameError(''); setPinError(''); }}
-              style={{
-                flex: 1, padding: '0.5rem', borderRadius: 10, border: 'none', cursor: 'pointer',
-                fontFamily: 'Poppins,sans-serif', fontWeight: 700, fontSize: '0.75rem',
-                background: resumeMode ? 'white' : 'transparent',
-                color: resumeMode ? '#1A0800' : '#888',
-                boxShadow: resumeMode ? '0 2px 8px rgba(0,0,0,0.1)' : 'none',
-              }}
-            >
-              🔑 It&apos;s my session
-            </button>
-          </div>
+          <button
+            onClick={handleResumeSession}
+            disabled={resumeBusy}
+            style={{ width: '100%', padding: '0.85rem', fontSize: '1rem', borderRadius: 12, border: 'none', cursor: resumeBusy ? 'not-allowed' : 'pointer', fontFamily: 'Poppins,sans-serif', fontWeight: 700, color: 'white', background: resumeBusy ? '#94a3b8' : 'linear-gradient(135deg,#1A0800,#3D1C00)', opacity: resumeBusy ? 0.8 : 1 }}
+          >
+            {resumeBusy ? '⏳ Verifying…' : '🔑 Restore My Session'}
+          </button>
 
-          {/* ── MODE A: Join as a new person ── */}
-          {!resumeMode && (
-            <>
-              <div style={{ background: 'linear-gradient(135deg,#fff5ee,#fef3e2)', border: '1px solid #fed7aa', borderRadius: 10, padding: '0.55rem 0.8rem', marginBottom: '1.1rem', fontSize: '0.75rem', color: '#92400e', fontWeight: 600 }}>
-                ✅ Your order will be added to the same table bill
-              </div>
-
-              <div style={{ marginBottom: '1rem' }}>
-                <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>Your Name *</label>
-                <input
-                  value={nameInput}
-                  onChange={e => { setNameInput(e.target.value); setNameError(''); }}
-                  onKeyDown={e => e.key === 'Enter' && handleJoinSession()}
-                  placeholder="e.g. Priya Sharma"
-                  autoFocus={!resumeMode}
-                  style={{ width: '100%', boxSizing: 'border-box', padding: '0.7rem 0.9rem', border: `2px solid ${nameError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '0.95rem', outline: 'none', transition: 'border-color 0.2s' }}
-                />
-                {nameError && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem' }}>{nameError}</div>}
-              </div>
-
-              {(() => {
-                const remaining = existingTabForJoin ? Math.max(0, tableCapacity - (existingTabForJoin.partySize ?? 0)) : 0;
-                return (
-                  <div style={{ marginBottom: '1rem' }}>
-                    <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>
-                      👥 How many joining? <span style={{ fontWeight: 400, color: '#888' }}>({remaining} seat{remaining !== 1 ? 's' : ''} available)</span>
-                    </label>
-                    <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-                      <input
-                        type="number" min={1} max={remaining > 0 ? remaining : 1}
-                        value={joinerPartyInput}
-                        onChange={e => { setJoinerPartyInput(e.target.value); setJoinerPartyError(''); }}
-                        style={{ width: '80px', padding: '0.7rem 0.9rem', border: `2px solid ${joinerPartyError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '0.95rem', outline: 'none', fontWeight: 700, textAlign: 'center' }}
-                      />
-                      {remaining === 0 && <span style={{ fontSize: '0.75rem', color: '#ef4444', fontWeight: 600 }}>🔴 Table full</span>}
-                    </div>
-                    {joinerPartyError && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem' }}>{joinerPartyError}</div>}
-                  </div>
-                );
-              })()}
-
-              {/* Personal PIN — everyone sets their own PIN for session recovery */}
-              <div style={{ marginBottom: '1.25rem' }}>
-                <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>
-                  🔐 Set Your PIN <span style={{ fontWeight: 400, color: '#888' }}>(4 digits — you'll use this to recover your session)</span>
-                </label>
-                <input
-                  type="tel" inputMode="numeric" maxLength={4}
-                  value={pinInput}
-                  onChange={e => { setPinInput(e.target.value.replace(/\D/g, '').slice(0, 4)); setPinError(''); }}
-                  onKeyDown={e => e.key === 'Enter' && handleJoinSession()}
-                  placeholder="e.g. 5678"
-                  style={{ width: '100%', boxSizing: 'border-box', padding: '0.7rem 0.9rem', border: `2px solid ${pinError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '1.1rem', outline: 'none', letterSpacing: '0.3rem', fontWeight: 700 }}
-                />
-                {pinError && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem' }}>{pinError}</div>}
-              </div>
-
-              <button
-                onClick={handleJoinSession}
-                style={{ width: '100%', padding: '0.85rem', fontSize: '1rem', borderRadius: 12, border: 'none', cursor: 'pointer', fontFamily: 'Poppins,sans-serif', fontWeight: 700, color: 'white', background: 'linear-gradient(135deg,#16a34a,#15803d)' }}
-              >
-                🤝 Join & Start Ordering
-              </button>
-              <p style={{ textAlign: 'center', fontSize: '0.72rem', color: '#aaa', marginTop: '0.75rem', margin: '0.75rem 0 0' }}>
-                Each person orders independently — all items on one bill.
-              </p>
-            </>
-          )}
-
-          {/* ── MODE B: Restore my session with name + personal PIN ── */}
-          {resumeMode && (
-            <>
-              <div style={{ background: 'linear-gradient(135deg,#f0f9ff,#e0f2fe)', border: '1px solid #bae6fd', borderRadius: 10, padding: '0.65rem 0.9rem', marginBottom: '1.1rem', fontSize: '0.75rem', color: '#0369a1', fontWeight: 600, lineHeight: 1.5 }}>
-                🔑 Your browser lost the connection.<br/>
-                Enter your name and PIN to get back in without joining as a new person.
-              </div>
-
-              {/* Name field */}
-              <div style={{ marginBottom: '1rem' }}>
-                <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>
-                  Your Name
-                </label>
-                <input
-                  value={resumeName}
-                  onChange={e => { setResumeName(e.target.value); setResumePinError(''); }}
-                  onKeyDown={e => e.key === 'Enter' && !resumeBusy && handleResumeSession()}
-                  placeholder="e.g. Sarah"
-                  autoFocus={resumeMode}
-                  style={{ width: '100%', boxSizing: 'border-box', padding: '0.7rem 0.9rem', border: `2px solid ${resumePinError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '0.95rem', outline: 'none' }}
-                />
-              </div>
-
-              {/* Personal PIN */}
-              <div style={{ marginBottom: '1.25rem' }}>
-                <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>
-                  🔐 Your PIN
-                </label>
-                <input
-                  type="tel" inputMode="numeric" maxLength={4}
-                  value={resumePin}
-                  onChange={e => { setResumePin(e.target.value.replace(/\D/g, '').slice(0, 4)); setResumePinError(''); }}
-                  onKeyDown={e => e.key === 'Enter' && !resumeBusy && handleResumeSession()}
-                  placeholder="••••"
-                  style={{ width: '100%', boxSizing: 'border-box', padding: '0.8rem', border: `2px solid ${resumePinError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '1.4rem', outline: 'none', letterSpacing: '0.5rem', fontWeight: 900, textAlign: 'center' }}
-                />
-                {resumePinError && (
-                  <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.3rem', fontWeight: 600 }}>{resumePinError}</div>
-                )}
-              </div>
-
-              <button
-                onClick={handleResumeSession}
-                disabled={resumeBusy}
-                style={{ width: '100%', padding: '0.85rem', fontSize: '1rem', borderRadius: 12, border: 'none', cursor: resumeBusy ? 'not-allowed' : 'pointer', fontFamily: 'Poppins,sans-serif', fontWeight: 700, color: 'white', background: resumeBusy ? '#94a3b8' : 'linear-gradient(135deg,#1A0800,#3D1C00)', opacity: resumeBusy ? 0.8 : 1 }}
-              >
-                {resumeBusy ? '⏳ Verifying…' : '🔑 Restore My Session'}
-              </button>
-
-              <p style={{ textAlign: 'center', fontSize: '0.72rem', color: '#aaa', marginTop: '0.75rem', margin: '0.75rem 0 0' }}>
-                Enter the name and PIN you used when joining this table.
-              </p>
-            </>
-          )}
+          <button
+            onClick={() => { setView('landing'); setResumePinError(''); }}
+            style={{ width: '100%', marginTop: '0.75rem', padding: '0.6rem', fontSize: '0.8rem', borderRadius: 10, border: 'none', background: 'transparent', color: '#aaa', cursor: 'pointer', fontFamily: 'Poppins,sans-serif', fontWeight: 700 }}
+          >
+            ← Back to start a new order
+          </button>
         </div>
       </div>
     );

@@ -380,7 +380,12 @@ function WaiterPageInner() {
   const pickupReadyOrders   = orders.filter(o => o.type === 'pickup' && o.status === 'prepared');
 
   // For bill-requested smart banner
-  const awaitingPaymentTabs = tabs.filter(t => t.status === 'awaiting_payment');
+  // Sorted by table_id so multiple independent customer tabs at the same
+  // physical table are grouped together for delivery/billing convenience —
+  // each tab is still its own session/bill, this is display grouping only.
+  const awaitingPaymentTabs = tabs
+    .filter(t => t.status === 'awaiting_payment')
+    .sort((a, b) => (a.tableId || '').localeCompare(b.tableId || ''));
   const tabsWithPendingFood = awaitingPaymentTabs.filter(tab =>
     orders.some(o => o.tabId === tab.id && o.status === 'prepared'),
   );
