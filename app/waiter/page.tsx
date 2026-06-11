@@ -7,6 +7,7 @@ import {
   getOrders, updateOrderStatus, getTabs, getTables, closeShift,
   getActiveWaiterCalls, acknowledgeWaiterCallById, createOrderEvent,
   getActiveIssues, startReserving,
+  confirmAndPrintOrder, rejectOrder, reprintOrder,
   CustomerTab, Order, Table, OrderIssue,
 } from '@/lib/api';
 import { useRealtime } from '@/lib/realtime-client';
@@ -260,15 +261,66 @@ function WaiterPageInner() {
   }
 
   // ── Actions ───────────────────────────────────────────────────────────────
-  async function accept(order: Order) {
+  // Confirm & Print: replaces the old kitchen-display flow. Moves the order
+  // straight to 'preparing' and queues a KOT print job for the kitchen
+  // printer via the companion print agent.
+  async function confirmAndPrint(order: Order) {
     if (actionBusy) return;
     setActionBusy(true);
     try {
-      await updateOrderStatus(order.id, 'pending', session?.name || 'Waiter');
-      setActionMsg('✅ Order accepted and sent to kitchen');
+      const result = await confirmAndPrintOrder(order.id, session?.name || 'Waiter');
+      setActionMsg(
+        result.printJobId
+          ? `🖨️ Order confirmed — KOT sent to kitchen printer`
+          : '✅ Order confirmed and sent to kitchen',
+      );
+      setTimeout(() => setActionMsg(''), 2500);
+      setSelOrder(null);
+      await refresh();
+    } catch (e) {
+      console.error(e);
+      setActionMsg(`❌ ${e instanceof Error ? e.message : 'Could not confirm order'}`);
+      setTimeout(() => setActionMsg(''), 3500);
+    }
+    finally { setActionBusy(false); }
+  }
+
+  // Reject: declines an awaiting_waiter / pending order before it's printed
+  // (e.g. item out of stock). Sets status → cancelled with the given reason.
+  async function rejectOrderAction(order: Order, reason: string) {
+    if (!reason.trim() || actionBusy) return;
+    setActionBusy(true);
+    try {
+      await rejectOrder(order.id, session?.name || 'Waiter', reason);
+      setActionMsg('🚫 Order rejected');
+      setTimeout(() => setActionMsg(''), 2500);
+      setShowCancelFor(null);
+      setCancelReason('');
+      setSelOrder(null);
+      await refresh();
+    } catch (e) {
+      console.error(e);
+      setActionMsg(`❌ ${e instanceof Error ? e.message : 'Could not reject order'}`);
+      setTimeout(() => setActionMsg(''), 3500);
+    }
+    finally { setActionBusy(false); }
+  }
+
+  // Reprint: queue another KOT for an already-confirmed order (printer jam,
+  // ran out of paper, etc). Does not change the order status.
+  async function handleReprint(order: Order) {
+    if (actionBusy) return;
+    setActionBusy(true);
+    try {
+      await reprintOrder(order.id, session?.name || 'Waiter', 'kot');
+      setActionMsg('🖨️ KOT reprint queued');
       setTimeout(() => setActionMsg(''), 2500);
       await refresh();
-    } catch (e) { console.error(e); }
+    } catch (e) {
+      console.error(e);
+      setActionMsg(`❌ ${e instanceof Error ? e.message : 'Could not queue reprint'}`);
+      setTimeout(() => setActionMsg(''), 3500);
+    }
     finally { setActionBusy(false); }
   }
 
@@ -698,8 +750,11 @@ function WaiterPageInner() {
           </div>
         ) : shown.map(order => {
           const mins = Math.floor((Date.now() - new Date(order.timestamp).getTime()) / 60000);
-          const canAccept = order.status === 'awaiting_waiter';
+          // 'pending' kept for backward-compat with any orders created before
+          // this workflow existed — they're treated the same as awaiting_waiter.
+          const canAccept = ['awaiting_waiter', 'pending'].includes(order.status);
           const canServe  = order.status === 'prepared';
+          const canReprint = ['preparing', 'prepared', 'served'].includes(order.status);
 
           // Table capacity badge for dine-in orders
           const tableRow  = order.tableId ? tables.find(t => t.id === order.tableId) : null;
@@ -762,11 +817,21 @@ function WaiterPageInner() {
                 )}
               </div>
               {/* Quick action buttons on card */}
-              {(canAccept || canServe) && (
+              {(canAccept || canServe || canReprint) && (
                 <div style={{ padding: '0 0.75rem 0.6rem', display: 'flex', gap: '0.4rem' }} onClick={e => e.stopPropagation()}>
                   {canAccept && (
-                    <button disabled={actionBusy} onClick={() => accept(order)} style={{ ...btn('#f59e0b', '#1A0800'), flex: 1, fontSize: '0.76rem', padding: '0.4rem 0.5rem', opacity: actionBusy ? 0.6 : 1 }}>
-                      ✅ Accept
+                    <>
+                      <button disabled={actionBusy} onClick={() => confirmAndPrint(order)} style={{ ...btn('#f59e0b', '#1A0800'), flex: 2, fontSize: '0.76rem', padding: '0.4rem 0.5rem', opacity: actionBusy ? 0.6 : 1 }}>
+                        🖨️ Confirm &amp; Print
+                      </button>
+                      <button disabled={actionBusy} onClick={() => { setSelOrder(order); setShowCancelFor(order.id); setCancelReason(''); }} style={{ ...btn('#fef2f2', '#dc2626'), flex: 1, fontSize: '0.76rem', padding: '0.4rem 0.5rem', border: '1px solid #fecaca', opacity: actionBusy ? 0.6 : 1 }}>
+                        🚫 Reject
+                      </button>
+                    </>
+                  )}
+                  {canReprint && !canServe && (
+                    <button disabled={actionBusy} onClick={() => handleReprint(order)} style={{ ...btn('#e5e7eb', '#444'), flex: 1, fontSize: '0.76rem', padding: '0.4rem 0.5rem', opacity: actionBusy ? 0.6 : 1 }}>
+                      🖨️ Reprint KOT
                     </button>
                   )}
                   {canServe && (
@@ -832,8 +897,32 @@ function WaiterPageInner() {
                 </div>
               )}
 
-              {/* Cancel section */}
+              {/* Reject section — for orders not yet confirmed/printed */}
               {['awaiting_waiter', 'pending'].includes(selOrder.status) && (
+                <div style={{ marginTop: '1rem' }}>
+                  {showCancelFor !== selOrder.id ? (
+                    <button onClick={() => setShowCancelFor(selOrder.id)} style={{ ...btn('#fef2f2', '#ef4444'), width: '100%', border: '1px solid #fecaca', fontSize: '0.8rem' }}>
+                      🚫 Reject Order
+                    </button>
+                  ) : (
+                    <div style={{ background: '#fef2f2', borderRadius: 10, padding: '0.75rem', border: '1px solid #fecaca' }}>
+                      <input
+                        value={cancelReason}
+                        onChange={e => setCancelReason(e.target.value)}
+                        placeholder="Reason for rejection (e.g. item out of stock)..."
+                        style={{ width: '100%', boxSizing: 'border-box', padding: '0.5rem 0.7rem', border: '2px solid #fecaca', borderRadius: 8, fontFamily: 'Poppins,sans-serif', fontSize: '0.82rem', marginBottom: '0.5rem' }}
+                      />
+                      <div style={{ display: 'flex', gap: '0.4rem' }}>
+                        <button disabled={actionBusy || !cancelReason.trim()} onClick={() => rejectOrderAction(selOrder, cancelReason)} style={{ ...btn('#ef4444'), flex: 1, fontSize: '0.8rem', opacity: (actionBusy || !cancelReason.trim()) ? 0.6 : 1 }}>Confirm Reject</button>
+                        <button onClick={() => { setShowCancelFor(null); setCancelReason(''); }} style={{ ...btn('#e5e7eb', '#555'), flex: 1, fontSize: '0.8rem' }}>Keep Order</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Cancel section — for already-confirmed (printed) orders */}
+              {['preparing', 'prepared'].includes(selOrder.status) && (
                 <div style={{ marginTop: '1rem' }}>
                   {showCancelFor !== selOrder.id ? (
                     <button onClick={() => setShowCancelFor(selOrder.id)} style={{ ...btn('#fef2f2', '#ef4444'), width: '100%', border: '1px solid #fecaca', fontSize: '0.8rem' }}>
@@ -855,14 +944,23 @@ function WaiterPageInner() {
                   )}
                 </div>
               )}
+
+              {/* Reprint — for confirmed orders */}
+              {['preparing', 'prepared', 'served'].includes(selOrder.status) && (
+                <div style={{ marginTop: '0.75rem' }}>
+                  <button disabled={actionBusy} onClick={() => handleReprint(selOrder)} style={{ ...btn('#e5e7eb', '#444'), width: '100%', fontSize: '0.8rem', opacity: actionBusy ? 0.6 : 1 }}>
+                    🖨️ Reprint KOT
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Action footer */}
-            {(selOrder.status === 'awaiting_waiter' || selOrder.status === 'prepared') && (
+            {(['awaiting_waiter', 'pending'].includes(selOrder.status) || selOrder.status === 'prepared') && (
               <div style={{ padding: '0.85rem 1.25rem', borderTop: '2px solid #f5f0e8', background: 'white' }}>
-                {selOrder.status === 'awaiting_waiter' && (
-                  <button disabled={actionBusy} onClick={() => { accept(selOrder); setSelOrder(null); }} style={{ ...btn('#f59e0b', '#1A0800'), width: '100%', padding: '0.75rem', fontSize: '0.95rem', borderRadius: 12, opacity: actionBusy ? 0.6 : 1 }}>
-                    {actionBusy ? '⏳ Processing…' : '✅ Accept & Send to Kitchen'}
+                {['awaiting_waiter', 'pending'].includes(selOrder.status) && (
+                  <button disabled={actionBusy} onClick={() => confirmAndPrint(selOrder)} style={{ ...btn('#f59e0b', '#1A0800'), width: '100%', padding: '0.75rem', fontSize: '0.95rem', borderRadius: 12, opacity: actionBusy ? 0.6 : 1 }}>
+                    {actionBusy ? '⏳ Processing…' : '🖨️ Confirm & Print to Kitchen'}
                   </button>
                 )}
                 {selOrder.status === 'prepared' && (

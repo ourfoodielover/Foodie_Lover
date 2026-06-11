@@ -3,7 +3,7 @@ import { useRouter } from 'next/navigation';
 
 const STAFF_LINKS = [
   { href: '/admin/login',    icon: '🔧', label: 'Admin',    desc: 'Dashboard & analytics',    from: '#E65C00', to: '#F9A826' },
-  { href: '/kitchen/login',  icon: '🔥', label: 'Kitchen',  desc: 'Order display & cooking',  from: '#2563eb', to: '#3b82f6' },
+  { href: '/kitchen/login',  icon: '🖨️', label: 'Kitchen',  desc: 'Printer station login',    from: '#2563eb', to: '#3b82f6' },
   { href: '/waiter/login',   icon: '🛎️', label: 'Waiter',   desc: 'Serve & manage tables',    from: '#7c3aed', to: '#8b5cf6' },
   { href: '/manager/login',  icon: '💳', label: 'Manager',  desc: 'Counter billing & payment', from: '#16a34a', to: '#22c55e' },
   { href: '/delivery/login', icon: '🛵', label: 'Delivery', desc: 'Order pickup & delivery',   from: '#0f172a', to: '#1e293b' },

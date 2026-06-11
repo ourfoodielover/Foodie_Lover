@@ -31,7 +31,11 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
 // Enforce a correct state machine server-side so no portal can put an order into
 // an illegal state. Terminal states (completed / cancelled / void) cannot be left.
 const VALID_TRANSITIONS: Record<string, string[]> = {
-  awaiting_waiter:   ['pending', 'cancelled'],
+  // 'preparing' is reached via the waiter's "Confirm & Print" action
+  // (body.action === 'confirm_and_print'), which also queues a KOT print job.
+  // 'pending' is kept for backward compatibility with any orders already in
+  // that state from before this workflow existed.
+  awaiting_waiter:   ['pending', 'preparing', 'cancelled'],
   pending:           ['preparing', 'cancelled'],
   preparing:         ['prepared', 'cancelled'],
   prepared:          ['served', 'out_for_delivery', 'completed', 'cancelled'],
@@ -207,6 +211,121 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       });
     }
 
+    // ── Waiter: Confirm & Print ───────────────────────────────────────────────
+    // The core of the new workflow: a waiter reviews an `awaiting_waiter` /
+    // `pending` order, confirms it, and a KOT print job is queued for the
+    // companion print agent. The order moves to 'preparing'. No kitchen
+    // display is involved — the printed ticket IS the kitchen's queue.
+    let confirmPrintJobId: string | undefined;
+    if (body.action === 'confirm_and_print') {
+      const { data: current, error: curErr } = await sb
+        .from('orders')
+        .select('*, order_items(*)')
+        .eq('id', id)
+        .single();
+      if (curErr || !current) {
+        return NextResponse.json({ error: 'Order not found' }, { status: 404 });
+      }
+      const currentStatus = current.status as string;
+      if (!['awaiting_waiter', 'pending'].includes(currentStatus)) {
+        return NextResponse.json(
+          { error: `Cannot confirm an order in status "${currentStatus}". Only "awaiting_waiter" or "pending" orders can be confirmed.` },
+          { status: 409 },
+        );
+      }
+
+      updates.status       = 'preparing';
+      updates.confirmed_by = body.by ?? 'Waiter';
+      updates.confirmed_at = new Date().toISOString();
+
+      await sb.from('order_events').insert([
+        { id: newId('EV'), order_id: id, event_type: 'WaiterConfirmed', performed_by: body.by ?? 'Waiter', note: body.note ?? undefined },
+        { id: newId('EV'), order_id: id, event_type: statusToEvent('preparing'), performed_by: body.by ?? 'Waiter' },
+      ]);
+
+      confirmPrintJobId = newId('PJ');
+      await sb.from('print_jobs').insert({
+        id:            confirmPrintJobId,
+        restaurant_id: rid,
+        order_id:      id,
+        job_type:      'kot',
+        status:        'queued',
+        payload:       buildKotPayload(current as Record<string, unknown>, current.order_items ?? []),
+        requested_by:  body.by ?? 'Waiter',
+        is_reprint:    false,
+      });
+      await sb.from('order_events').insert({
+        id: newId('EV'), order_id: id, event_type: 'PrintQueued',
+        performed_by: body.by ?? 'Waiter', note: `KOT job ${confirmPrintJobId}`,
+      });
+    }
+
+    // ── Waiter: Reject ────────────────────────────────────────────────────────
+    // Rejects an order before it ever reaches the kitchen. Reuses the existing
+    // cancel_reason column (same one the manager-cancel flow uses) so reporting
+    // and the customer tracking page need no changes.
+    if (body.action === 'reject') {
+      const { data: current, error: curErr } = await sb
+        .from('orders').select('status').eq('id', id).single();
+      if (curErr || !current) {
+        return NextResponse.json({ error: 'Order not found' }, { status: 404 });
+      }
+      const currentStatus = (current as Record<string, unknown>).status as string;
+      if (!['awaiting_waiter', 'pending'].includes(currentStatus)) {
+        return NextResponse.json(
+          { error: `Cannot reject an order in status "${currentStatus}". Only "awaiting_waiter" or "pending" orders can be rejected.` },
+          { status: 409 },
+        );
+      }
+      updates.status       = 'cancelled';
+      updates.cancel_reason = body.reason ?? 'Rejected by waiter';
+      updates.rejected_by  = body.by ?? 'Waiter';
+      updates.rejected_at  = new Date().toISOString();
+
+      await sb.from('order_events').insert({
+        id: newId('EV'), order_id: id, event_type: 'WaiterRejected',
+        performed_by: body.by ?? 'Waiter', note: body.reason ?? undefined,
+      });
+    }
+
+    // ── Waiter: Reprint ───────────────────────────────────────────────────────
+    // Queues another print job for an already-confirmed order — e.g. the
+    // kitchen printer jammed or ran out of paper. Does not change order status.
+    let reprintJobId: string | undefined;
+    if (body.action === 'reprint') {
+      const { data: current, error: curErr } = await sb
+        .from('orders')
+        .select('*, order_items(*)')
+        .eq('id', id)
+        .single();
+      if (curErr || !current) {
+        return NextResponse.json({ error: 'Order not found' }, { status: 404 });
+      }
+      const currentStatus = current.status as string;
+      if (['cancelled', 'void'].includes(currentStatus)) {
+        return NextResponse.json(
+          { error: `Cannot reprint a "${currentStatus}" order.` },
+          { status: 409 },
+        );
+      }
+      const jobType = body.jobType === 'receipt' ? 'receipt' : 'kot';
+      reprintJobId = newId('PJ');
+      await sb.from('print_jobs').insert({
+        id:            reprintJobId,
+        restaurant_id: rid,
+        order_id:      id,
+        job_type:      jobType,
+        status:        'queued',
+        payload:       buildKotPayload(current as Record<string, unknown>, current.order_items ?? []),
+        requested_by:  body.by ?? 'Waiter',
+        is_reprint:    true,
+      });
+      await sb.from('order_events').insert({
+        id: newId('EV'), order_id: id, event_type: 'Reprinted',
+        performed_by: body.by ?? 'Waiter', note: `${jobType} reprint job ${reprintJobId}`,
+      });
+    }
+
     const { error: updErr } = await sb.from('orders').update(updates).eq('id', id);
     if (updErr) throw updErr;
 
@@ -232,6 +351,9 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       body.status === 'delivered'           ? 'order_delivered'        :
       body.status === 'completed'           ? 'payment_completed'      :
       body.action  === 'customer_confirm'   ? 'payment_completed'      :
+      body.action  === 'confirm_and_print'  ? 'order_confirmed'        :
+      body.action  === 'reject'             ? 'order_rejected'         :
+      body.action  === 'reprint'            ? 'print_job_queued'       :
       'order_status_changed';
     await broadcast(rid, event, order);
 
@@ -282,12 +404,45 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       );
     }
 
-    return NextResponse.json(order);
+    return NextResponse.json({
+      ...order,
+      ...(confirmPrintJobId ? { printJobId: confirmPrintJobId } : {}),
+      ...(reprintJobId      ? { printJobId: reprintJobId }      : {}),
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[PATCH /api/orders/[id]] unexpected error:', err);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
+}
+
+// ── KOT payload builder ────────────────────────────────────────────────────────
+// Builds the JSON snapshot stored in print_jobs.payload. The companion print
+// agent reads this and renders an ESC/POS 80mm ticket — see
+// print-agent/README.md for the full template. Keeping this as plain JSON
+// (rather than pre-rendered ESC/POS bytes) means the ticket layout can be
+// changed on the print-agent side without a DB migration or API change.
+function buildKotPayload(
+  order: Record<string, unknown>,
+  items: Record<string, unknown>[],
+): Record<string, unknown> {
+  return {
+    orderId:        order.id,
+    orderNumber:    order.order_number,
+    type:           order.type,
+    tableId:        order.table_id ?? null,
+    customerName:   order.customer_name ?? null,
+    deliveryAddress: order.delivery_address ?? null,
+    items: (items ?? [])
+      .slice()
+      .sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')))
+      .map(i => ({
+        name: i.name,
+        qty:  i.qty,
+      })),
+    notes:     undefined,
+    createdAt: new Date().toISOString(),
+  };
 }
 
 function statusToEvent(status: string): string {

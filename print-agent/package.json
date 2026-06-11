@@ -1,0 +1,18 @@
+{
+  "name": "foodie-lover-print-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Companion print agent for Foodie Lover POS — polls /api/print-jobs and prints KOTs/receipts to a LAN ESC/POS thermal printer.",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test-print": "node index.js --test-print"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

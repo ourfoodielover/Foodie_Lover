@@ -298,6 +298,55 @@ export async function updateOrderStatus(
   });
 }
 
+// ─── Waiter Confirmation + Printing Workflow ─────────────────────────────────
+
+/**
+ * confirmAndPrintOrder — waiter approves an `awaiting_waiter` / `pending`
+ * order. Moves it to 'preparing' and queues a KOT print job for the
+ * companion print agent. Returns the updated order plus `printJobId`.
+ */
+export async function confirmAndPrintOrder(
+  id: string,
+  by: string,
+  note?: string,
+): Promise<Order & { printJobId?: string }> {
+  return apiFetch<Order & { printJobId?: string }>(`/api/orders/${id}`, {
+    method: 'PATCH',
+    body:   JSON.stringify({ action: 'confirm_and_print', by, note }),
+  });
+}
+
+/**
+ * rejectOrder — waiter declines an `awaiting_waiter` / `pending` order
+ * before it reaches the kitchen (e.g. item out of stock). Sets status to
+ * 'cancelled' with the given reason.
+ */
+export async function rejectOrder(
+  id: string,
+  by: string,
+  reason: string,
+): Promise<Order> {
+  return apiFetch<Order>(`/api/orders/${id}`, {
+    method: 'PATCH',
+    body:   JSON.stringify({ action: 'reject', by, reason }),
+  });
+}
+
+/**
+ * reprintOrder — queues another KOT (or receipt) print job for an order
+ * that has already been confirmed, e.g. the kitchen printer jammed.
+ */
+export async function reprintOrder(
+  id: string,
+  by: string,
+  jobType: 'kot' | 'receipt' = 'kot',
+): Promise<Order & { printJobId?: string }> {
+  return apiFetch<Order & { printJobId?: string }>(`/api/orders/${id}`, {
+    method: 'PATCH',
+    body:   JSON.stringify({ action: 'reprint', by, jobType }),
+  });
+}
+
 export async function applyDiscount(
   id:     string,
   amount: number,

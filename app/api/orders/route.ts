@@ -172,7 +172,14 @@ export async function POST(req: NextRequest) {
 
     const id    = newId('ORD');
     const num   = await nextOrderNum(sb, rid);
-    const status = body.type === 'dine-in' ? 'awaiting_waiter' : 'pending';
+    // ── Waiter-confirmation workflow ──────────────────────────────────────────
+    // ALL new orders (dine-in, pickup, delivery, online) now start in
+    // 'awaiting_waiter'. The kitchen no longer has a live digital queue —
+    // a waiter must review and "Confirm & Print" the order before it moves to
+    // 'preparing' and a KOT print job is queued (see /api/orders/[id] PATCH
+    // action: 'confirm_and_print'). This is a superset of the previous
+    // dine-in-only behavior, so existing dine-in flows are unaffected.
+    const status = 'awaiting_waiter';
     const trackingToken = body.trackingToken
       ?? (body.source === 'online' ? newId('TRK') : null);
 

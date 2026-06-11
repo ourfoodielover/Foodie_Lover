@@ -34,9 +34,13 @@ import { MENU_CATEGORIES } from '@/lib/categories';
 // Pickup flow:   pending→preparing→prepared→served→completed   (same as dine-in after accepted)
 // Delivery flow: pending→preparing→prepared→out_for_delivery→delivered→completed
 // NOTE: awaiting_waiter is prepended for dine-in so admin can accept the order if waiter is unavailable.
+// All order types now start at 'awaiting_waiter' — a waiter must
+// "Confirm & Print" before an order moves to 'preparing'. These flows let the
+// admin history table's "advance" button step a stuck order forward manually
+// (it's a plain status PATCH, not a print-triggering confirm).
 const STATUS_FLOW_DINE_IN  = ['awaiting_waiter','pending','preparing','prepared','served','completed'] as const;
-const STATUS_FLOW_PICKUP   = ['pending','preparing','prepared','served','completed'] as const;
-const STATUS_FLOW_DELIVERY = ['pending','preparing','prepared','out_for_delivery','delivered','completed'] as const;
+const STATUS_FLOW_PICKUP   = ['awaiting_waiter','pending','preparing','prepared','served','completed'] as const;
+const STATUS_FLOW_DELIVERY = ['awaiting_waiter','pending','preparing','prepared','out_for_delivery','delivered','completed'] as const;
 const CATEGORIES = MENU_CATEGORIES;
 const BADGE_LABEL : Record<string,string> = { bestseller:'⭐ Bestseller', popular:'🔥 Popular', chef:"👨‍🍳 Chef's Special", famous:'🏆 Famous', new:'✨ New' };
 const STATUS_COLOR: Record<string,string> = {

@@ -460,6 +460,7 @@ function TrackInner() {
 
   // Type-specific status message — no "Delivery confirmed" for pickup orders
   const estMsg =
+    order.status === 'awaiting_waiter'                            ? 'Order received — confirming with the restaurant…' :
     (order.status === 'pending' || order.status === 'preparing') ? 'Est. 20–30 min remaining' :
     order.status === 'prepared' && orderType === 'pickup'         ? 'Ready! Please collect from counter 🏪' :
     order.status === 'prepared' && orderType === 'delivery'       ? 'Being dispatched shortly…' :
