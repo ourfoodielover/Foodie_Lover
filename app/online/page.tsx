@@ -263,6 +263,18 @@ export default function OnlineOrderPage() {
 
   const [offerRules, setOfferRules] = useState<OfferRule[]>([]);
 
+  // ── Reward coupon state ──
+  const [couponCode,    setCouponCode]    = useState('');
+  const [couponEmail,   setCouponEmail]   = useState('');
+  const [couponPhone,   setCouponPhone]   = useState('');
+  const [couponBusy,    setCouponBusy]    = useState(false);
+  const [couponMsg,     setCouponMsg]     = useState('');
+  const [couponOpen,    setCouponOpen]    = useState(false);
+  const [appliedCoupon, setAppliedCoupon] = useState<{
+    couponId: string; couponCode: string; label: string;
+    discountAmount: number; finalTotal: number;
+  } | null>(null);
+
   useEffect(() => {
     getMenu().then(setMenu).catch(() => setMenu([]));
     fetch('/api/offers').then(r => r.json()).then(d => { if (Array.isArray(d)) setOfferRules(d); }).catch(() => {});
@@ -320,8 +332,8 @@ export default function OnlineOrderPage() {
   const cartTotal = cart.reduce((s, c) => s + c.variantPrice * c.qty, 0);
   const cartCount = cart.reduce((s, c) => s + c.qty, 0);
   const bestOffer  = getBestOffer(cartTotal, form.type);
-  const discountAmt = bestOffer?.discountAmount ?? 0;
-  const finalTotal  = Math.max(0, cartTotal - discountAmt);
+  const discountAmt = appliedCoupon ? appliedCoupon.discountAmount : (bestOffer?.discountAmount ?? 0);
+  const finalTotal  = appliedCoupon ? appliedCoupon.finalTotal : Math.max(0, cartTotal - (bestOffer?.discountAmount ?? 0));
 
   function itemCartQty(itemId: string) {
     return cart.filter(c => c.itemId === itemId).reduce((s, c) => s + c.qty, 0);
@@ -431,6 +443,56 @@ export default function OnlineOrderPage() {
     btn?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
   }
 
+  async function handleApplyCoupon() {
+    if (!couponCode || !couponEmail || !couponPhone) {
+      setCouponMsg('Please fill in coupon code, email, and phone');
+      return;
+    }
+    setCouponBusy(true);
+    setCouponMsg('');
+    try {
+      const subtotal = cart.reduce((s, i) => s + i.variantPrice * i.qty, 0);
+      const res = await fetch('/api/rewards/validate-coupon', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          couponCode: couponCode.trim().toUpperCase(),
+          email: couponEmail,
+          phone: couponPhone,
+          orderSubtotal: subtotal,
+          orderType: form.type,
+        }),
+      });
+      const data = await res.json() as {
+        valid: boolean;
+        reason?: string;
+        couponId?: string;
+        couponCode?: string;
+        label?: string;
+        discountAmount?: number;
+        finalTotal?: number;
+      };
+      if (data.valid && data.couponId && data.couponCode && data.label !== undefined) {
+        setAppliedCoupon({
+          couponId: data.couponId,
+          couponCode: data.couponCode,
+          label: data.label,
+          discountAmount: data.discountAmount ?? 0,
+          finalTotal: data.finalTotal ?? subtotal,
+        });
+        setCouponMsg('');
+      } else {
+        setCouponMsg(data.reason ?? 'Invalid coupon');
+        setAppliedCoupon(null);
+      }
+    } catch (err) {
+      console.error(err);
+      setCouponMsg('Error validating coupon');
+    } finally {
+      setCouponBusy(false);
+    }
+  }
+
   async function placeOrder() {
     if (submittingRef.current || isSubmitting) return;
 
@@ -467,7 +529,17 @@ export default function OnlineOrderPage() {
         items,
         subtotal:        cartTotal,
         total:           finalTotal,
-        ...(discountAmt > 0 && { discount: discountAmt, discountReason: bestOffer!.offer.name }),
+        ...(appliedCoupon
+          ? {
+              discount:        appliedCoupon.discountAmount,
+              discountReason:  `Coupon: ${appliedCoupon.label}`,
+              coupon_id:       appliedCoupon.couponId,
+              coupon_code:     appliedCoupon.couponCode,
+              coupon_discount: appliedCoupon.discountAmount,
+            }
+          : discountAmt > 0
+            ? { discount: discountAmt, discountReason: bestOffer!.offer.name }
+            : {}),
         deliveryAddress: form.type === 'delivery' ? form.address.trim() : undefined,
         paymentMethod:   form.payment,
         source:          'online',
@@ -482,6 +554,8 @@ export default function OnlineOrderPage() {
         setCart([]);
         setShowCheckout(false);
         setOrderPlaced(true);
+        setAppliedCoupon(null);
+        setCouponCode(''); setCouponEmail(''); setCouponPhone(''); setCouponMsg('');
         setForm({ name: '', phone: '', email: '', type: 'pickup', address: '', payment: 'cod' });
         setFormErrors({ name: '', phone: '', email: '', address: '' });
       } else if (result.data) {
@@ -490,9 +564,19 @@ export default function OnlineOrderPage() {
           ? `/track?id=${savedOrder.id}&token=${savedOrder.trackingToken}` : '';
         setLastOrderId(savedOrder.id);
         setLastTrackUrl(trackUrl);
+        // Reserve the coupon against the new order
+        if (appliedCoupon && savedOrder.id) {
+          fetch('/api/rewards/reserve-coupon', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ couponId: appliedCoupon.couponId, orderId: savedOrder.id }),
+          }).catch(console.error);
+        }
         setCart([]);
         setShowCheckout(false);
         setOrderPlaced(true);
+        setAppliedCoupon(null);
+        setCouponCode(''); setCouponEmail(''); setCouponPhone(''); setCouponMsg('');
         setForm({ name: '', phone: '', email: '', type: 'pickup', address: '', payment: 'cod' });
         setFormErrors({ name: '', phone: '', email: '', address: '' });
       } else {
@@ -1189,6 +1273,56 @@ export default function OnlineOrderPage() {
                     <span>Total</span><span>₹{finalTotal}</span>
                   </div>
                 </div>
+              </div>
+
+              {/* ── Reward Coupon ─────────────────────────────────────── */}
+              <div style={{ marginBottom: '1rem', border: '1.5px solid #e5e7eb', borderRadius: 12, padding: '0.9rem' }}>
+                <button
+                  type="button"
+                  onClick={() => setCouponOpen(o => !o)}
+                  style={{ background: 'none', border: 'none', fontWeight: 700, fontSize: '0.85rem', color: '#7c3aed', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.3rem', padding: 0, fontFamily: 'Poppins,sans-serif' }}
+                >
+                  🎟 Have a reward coupon? {couponOpen ? '▲' : '▼'}
+                </button>
+                {couponOpen && (
+                  <div style={{ marginTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    <input
+                      value={couponCode}
+                      onChange={e => setCouponCode(e.target.value.toUpperCase())}
+                      placeholder="Coupon code (e.g. RWD-ABCD1234)"
+                      style={{ padding: '0.6rem 0.75rem', border: '1.5px solid #e5e7eb', borderRadius: 8, fontFamily: 'monospace', fontSize: '0.9rem', outline: 'none' }}
+                    />
+                    <input
+                      value={couponEmail}
+                      onChange={e => setCouponEmail(e.target.value)}
+                      placeholder="Email linked to coupon"
+                      type="email"
+                      style={{ padding: '0.6rem 0.75rem', border: '1.5px solid #e5e7eb', borderRadius: 8, fontFamily: 'Poppins,sans-serif', fontSize: '0.85rem', outline: 'none' }}
+                    />
+                    <input
+                      value={couponPhone}
+                      onChange={e => setCouponPhone(e.target.value)}
+                      placeholder="Phone linked to coupon"
+                      type="tel"
+                      style={{ padding: '0.6rem 0.75rem', border: '1.5px solid #e5e7eb', borderRadius: 8, fontFamily: 'Poppins,sans-serif', fontSize: '0.85rem', outline: 'none' }}
+                    />
+                    <button
+                      onClick={() => void handleApplyCoupon()}
+                      disabled={couponBusy}
+                      style={{ padding: '0.65rem', background: couponBusy ? '#c4b5fd' : '#7c3aed', color: 'white', border: 'none', borderRadius: 8, fontWeight: 700, fontSize: '0.85rem', cursor: couponBusy ? 'not-allowed' : 'pointer', fontFamily: 'Poppins,sans-serif' }}
+                    >
+                      {couponBusy ? 'Validating…' : 'Apply Coupon'}
+                    </button>
+                    {couponMsg && <p style={{ fontSize: '0.78rem', color: '#ef4444', margin: 0, fontWeight: 600 }}>{couponMsg}</p>}
+                    {appliedCoupon && (
+                      <div style={{ background: '#f0fdf4', border: '1.5px solid #86efac', borderRadius: 8, padding: '0.6rem 0.8rem' }}>
+                        <p style={{ fontWeight: 800, color: '#16a34a', fontSize: '0.82rem', margin: '0 0 0.2rem' }}>✓ {appliedCoupon.label} applied!</p>
+                        <p style={{ fontSize: '0.78rem', color: '#555', margin: '0 0 0.2rem' }}>Discount: −₹{appliedCoupon.discountAmount}</p>
+                        <button onClick={() => { setAppliedCoupon(null); setCouponMsg(''); }} style={{ fontSize: '0.7rem', color: '#ef4444', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}>Remove</button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               <button

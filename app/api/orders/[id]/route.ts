@@ -2,7 +2,7 @@
 // PATCH /api/orders/[id]  — update order (status / discount / payment / items)
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId, rowToOrder, broadcast } from '@/lib/supabase-server';
-import { enqueueReceiptEmail, sendReceiptEmail, sendOrderReadyEmail } from '@/lib/email-server';
+import { enqueueReceiptEmail, sendReceiptEmail, sendOrderReadyEmail, sendOrderConfirmationEmail, sendOutForDeliveryEmail } from '@/lib/email-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -115,6 +115,25 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
         }
         if (body.status === 'delivered') {
           updates.delivered_at = new Date().toISOString();
+        }
+
+        // ── Coupon: release reserved coupon if order is cancelled ──────────
+        if (body.status === 'cancelled') {
+          const { data: cancelledOrder } = await sb
+            .from('orders')
+            .select('coupon_id')
+            .eq('id', id)
+            .single();
+          if (cancelledOrder?.coupon_id) {
+            sb.from('reward_coupons').update({
+              status: 'active',
+              reserved_order_id: null,
+              reserved_at: null,
+            }).eq('id', cancelledOrder.coupon_id as string)
+              .eq('reserved_order_id', id)
+              .eq('status', 'reserved')
+              .then(() => {});
+          }
         }
 
         // Log every status transition as an event (full audit trail)
@@ -247,6 +266,15 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
         { id: newId('EV'), order_id: id, event_type: 'WaiterConfirmed', performed_by: body.by ?? 'Waiter', note: body.note ?? undefined },
         { id: newId('EV'), order_id: id, event_type: statusToEvent('preparing'), performed_by: body.by ?? 'Waiter' },
       ]);
+
+      // ── Tertiary: send confirmation email for pickup/delivery (fire-and-forget) ─
+      // Confirmation is sent HERE (after waiter confirms) not on order creation,
+      // because orders start in 'awaiting_waiter' and may be rejected.
+      if (['pickup', 'delivery', 'online'].includes(current.type as string)) {
+        sendOrderConfirmationEmail(id).catch(err =>
+          console.error(`[confirm_and_print] confirmation email error for ${id}:`, err),
+        );
+      }
 
       // ── Secondary: queue a KOT print job (non-fatal if it fails) ─────────
       // A print failure must not prevent the order from reaching the kitchen
@@ -399,15 +427,43 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       );
     }
 
+    // ── "Out for delivery" notification ─────────────────────────────────────
+    if (!isIdempotent && body.status === 'out_for_delivery' && order.customerEmail) {
+      sendOutForDeliveryEmail(id).catch(err =>
+        console.error(`[PATCH /api/orders/[id]] out_for_delivery email error for ${id}:`, err),
+      );
+    }
+
+    // ── Coupon redemption on payment completion ──────────────────────────────
+    // Mark the reserved coupon as redeemed when the order is paid.
+    const isNowComplete =
+      body.status === 'completed' ||
+      body.action === 'customer_confirm' ||
+      body.status === 'delivered';
+
+    if (isNowComplete) {
+      const { data: paidOrder } = await sb
+        .from('orders')
+        .select('coupon_id, coupon_discount')
+        .eq('id', id)
+        .single();
+      if (paidOrder?.coupon_id) {
+        sb.from('reward_coupons').update({
+          status: 'redeemed',
+          redeemed_order_id: id,
+          redeemed_at: new Date().toISOString(),
+          discount_given: paidOrder.coupon_discount ?? 0,
+        }).eq('id', paidOrder.coupon_id as string)
+          .eq('status', 'reserved')
+          .then(() => {});
+      }
+    }
+
     // ── Receipt email — immediate send with queue fallback ───────────────────
     // Send immediately so the customer gets the receipt right away.
     // If the Resend call fails transiently, fall back to enqueueReceiptEmail()
     // so an admin can flush the retry queue manually via /api/email/process-queue.
     // No cron dependency — the POS flow never blocks on email delivery.
-    const isNowComplete =
-      body.status === 'completed' ||
-      body.action === 'customer_confirm' ||
-      body.status === 'delivered'; // delivery orders: send receipt on delivery, not just on completed
 
     if (isNowComplete && order.customerEmail) {
       sendReceiptEmail(id).then(result => {

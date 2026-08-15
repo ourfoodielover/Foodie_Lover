@@ -81,7 +81,7 @@ export default function AdminPage() {
   const [authChecked, setAuthChecked]   = useState(false);
 
   // ── Navigation ──
-  type Section = 'overview'|'orders'|'sales'|'menu'|'offers'|'tables'|'fraud'|'staff'|'email';
+  type Section = 'overview'|'orders'|'sales'|'menu'|'offers'|'tables'|'fraud'|'staff'|'email'|'feedback'|'spin'|'rewards_audit';
   const [section, setSection] = useState<Section>('overview');
 
   // ── Tabs / filters ──
@@ -223,6 +223,25 @@ export default function AdminPage() {
   const [offerForm,      setOfferForm]      = useState<Omit<OfferRule,'id'>>({ name:'', type:'percent', value:10, minOrder:0, maxDiscount:0, applyTo:'all', active:true });
   const [offerMsg,       setOfferMsg]       = useState('');
   const [offerBusy,      setOfferBusy]      = useState(false);
+
+  // ── Feedback section state ──
+  interface FeedbackRow { id: string; order_id: string; rating: number; comment?: string; created_at: string; orders?: { order_number: number; type: string; customer_name: string; total: number; created_at: string } }
+  const [feedbackRows,   setFeedbackRows]   = useState<FeedbackRow[]>([]);
+  const [feedbackLoaded, setFeedbackLoaded] = useState(false);
+
+  // ── Spin & Win admin state ──
+  interface SpinRewardRow { id: string; label: string; reward_type: string; reward_value: number; weight: number; min_next_order: number; expires_days: number; active: boolean; sort_order: number }
+  interface SpinConfigRow { enabled: boolean; min_order_amount: number; eligible_order_types: string[]; require_email: boolean; require_phone: boolean }
+  const [spinConfig,     setSpinConfig]     = useState<SpinConfigRow>({ enabled: false, min_order_amount: 500, eligible_order_types: ['dine-in','pickup','delivery'], require_email: true, require_phone: true });
+  const [spinRewards,    setSpinRewards]    = useState<SpinRewardRow[]>([]);
+  const [spinLoaded,     setSpinLoaded]     = useState(false);
+  const [spinMsg,        setSpinMsg]        = useState('');
+  const [spinRewardForm, setSpinRewardForm] = useState<Omit<SpinRewardRow,'id'>>({ label: '', reward_type: 'percent', reward_value: 10, weight: 1, min_next_order: 0, expires_days: 30, active: true, sort_order: 0 });
+
+  // ── Rewards audit state ──
+  interface AuditRow { id: string; coupon_code: string; label: string; reward_type: string; reward_value: number; status: string; customer_email: string; customer_phone: string; issued_at: string; expires_at: string; redeemed_at?: string; discount_given?: number; spin_results?: { customer_email: string; spun_at: string }; source_order?: { order_number: number; type: string; total: number } }
+  const [auditRows,      setAuditRows]      = useState<AuditRow[]>([]);
+  const [auditLoaded,    setAuditLoaded]    = useState(false);
 
   // ── Data refresh ──
   const refresh = useCallback(async () => {
@@ -1036,8 +1055,11 @@ export default function AdminPage() {
         <NavBtn id="offers"   label="🎁 Offers"           />
         <NavBtn id="tables"   label="🪑 Tables"           />
         <NavBtn id="fraud"    label="🔍 Transparency"     />
-        <NavBtn id="staff"    label="👥 Staff"            />
-        <NavBtn id="email"    label="📧 Email"            />
+        <NavBtn id="staff"         label="👥 Staff"           />
+        <NavBtn id="email"         label="📧 Email"           />
+        <NavBtn id="feedback"      label="⭐ Feedback"        />
+        <NavBtn id="spin"          label="🎡 Spin & Win"      />
+        <NavBtn id="rewards_audit" label="🎟 Rewards Audit"   />
       </div>
 
       <div style={{maxWidth:'1400px',margin:'0 auto',padding:'1rem 1rem 1.5rem',paddingLeft:'max(1rem, env(safe-area-inset-left,0px))',paddingRight:'max(1rem, env(safe-area-inset-right,0px))'}}>
@@ -2617,6 +2639,244 @@ export default function AdminPage() {
               6. Flush the retry queue via: <code>GET /api/email/process-queue</code> (with Authorization header)
             </div>
           </div>
+        </>}
+
+        {/* ═══════════ FEEDBACK ═══════════ */}
+        {section==='feedback' && <>
+          <div style={{fontFamily:"'Playfair Display',serif",fontWeight:700,fontSize:'1.15rem',marginBottom:'1rem',color:'#1A0800'}}>⭐ Customer Feedback</div>
+          <button
+            style={{...btn(),marginBottom:'1rem'}}
+            onClick={async()=>{
+              const r = await fetch('/api/admin/feedback');
+              const d = await r.json() as FeedbackRow[];
+              setFeedbackRows(d);
+              setFeedbackLoaded(true);
+            }}
+          >{feedbackLoaded ? '🔄 Refresh' : '📥 Load Feedback'}</button>
+          {feedbackLoaded && (
+            <div style={{overflowX:'auto'}}>
+              {feedbackRows.length === 0
+                ? <p style={{color:'#888',fontSize:'0.85rem'}}>No feedback yet.</p>
+                : <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.82rem'}}>
+                  <thead><tr style={{background:'#fff5ed'}}>
+                    {['Date','Order #','Customer','Type','Rating','Comment'].map(h=><th key={h} style={{padding:'0.5rem 0.75rem',textAlign:'left',fontWeight:700,color:'#6B5246',fontSize:'0.72rem',textTransform:'uppercase'}}>{h}</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {feedbackRows.map(f=>(
+                      <tr key={f.id} style={{borderBottom:'1px solid #f5f0e8'}}>
+                        <td style={{padding:'0.45rem 0.75rem',whiteSpace:'nowrap' as const}}>{fmtDateTimeShort(f.created_at)}</td>
+                        <td style={{padding:'0.45rem 0.75rem'}}>#{f.orders?.order_number ?? '—'}</td>
+                        <td style={{padding:'0.45rem 0.75rem'}}>{f.orders?.customer_name ?? '—'}</td>
+                        <td style={{padding:'0.45rem 0.75rem'}}>{f.orders?.type ?? '—'}</td>
+                        <td style={{padding:'0.45rem 0.75rem',fontWeight:800,color:'#E65C00'}}>{'⭐'.repeat(f.rating)}</td>
+                        <td style={{padding:'0.45rem 0.75rem',color:'#555',maxWidth:300}}>{f.comment || <span style={{color:'#bbb'}}>—</span>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              }
+            </div>
+          )}
+        </>}
+
+        {/* ═══════════ SPIN & WIN ═══════════ */}
+        {section==='spin' && <>
+          <div style={{fontFamily:"'Playfair Display',serif",fontWeight:700,fontSize:'1.15rem',marginBottom:'1rem',color:'#1A0800'}}>🎡 Spin & Win Configuration</div>
+          <button
+            style={{...btn(),marginBottom:'1rem'}}
+            onClick={async()=>{
+              const [cfgRes, rwdRes] = await Promise.all([
+                fetch('/api/admin/spin-config').then(r=>r.json()),
+                fetch('/api/admin/spin-rewards').then(r=>r.json()),
+              ]);
+              setSpinConfig(cfgRes as SpinConfigRow);
+              setSpinRewards(rwdRes as SpinRewardRow[]);
+              setSpinLoaded(true);
+            }}
+          >{spinLoaded ? '🔄 Refresh' : '📥 Load Config'}</button>
+
+          {spinLoaded && <>
+            {/* Config form */}
+            <div style={{...card('#7c3aed'),marginBottom:'1rem'}}>
+              <h3 style={{margin:'0 0 1rem',fontWeight:700,color:'#1A0800',fontSize:'1rem'}}>Global Settings</h3>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'0.75rem',marginBottom:'1rem'}}>
+                <label style={{display:'flex',alignItems:'center',gap:'0.5rem',fontSize:'0.85rem',fontWeight:700,cursor:'pointer'}}>
+                  <input type="checkbox" checked={spinConfig.enabled} onChange={e=>setSpinConfig(c=>({...c,enabled:e.target.checked}))} />
+                  Enable Spin & Win
+                </label>
+                <label style={{display:'flex',alignItems:'center',gap:'0.5rem',fontSize:'0.85rem',fontWeight:700,cursor:'pointer'}}>
+                  <input type="checkbox" checked={spinConfig.require_email} onChange={e=>setSpinConfig(c=>({...c,require_email:e.target.checked}))} />
+                  Require Email
+                </label>
+                <label style={{display:'flex',alignItems:'center',gap:'0.5rem',fontSize:'0.85rem',fontWeight:700,cursor:'pointer'}}>
+                  <input type="checkbox" checked={spinConfig.require_phone} onChange={e=>setSpinConfig(c=>({...c,require_phone:e.target.checked}))} />
+                  Require Phone
+                </label>
+                <div>
+                  <label style={{fontSize:'0.75rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.25rem'}}>Min Order Amount (₹)</label>
+                  <input type="number" value={spinConfig.min_order_amount} onChange={e=>setSpinConfig(c=>({...c,min_order_amount:Number(e.target.value)}))} style={{...inp}} />
+                </div>
+              </div>
+              <div style={{marginBottom:'1rem'}}>
+                <div style={{fontSize:'0.75rem',fontWeight:700,color:'#555',marginBottom:'0.4rem'}}>Eligible Order Types</div>
+                {(['dine-in','pickup','delivery'] as const).map(t=>(
+                  <label key={t} style={{display:'inline-flex',alignItems:'center',gap:'0.4rem',marginRight:'1rem',fontSize:'0.85rem',cursor:'pointer'}}>
+                    <input type="checkbox"
+                      checked={spinConfig.eligible_order_types.includes(t)}
+                      onChange={e=>setSpinConfig(c=>({
+                        ...c,
+                        eligible_order_types: e.target.checked
+                          ? [...c.eligible_order_types, t]
+                          : c.eligible_order_types.filter(x=>x!==t)
+                      }))}
+                    /> {t}
+                  </label>
+                ))}
+              </div>
+              <button
+                onClick={async()=>{
+                  setSpinMsg('⏳ Saving…');
+                  const r = await fetch('/api/admin/spin-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spinConfig)});
+                  const d = await r.json() as {ok?:boolean;error?:string};
+                  setSpinMsg(d.ok ? '✅ Config saved!' : `❌ ${d.error ?? 'Error'}`);
+                  setTimeout(()=>setSpinMsg(''),3000);
+                }}
+                style={{...btn('#7c3aed')}}
+              >💾 Save Config</button>
+              {spinMsg && <span style={{marginLeft:'0.75rem',fontSize:'0.8rem',fontWeight:700,color:spinMsg.includes('✅')?'#16a34a':'#ef4444'}}>{spinMsg}</span>}
+            </div>
+
+            {/* Rewards list */}
+            <div style={{...card('#E65C00'),marginBottom:'1rem'}}>
+              <h3 style={{margin:'0 0 1rem',fontWeight:700,color:'#1A0800',fontSize:'1rem'}}>Spin Rewards</h3>
+              {spinRewards.length === 0
+                ? <p style={{color:'#888',fontSize:'0.85rem'}}>No rewards configured yet.</p>
+                : <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.82rem',marginBottom:'1rem'}}>
+                  <thead><tr style={{background:'#fff5ed'}}>
+                    {['Label','Type','Value','Weight','Min Order','Expires','Active',''].map(h=><th key={h} style={{padding:'0.4rem 0.6rem',textAlign:'left',fontWeight:700,fontSize:'0.7rem',color:'#6B5246',textTransform:'uppercase'}}>{h}</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {spinRewards.map(r=>(
+                      <tr key={r.id} style={{borderBottom:'1px solid #f5f0e8',opacity:r.active?1:0.5}}>
+                        <td style={{padding:'0.4rem 0.6rem',fontWeight:600}}>{r.label}</td>
+                        <td style={{padding:'0.4rem 0.6rem'}}>{r.reward_type}</td>
+                        <td style={{padding:'0.4rem 0.6rem'}}>{r.reward_type==='percent'?`${r.reward_value}%`:`₹${r.reward_value}`}</td>
+                        <td style={{padding:'0.4rem 0.6rem'}}>{r.weight}</td>
+                        <td style={{padding:'0.4rem 0.6rem'}}>₹{r.min_next_order}</td>
+                        <td style={{padding:'0.4rem 0.6rem'}}>{r.expires_days}d</td>
+                        <td style={{padding:'0.4rem 0.6rem'}}>
+                          <input type="checkbox" checked={r.active} onChange={async e=>{
+                            await fetch(`/api/admin/spin-rewards/${r.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({active:e.target.checked})});
+                            setSpinRewards(prev=>prev.map(x=>x.id===r.id?{...x,active:e.target.checked}:x));
+                          }} />
+                        </td>
+                        <td style={{padding:'0.4rem 0.6rem'}}>
+                          <button style={{...btn('#ef4444'),padding:'0.25rem 0.5rem',fontSize:'0.72rem'}} onClick={async()=>{
+                            await fetch(`/api/admin/spin-rewards/${r.id}`,{method:'DELETE'});
+                            setSpinRewards(prev=>prev.filter(x=>x.id!==r.id));
+                          }}>🗑</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              }
+
+              {/* Add reward form */}
+              <div style={{background:'#f8fafc',borderRadius:10,padding:'1rem',marginTop:'0.5rem'}}>
+                <div style={{fontWeight:700,fontSize:'0.85rem',marginBottom:'0.6rem',color:'#1A0800'}}>Add New Reward</div>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'0.5rem',marginBottom:'0.5rem'}}>
+                  <div>
+                    <label style={{fontSize:'0.72rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.2rem'}}>Label *</label>
+                    <input value={spinRewardForm.label} onChange={e=>setSpinRewardForm(f=>({...f,label:e.target.value}))} placeholder="e.g. 10% Off" style={{...inp}} />
+                  </div>
+                  <div>
+                    <label style={{fontSize:'0.72rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.2rem'}}>Type</label>
+                    <select value={spinRewardForm.reward_type} onChange={e=>setSpinRewardForm(f=>({...f,reward_type:e.target.value}))} style={{...inp}}>
+                      <option value="percent">Percent (%)</option>
+                      <option value="fixed">Fixed (₹)</option>
+                      <option value="free_item">Free Item</option>
+                      <option value="no_reward">No Reward</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{fontSize:'0.72rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.2rem'}}>Value</label>
+                    <input type="number" value={spinRewardForm.reward_value} onChange={e=>setSpinRewardForm(f=>({...f,reward_value:Number(e.target.value)}))} style={{...inp}} />
+                  </div>
+                  <div>
+                    <label style={{fontSize:'0.72rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.2rem'}}>Weight (higher = more likely)</label>
+                    <input type="number" value={spinRewardForm.weight} min={1} onChange={e=>setSpinRewardForm(f=>({...f,weight:Number(e.target.value)}))} style={{...inp}} />
+                  </div>
+                  <div>
+                    <label style={{fontSize:'0.72rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.2rem'}}>Min Next Order (₹)</label>
+                    <input type="number" value={spinRewardForm.min_next_order} onChange={e=>setSpinRewardForm(f=>({...f,min_next_order:Number(e.target.value)}))} style={{...inp}} />
+                  </div>
+                  <div>
+                    <label style={{fontSize:'0.72rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.2rem'}}>Expires (days)</label>
+                    <input type="number" value={spinRewardForm.expires_days} min={1} onChange={e=>setSpinRewardForm(f=>({...f,expires_days:Number(e.target.value)}))} style={{...inp}} />
+                  </div>
+                </div>
+                <button
+                  style={{...btn('#16a34a')}}
+                  onClick={async()=>{
+                    if (!spinRewardForm.label) { setSpinMsg('Label required'); return; }
+                    const r = await fetch('/api/admin/spin-rewards',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spinRewardForm)});
+                    const d = await r.json() as {ok?:boolean;error?:string};
+                    if (d.ok) {
+                      const updated = await fetch('/api/admin/spin-rewards').then(x=>x.json()) as SpinRewardRow[];
+                      setSpinRewards(updated);
+                      setSpinRewardForm({ label:'',reward_type:'percent',reward_value:10,weight:1,min_next_order:0,expires_days:30,active:true,sort_order:0 });
+                      setSpinMsg('✅ Reward added!');
+                    } else { setSpinMsg(`❌ ${d.error ?? 'Error'}`); }
+                    setTimeout(()=>setSpinMsg(''),3000);
+                  }}
+                >✅ Add Reward</button>
+              </div>
+            </div>
+          </>}
+        </>}
+
+        {/* ═══════════ REWARDS AUDIT ═══════════ */}
+        {section==='rewards_audit' && <>
+          <div style={{fontFamily:"'Playfair Display',serif",fontWeight:700,fontSize:'1.15rem',marginBottom:'1rem',color:'#1A0800'}}>🎟 Rewards Audit</div>
+          <button
+            style={{...btn(),marginBottom:'1rem'}}
+            onClick={async()=>{
+              const r = await fetch('/api/admin/rewards-audit');
+              const d = await r.json() as AuditRow[];
+              setAuditRows(d);
+              setAuditLoaded(true);
+            }}
+          >{auditLoaded ? '🔄 Refresh' : '📥 Load Audit'}</button>
+          {auditLoaded && (
+            <div style={{overflowX:'auto'}}>
+              {auditRows.length === 0
+                ? <p style={{color:'#888',fontSize:'0.85rem'}}>No coupons issued yet.</p>
+                : <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.78rem'}}>
+                  <thead><tr style={{background:'#fff5ed'}}>
+                    {['Issued','Code','Label','Type','Value','Status','Email','Source Order','Redeemed At'].map(h=><th key={h} style={{padding:'0.4rem 0.6rem',textAlign:'left',fontWeight:700,fontSize:'0.68rem',color:'#6B5246',textTransform:'uppercase',whiteSpace:'nowrap' as const}}>{h}</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {auditRows.map(a=>(
+                      <tr key={a.id} style={{borderBottom:'1px solid #f5f0e8',background:a.status==='redeemed'?'#f0fdf4':a.status==='expired'?'#fef2f2':'white'}}>
+                        <td style={{padding:'0.4rem 0.6rem',whiteSpace:'nowrap' as const}}>{fmtDateTimeShort(a.issued_at)}</td>
+                        <td style={{padding:'0.4rem 0.6rem',fontFamily:'monospace',fontWeight:700,color:'#7c3aed'}}>{a.coupon_code}</td>
+                        <td style={{padding:'0.4rem 0.6rem'}}>{a.label}</td>
+                        <td style={{padding:'0.4rem 0.6rem'}}>{a.reward_type}</td>
+                        <td style={{padding:'0.4rem 0.6rem'}}>{a.reward_type==='percent'?`${a.reward_value}%`:`₹${a.reward_value}`}</td>
+                        <td style={{padding:'0.4rem 0.6rem'}}>
+                          <span style={{padding:'0.2rem 0.5rem',borderRadius:20,fontSize:'0.7rem',fontWeight:700,background:a.status==='redeemed'?'#dcfce7':a.status==='active'?'#dbeafe':a.status==='reserved'?'#fef3c7':'#fee2e2',color:a.status==='redeemed'?'#166534':a.status==='active'?'#1d4ed8':a.status==='reserved'?'#92400e':'#991b1b'}}>{a.status}</span>
+                        </td>
+                        <td style={{padding:'0.4rem 0.6rem',fontSize:'0.72rem'}}>{a.customer_email}</td>
+                        <td style={{padding:'0.4rem 0.6rem'}}>#{(a.source_order as {order_number:number}|null)?.order_number ?? '—'}</td>
+                        <td style={{padding:'0.4rem 0.6rem',whiteSpace:'nowrap' as const}}>{a.redeemed_at ? fmtDateTimeShort(a.redeemed_at) : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              }
+            </div>
+          )}
         </>}
 
       </div>{/* /container */}

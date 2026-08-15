@@ -126,6 +126,20 @@ function TrackInner() {
   const [ratingSubmitted,   setRatingSubmitted]   = useState(false);
   const [ratingMsg,         setRatingMsg]         = useState('');
 
+  // ── Spin & Win ──
+  const [spinEligible,   setSpinEligible]   = useState(false);
+  const [spinChecked,    setSpinChecked]    = useState(false);
+  const [spinBusy,       setSpinBusy]       = useState(false);
+  const [spinAnimating,  setSpinAnimating]  = useState(false);
+  const [spinResult,     setSpinResult]     = useState<{
+    isWinner: boolean;
+    rewardLabel?: string;
+    rewardType?: string;
+    couponCode?: string;
+    expiresAt?: string;
+    alreadySpun?: boolean;
+  } | null>(null);
+
   const showLookupForm = !trackOrderId && !trackToken;
 
   // ── Contact lookup submit ──────────────────────────────────────────────────
@@ -304,6 +318,85 @@ function TrackInner() {
       setNotRecvMsg(`⚠️ Your issue has been logged. Please contact the restaurant directly if not resolved.`);
     } finally {
       setNotRecvBusy(false);
+    }
+  }
+
+  // ── Spin & Win: check eligibility when order becomes completed ──────────────
+  const orderId = trackOrderId;
+  useEffect(() => {
+    const isCompleted = order?.status === 'completed' || order?.status === 'delivered';
+    if (!isCompleted || !orderId || spinChecked) return;
+    setSpinChecked(true);
+    fetch(`/api/rewards/eligibility?orderId=${orderId}`)
+      .then(r => r.json())
+      .then((data: {
+        eligible?: boolean;
+        alreadySpun?: boolean;
+        existingResult?: {
+          is_winner: boolean;
+          spin_rewards?: { label?: string };
+          reward_coupons?: { coupon_code?: string; expires_at?: string } | Array<{ coupon_code?: string; expires_at?: string }>;
+        };
+      }) => {
+        if (data.eligible) {
+          setSpinEligible(true);
+        } else if (data.alreadySpun && data.existingResult) {
+          const r = data.existingResult;
+          const reward = r.spin_rewards;
+          const couponRaw = r.reward_coupons;
+          const coupon = Array.isArray(couponRaw) ? couponRaw[0] : couponRaw;
+          setSpinResult({
+            isWinner: r.is_winner,
+            rewardLabel: reward?.label,
+            couponCode: coupon?.coupon_code,
+            expiresAt: coupon?.expires_at,
+            alreadySpun: true,
+          });
+        }
+      })
+      .catch(console.error);
+  }, [order?.status, orderId, spinChecked]);
+
+  // ── Spin & Win: execute spin ────────────────────────────────────────────────
+  async function handleSpin() {
+    if (spinBusy || spinAnimating || !order) return;
+    setSpinBusy(true);
+    setSpinAnimating(true);
+    try {
+      const res = await fetch('/api/rewards/spin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId,
+          customerEmail: order.customerEmail ?? '',
+          customerPhone: order.phone ?? '',
+        }),
+      });
+      const data = await res.json() as {
+        isWinner?: boolean;
+        rewardLabel?: string;
+        rewardType?: string;
+        couponCode?: string;
+        expiresAt?: string;
+        alreadySpun?: boolean;
+      };
+      // Wait for animation then show result
+      setTimeout(() => {
+        setSpinAnimating(false);
+        setSpinEligible(false);
+        setSpinResult({
+          isWinner: data.isWinner ?? false,
+          rewardLabel: data.rewardLabel,
+          rewardType: data.rewardType,
+          couponCode: data.couponCode,
+          expiresAt: data.expiresAt,
+          alreadySpun: data.alreadySpun,
+        });
+      }, 3000);
+    } catch (err) {
+      console.error(err);
+      setSpinAnimating(false);
+      setSpinBusy(false);
     }
   }
 
@@ -784,6 +877,62 @@ function TrackInner() {
         {ratingSubmitted && (
           <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 16, padding: '1rem', textAlign: 'center', marginBottom: '1.25rem', fontSize: '0.85rem', color: '#15803d', fontWeight: 700 }}>
             ⭐ {rating}/5 — {ratingMsg}
+          </div>
+        )}
+
+        {/* ── Spin & Win section ──────────────────────────────── */}
+        {spinEligible && !spinResult && (
+          <div style={{ marginBottom: '1.25rem', padding: '1.25rem', background: 'linear-gradient(135deg,#faf5ff,#fefce8)', border: '2px solid #d8b4fe', borderRadius: 16, textAlign: 'center' }}>
+            <div style={{ fontSize: '2.5rem', marginBottom: '0.4rem' }}>🎡</div>
+            <h3 style={{ fontWeight: 900, color: '#6b21a8', fontSize: '1.05rem', margin: '0 0 0.3rem' }}>You have unlocked Spin & Win!</h3>
+            <p style={{ fontSize: '0.8rem', color: '#64748b', margin: '0 0 1rem' }}>Your order qualifies for a reward. Spin to find out what you have won!</p>
+            <button
+              onClick={() => void handleSpin()}
+              disabled={spinBusy || spinAnimating}
+              style={{
+                padding: '0.75rem 2rem', borderRadius: 9999, color: 'white', fontWeight: 800,
+                fontSize: '1rem', border: 'none', cursor: spinAnimating ? 'wait' : 'pointer',
+                background: spinAnimating ? '#c4b5fd' : 'linear-gradient(135deg,#7c3aed,#a855f7)',
+                boxShadow: spinAnimating ? 'none' : '0 4px 16px rgba(124,58,237,0.4)',
+                fontFamily: 'Poppins,sans-serif', transition: 'all 0.2s',
+              }}
+            >
+              {spinAnimating ? '🎡 Spinning…' : '🎡 SPIN NOW'}
+            </button>
+          </div>
+        )}
+
+        {spinResult && (
+          <div style={{
+            marginBottom: '1.25rem', padding: '1.25rem', borderRadius: 16, textAlign: 'center',
+            border: spinResult.isWinner ? '2px solid #86efac' : '1px solid #e5e7eb',
+            background: spinResult.isWinner ? 'linear-gradient(135deg,#fefce8,#f0fdf4)' : '#f9fafb',
+          }}>
+            {spinResult.isWinner ? (
+              <>
+                <div style={{ fontSize: '2.5rem', marginBottom: '0.4rem' }}>🎉</div>
+                <h3 style={{ fontWeight: 900, color: '#166534', fontSize: '1.05rem', margin: '0 0 0.3rem' }}>You won!</h3>
+                <p style={{ fontWeight: 800, color: '#15803d', fontSize: '1.1rem', margin: '0 0 1rem' }}>{spinResult.rewardLabel}</p>
+                {spinResult.couponCode && (
+                  <div style={{ background: 'white', border: '2px dashed #86efac', borderRadius: 12, padding: '1rem', display: 'inline-block', marginBottom: '0.75rem' }}>
+                    <p style={{ fontSize: '0.7rem', color: '#94a3b8', margin: '0 0 0.3rem' }}>Your reward coupon</p>
+                    <p style={{ fontFamily: 'monospace', fontSize: '1.5rem', fontWeight: 900, color: '#166534', margin: '0 0 0.2rem', letterSpacing: '0.15em' }}>{spinResult.couponCode}</p>
+                    {spinResult.expiresAt && (
+                      <p style={{ fontSize: '0.7rem', color: '#94a3b8', margin: 0 }}>
+                        Valid until {new Date(spinResult.expiresAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                      </p>
+                    )}
+                  </div>
+                )}
+                <p style={{ fontSize: '0.75rem', color: '#64748b', margin: 0 }}>Use this coupon on your next order!</p>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: '2.5rem', marginBottom: '0.4rem' }}>😅</div>
+                <h3 style={{ fontWeight: 800, color: '#374151', fontSize: '1rem', margin: '0 0 0.3rem' }}>{spinResult.rewardLabel ?? 'Better luck next time!'}</h3>
+                <p style={{ fontSize: '0.8rem', color: '#94a3b8', margin: 0 }}>Every order is a new chance to win.</p>
+              </>
+            )}
           </div>
         )}
 

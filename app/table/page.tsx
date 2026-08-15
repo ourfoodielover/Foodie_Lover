@@ -217,6 +217,18 @@ function TablePageInner() {
   // NOT added for "not received" — dialog must re-appear after re-service
   const confirmedRef = useRef<Set<string>>(new Set<string>());
 
+  // ── Reward coupon (for bill) ──
+  const [dineCouponCode,    setDineCouponCode]    = useState('');
+  const [dineCouponEmail,   setDineCouponEmail]   = useState('');
+  const [dineCouponPhone,   setDineCouponPhone]   = useState('');
+  const [dineCouponBusy,    setDineCouponBusy]    = useState(false);
+  const [dineCouponMsg,     setDineCouponMsg]     = useState('');
+  const [dineCouponOpen,    setDineCouponOpen]    = useState(false);
+  const [dineAppliedCoupon, setDineAppliedCoupon] = useState<{
+    couponId: string; couponCode: string; label: string;
+    discountAmount: number; finalTotal: number;
+  } | null>(null);
+
   // ─── Init — device detection + async session lookup ──────────────────────
   useEffect(() => {
     const did = getOrCreateDeviceId();  // device identity — only localStorage usage
@@ -497,6 +509,57 @@ function TablePageInner() {
     }
   }
 
+  // ─── HANDLER: Apply reward coupon for dine-in bill ───────────────────────
+  async function handleApplyDineCoupon() {
+    if (!dineCouponCode || !dineCouponEmail || !dineCouponPhone) {
+      setDineCouponMsg('Please fill in coupon code, email, and phone');
+      return;
+    }
+    setDineCouponBusy(true);
+    setDineCouponMsg('');
+    try {
+      const res = await fetch('/api/rewards/validate-coupon', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          couponCode: dineCouponCode.trim().toUpperCase(),
+          email: dineCouponEmail,
+          phone: dineCouponPhone,
+          orderSubtotal: billTotal,
+          orderType: 'dine-in',
+          orderId: tabId,
+        }),
+      });
+      const data = await res.json() as {
+        valid: boolean;
+        reason?: string;
+        couponId?: string;
+        couponCode?: string;
+        label?: string;
+        discountAmount?: number;
+        finalTotal?: number;
+      };
+      if (data.valid && data.couponId && data.couponCode && data.label !== undefined) {
+        setDineAppliedCoupon({
+          couponId: data.couponId,
+          couponCode: data.couponCode,
+          label: data.label,
+          discountAmount: data.discountAmount ?? 0,
+          finalTotal: data.finalTotal ?? billTotal,
+        });
+        setDineCouponMsg('');
+      } else {
+        setDineCouponMsg(data.reason ?? 'Invalid coupon');
+        setDineAppliedCoupon(null);
+      }
+    } catch (err) {
+      console.error(err);
+      setDineCouponMsg('Error validating coupon');
+    } finally {
+      setDineCouponBusy(false);
+    }
+  }
+
   // ─── HANDLER: Request bill ─────────────────────────────────────────────────
   async function handleRequestBill() {
     if (!tabId) return;
@@ -513,6 +576,20 @@ function TablePageInner() {
     }
 
     try {
+      // Reserve and attach coupon to tab if one was applied
+      if (dineAppliedCoupon && tabId) {
+        await fetch('/api/rewards/reserve-coupon', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ couponId: dineAppliedCoupon.couponId, orderId: tabId }),
+        });
+        await updateTabApi(tabId, {
+          coupon_id: dineAppliedCoupon.couponId,
+          coupon_code: dineAppliedCoupon.couponCode,
+          coupon_discount: dineAppliedCoupon.discountAmount,
+        } as Record<string, unknown>);
+      }
+
       // Update tab status → awaiting_payment — waiter/counter portals see this immediately
       const updated = await updateTabApi(tabId, { status: 'awaiting_payment' });
       setTab(toTabUI(updated));
@@ -1535,6 +1612,58 @@ function TablePageInner() {
                 <span>{othersExist ? 'Table Total' : 'Total'}</span><span>₹{billTotal}</span>
               </div>
             </div>
+
+            {/* ── Reward Coupon (dine-in) ────────────────────────────── */}
+            {tab?.tabStatus === 'open' && (
+              <div style={{ marginBottom: '0.75rem', border: '1.5px solid #e5e7eb', borderRadius: 12, padding: '0.85rem' }}>
+                <button
+                  type="button"
+                  onClick={() => setDineCouponOpen(o => !o)}
+                  style={{ background: 'none', border: 'none', fontWeight: 700, fontSize: '0.82rem', color: '#7c3aed', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.3rem', padding: 0, fontFamily: 'Poppins,sans-serif' }}
+                >
+                  🎟 Have a reward coupon? {dineCouponOpen ? '▲' : '▼'}
+                </button>
+                {dineCouponOpen && (
+                  <div style={{ marginTop: '0.65rem', display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                    <input
+                      value={dineCouponCode}
+                      onChange={e => setDineCouponCode(e.target.value.toUpperCase())}
+                      placeholder="Coupon code (e.g. RWD-ABCD1234)"
+                      style={{ padding: '0.55rem 0.7rem', border: '1.5px solid #e5e7eb', borderRadius: 8, fontFamily: 'monospace', fontSize: '0.85rem', outline: 'none' }}
+                    />
+                    <input
+                      value={dineCouponEmail}
+                      onChange={e => setDineCouponEmail(e.target.value)}
+                      placeholder="Email linked to coupon"
+                      type="email"
+                      style={{ padding: '0.55rem 0.7rem', border: '1.5px solid #e5e7eb', borderRadius: 8, fontFamily: 'Poppins,sans-serif', fontSize: '0.8rem', outline: 'none' }}
+                    />
+                    <input
+                      value={dineCouponPhone}
+                      onChange={e => setDineCouponPhone(e.target.value)}
+                      placeholder="Phone linked to coupon"
+                      type="tel"
+                      style={{ padding: '0.55rem 0.7rem', border: '1.5px solid #e5e7eb', borderRadius: 8, fontFamily: 'Poppins,sans-serif', fontSize: '0.8rem', outline: 'none' }}
+                    />
+                    <button
+                      onClick={() => void handleApplyDineCoupon()}
+                      disabled={dineCouponBusy}
+                      style={{ padding: '0.6rem', background: dineCouponBusy ? '#c4b5fd' : '#7c3aed', color: 'white', border: 'none', borderRadius: 8, fontWeight: 700, fontSize: '0.8rem', cursor: dineCouponBusy ? 'not-allowed' : 'pointer', fontFamily: 'Poppins,sans-serif' }}
+                    >
+                      {dineCouponBusy ? 'Validating…' : 'Apply Coupon'}
+                    </button>
+                    {dineCouponMsg && <p style={{ fontSize: '0.75rem', color: '#ef4444', margin: 0, fontWeight: 600 }}>{dineCouponMsg}</p>}
+                    {dineAppliedCoupon && (
+                      <div style={{ background: '#f0fdf4', border: '1.5px solid #86efac', borderRadius: 8, padding: '0.55rem 0.75rem' }}>
+                        <p style={{ fontWeight: 800, color: '#16a34a', fontSize: '0.78rem', margin: '0 0 0.15rem' }}>✓ {dineAppliedCoupon.label} applied!</p>
+                        <p style={{ fontSize: '0.75rem', color: '#555', margin: '0 0 0.15rem' }}>Discount: −₹{dineAppliedCoupon.discountAmount}</p>
+                        <button onClick={() => { setDineAppliedCoupon(null); setDineCouponMsg(''); }} style={{ fontSize: '0.68rem', color: '#ef4444', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}>Remove</button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Request Bill */}
             {tab?.tabStatus === 'open' && (

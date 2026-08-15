@@ -2,7 +2,9 @@
 // POST /api/orders   — create order
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId, nextOrderNum, rowToOrder, broadcast } from '@/lib/supabase-server';
-import { sendOrderConfirmationEmail } from '@/lib/email-server';
+// sendOrderConfirmationEmail is triggered from PATCH /api/orders/[id] after waiter confirmation
+// (not on order creation — orders start in awaiting_waiter and may be rejected)
+import type {} from '@/lib/email-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -278,14 +280,11 @@ export async function POST(req: NextRequest) {
     const order = rowToOrder(full, full.order_items ?? [], full.order_events ?? []);
     await broadcast(rid, 'order_created', order);
 
-    // ── Order confirmation email — fire-and-forget, never blocks the response ─
-    // Only sends if the order has a customer_email (online / delivery / pickup
-    // orders typically do; dine-in table-QR orders typically don't).
-    if (body.customerEmail) {
-      sendOrderConfirmationEmail(id).catch(err =>
-        console.error('[POST /api/orders] confirmation email error:', err),
-      );
-    }
+    // ── Order confirmation email — sent AFTER waiter confirms via confirm_and_print ─
+    // (See PATCH /api/orders/[id] action: 'confirm_and_print')
+    // We do NOT send confirmation on creation because the order starts in
+    // 'awaiting_waiter' status and may be rejected. The waiter's confirmation
+    // is the definitive signal that the order is accepted and being prepared.
 
     return NextResponse.json(order, { status: 201 });
   } catch (err) {

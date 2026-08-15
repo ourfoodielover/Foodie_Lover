@@ -9,6 +9,24 @@
 import { getServerClient, newId } from '@/lib/supabase-server';
 import { sendEmail } from '@/lib/email';
 
+// ─── Email deduplication log ──────────────────────────────────────────────────
+/**
+ * logEmail — inserts into email_log with a UNIQUE(order_id, event_type) constraint.
+ * Returns true if the email should be sent (no prior record), false if already sent.
+ */
+async function logEmail(orderId: string, eventType: string, sentTo: string): Promise<boolean> {
+  const sb = getServerClient();
+  const { error } = await sb.from('email_log').insert({
+    id: newId('EML'),
+    order_id: orderId,
+    event_type: eventType,
+    sent_to: sentTo,
+  });
+  // 23505 = unique_violation — already sent, skip
+  if (error && error.code === '23505') return false;
+  return !error;
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type EnqueueResult =
@@ -876,6 +894,13 @@ export async function sendOrderConfirmationEmail(orderId: string): Promise<void>
       return;
     }
 
+    // Dedup: only send once per order
+    const shouldSend = await logEmail(orderId, 'confirmation', email);
+    if (!shouldSend) {
+      console.info(`${TAG} Already sent (email_log) — skipping duplicate`);
+      return;
+    }
+
     const orderNum = (raw.order_number as number) ?? String(raw.id).slice(-6);
     const items    = (raw.order_items as Record<string, unknown>[]) ?? [];
     const html     = buildConfirmationHtml(raw as Record<string, unknown>, items);
@@ -925,6 +950,13 @@ export async function sendOrderReadyEmail(orderId: string): Promise<void> {
       return;
     }
 
+    // Dedup: only send once per order
+    const shouldSend = await logEmail(orderId, 'ready', email);
+    if (!shouldSend) {
+      console.info(`${TAG} Already sent (email_log) — skipping duplicate`);
+      return;
+    }
+
     const orderNum  = (raw.order_number as number) ?? String(raw.id).slice(-6);
     const typeRaw   = (raw.type as string) || 'pickup';
     const isDelivery = typeRaw === 'delivery';
@@ -934,6 +966,88 @@ export async function sendOrderReadyEmail(orderId: string): Promise<void> {
     const html      = buildOrderReadyHtml(raw as Record<string, unknown>);
 
     console.info(`${TAG} Sending ready notification to ${email}`);
+    const result = await sendEmail({ to: email, subject, html });
+
+    if ('error' in result) {
+      console.error(`${TAG} Failed: ${result.error}`);
+    } else {
+      console.info(`${TAG} ✅ Sent — messageId: ${result.messageId}`);
+    }
+  } catch (err) {
+    console.error(`${TAG} Unexpected error:`, err);
+  }
+}
+
+// ─── Public: sendOutForDeliveryEmail ─────────────────────────────────────────
+/**
+ * sendOutForDeliveryEmail(orderId)
+ *
+ * Sent when a delivery order moves to 'out_for_delivery'.
+ * Deduped via email_log — only sends once per order.
+ */
+export async function sendOutForDeliveryEmail(orderId: string): Promise<void> {
+  const TAG = `[email/out_for_delivery orderId=${orderId}]`;
+  const sb  = getServerClient();
+
+  try {
+    const { data: raw, error: fetchErr } = await sb
+      .from('orders')
+      .select('id, order_number, customer_name, customer_email, type, tracking_token')
+      .eq('id', orderId)
+      .single();
+
+    if (fetchErr || !raw) {
+      console.warn(`${TAG} Order not found — skipping`);
+      return;
+    }
+
+    const email = raw.customer_email as string | null;
+    if (!email) {
+      console.info(`${TAG} No customer_email — skipping`);
+      return;
+    }
+
+    // Dedup: only send once per order
+    const shouldSend = await logEmail(orderId, 'out_for_delivery', email);
+    if (!shouldSend) {
+      console.info(`${TAG} Already sent (email_log) — skipping duplicate`);
+      return;
+    }
+
+    const orderNum = (raw.order_number as number) ?? String(raw.id).slice(-6);
+    const custName = (raw.customer_name as string) || 'there';
+
+    const html = `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/></head>
+<body style="font-family:'Segoe UI',Arial,sans-serif;background:#f1f5f9;margin:0;padding:24px 16px">
+  <div style="max-width:520px;margin:0 auto">
+    <div style="background:linear-gradient(135deg,#2563eb,#1d4ed8);border-radius:16px 16px 0 0;padding:28px;text-align:center">
+      <div style="font-size:40px;margin-bottom:6px">🛵</div>
+      <h1 style="margin:0;font-size:22px;font-weight:900;color:white">On Its Way!</h1>
+      <p style="margin:6px 0 0;font-size:13px;color:rgba(255,255,255,0.9)">${RESTAURANT_NAME}</p>
+    </div>
+    <div style="background:white;border-radius:0 0 16px 16px;padding:28px;box-shadow:0 4px 24px rgba(0,0,0,0.08)">
+      <p style="font-size:15px;color:#334155;margin:0 0 16px">Hi <strong>${custName}</strong>,</p>
+      <p style="font-size:14px;color:#475569;margin:0 0 20px">
+        Great news! Your order <strong>#${orderNum}</strong> has been picked up and is on its way to you.
+        Our delivery agent will arrive shortly.
+      </p>
+      <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:14px 18px;text-align:center">
+        <div style="font-size:11px;font-weight:700;color:#2563eb;text-transform:uppercase;letter-spacing:1px">Order #${orderNum}</div>
+        <div style="font-family:monospace;font-size:11px;color:#94a3b8;margin-top:4px">${String(raw.id)}</div>
+      </div>
+    </div>
+    <div style="text-align:center;padding:16px;font-size:11px;color:#94a3b8">
+      Thank you for choosing <strong style="color:#E65C00">${RESTAURANT_NAME}</strong>! 🙏
+    </div>
+  </div>
+</body>
+</html>`;
+
+    const subject = `Your ${RESTAURANT_NAME} Order #${orderNum} is on its way! 🛵`;
+
+    console.info(`${TAG} Sending out_for_delivery notification to ${email}`);
     const result = await sendEmail({ to: email, subject, html });
 
     if ('error' in result) {
