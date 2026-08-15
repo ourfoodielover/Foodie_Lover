@@ -212,10 +212,14 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     }
 
     // ── Waiter: Confirm & Print ───────────────────────────────────────────────
-    // The core of the new workflow: a waiter reviews an `awaiting_waiter` /
-    // `pending` order, confirms it, and a KOT print job is queued for the
-    // companion print agent. The order moves to 'preparing'. No kitchen
-    // display is involved — the printed ticket IS the kitchen's queue.
+    // Waiter reviews an awaiting_waiter / pending order and confirms it.
+    // PRIMARY effect  : order moves to 'preparing' — this ALWAYS happens and
+    //                   is what triggers the kitchen display (via Realtime
+    //                   broadcast of 'order_confirmed') and the customer
+    //                   tracking page ("Being Prepared").
+    // SECONDARY effect: a KOT print job is queued for the companion print agent.
+    //                   Wrapped in try/catch — print failure is non-fatal and
+    //                   must NEVER block the order update or kitchen display.
     let confirmPrintJobId: string | undefined;
     if (body.action === 'confirm_and_print') {
       const { data: current, error: curErr } = await sb
@@ -234,6 +238,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
         );
       }
 
+      // ── Primary: set order to 'preparing' (always executes) ──────────────
       updates.status       = 'preparing';
       updates.confirmed_by = body.by ?? 'Waiter';
       updates.confirmed_at = new Date().toISOString();
@@ -243,21 +248,33 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
         { id: newId('EV'), order_id: id, event_type: statusToEvent('preparing'), performed_by: body.by ?? 'Waiter' },
       ]);
 
-      confirmPrintJobId = newId('PJ');
-      await sb.from('print_jobs').insert({
-        id:            confirmPrintJobId,
-        restaurant_id: rid,
-        order_id:      id,
-        job_type:      'kot',
-        status:        'queued',
-        payload:       buildKotPayload(current as Record<string, unknown>, current.order_items ?? []),
-        requested_by:  body.by ?? 'Waiter',
-        is_reprint:    false,
-      });
-      await sb.from('order_events').insert({
-        id: newId('EV'), order_id: id, event_type: 'PrintQueued',
-        performed_by: body.by ?? 'Waiter', note: `KOT job ${confirmPrintJobId}`,
-      });
+      // ── Secondary: queue a KOT print job (non-fatal if it fails) ─────────
+      // A print failure must not prevent the order from reaching the kitchen
+      // display or from being updated in Supabase. The kitchen page and the
+      // customer tracking page both respond to the order status in the DB —
+      // not to print job state. If printing fails the waiter can retry via
+      // "Reprint KOT" without any effect on the order lifecycle.
+      try {
+        confirmPrintJobId = newId('PJ');
+        await sb.from('print_jobs').insert({
+          id:            confirmPrintJobId,
+          restaurant_id: rid,
+          order_id:      id,
+          job_type:      'kot',
+          status:        'queued',
+          payload:       buildKotPayload(current as Record<string, unknown>, current.order_items ?? []),
+          requested_by:  body.by ?? 'Waiter',
+          is_reprint:    false,
+        });
+        await sb.from('order_events').insert({
+          id: newId('EV'), order_id: id, event_type: 'PrintQueued',
+          performed_by: body.by ?? 'Waiter', note: `KOT job ${confirmPrintJobId}`,
+        });
+      } catch (printErr) {
+        // Log but do not rethrow — the order update below will still proceed.
+        console.error(`[confirm_and_print] Print job creation failed for order ${id} (non-fatal):`, printErr);
+        confirmPrintJobId = undefined;
+      }
     }
 
     // ── Waiter: Reject ────────────────────────────────────────────────────────

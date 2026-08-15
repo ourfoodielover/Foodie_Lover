@@ -1,34 +1,48 @@
 #!/usr/bin/env node
 // ─── Foodie Lover — Companion Print Agent ────────────────────────────────────
 // Polls GET /api/print-jobs for queued KOT/receipt jobs, renders an ESC/POS
-// 80mm ticket, sends it to a network thermal printer (port 9100), and reports
-// the result back via PATCH /api/print-jobs/[id].
+// 80mm ticket, and sends it to the printer. Two connection modes:
 //
-// Run on a machine on the same LAN as the kitchen printer (e.g. a small
-// PC/Raspberry Pi at the restaurant). See README.md for setup.
+//   PRINTER_TYPE=usb     (default) — USB cable from this laptop/PC to the printer
+//   PRINTER_TYPE=network           — LAN/Wi-Fi via TCP port 9100
+//
+// Run on the laptop or PC that has the printer plugged in. See README.md.
 
 require('dotenv').config();
 const net = require('net');
+const os  = require('os');
+const fs  = require('fs');
 
 const {
   APP_BASE_URL,
-  RESTAURANT_ID = 'rest_default',
+  RESTAURANT_ID    = 'rest_default',
   PRINT_AGENT_KEY,
   POLL_INTERVAL_MS = '4000',
+  PRINTER_TYPE     = 'usb',          // 'usb' or 'network'
+  // USB mode
+  PRINTER_NAME     = '',             // Windows: exact name from Devices & Printers
+  PRINTER_DEV      = '/dev/usb/lp0', // Linux/Mac: USB device path
+  // Network mode
   PRINTER_IP,
-  PRINTER_PORT = '9100',
+  PRINTER_PORT     = '9100',
+  // Common
   PRINTER_CHARS_PER_LINE = '42',
-  PRINTER_STATION_ID = 'default',
-  RESTAURANT_NAME = 'Foodie Lover',
-  MAX_ATTEMPTS = '5',
+  PRINTER_STATION_ID     = 'default',
+  RESTAURANT_NAME        = 'Foodie Lover',
+  MAX_ATTEMPTS           = '5',
 } = process.env;
 
 if (!APP_BASE_URL) {
   console.error('FATAL: APP_BASE_URL is not set. Copy .env.example to .env and configure it.');
   process.exit(1);
 }
-if (!PRINTER_IP) {
-  console.error('FATAL: PRINTER_IP is not set. Copy .env.example to .env and configure it.');
+if (PRINTER_TYPE === 'network' && !PRINTER_IP) {
+  console.error('FATAL: PRINTER_TYPE=network but PRINTER_IP is not set.');
+  process.exit(1);
+}
+if (PRINTER_TYPE === 'usb' && os.platform() === 'win32' && !PRINTER_NAME) {
+  console.error('FATAL: PRINTER_TYPE=usb on Windows requires PRINTER_NAME.');
+  console.error('  Open "Devices & Printers", right-click your thermal printer → Printer Properties, and copy the exact name.');
   process.exit(1);
 }
 
@@ -126,14 +140,21 @@ function buildReceipt(payload) {
 }
 
 // ── Printer I/O ────────────────────────────────────────────────────────────────
-function printToNetworkPrinter(buffer) {
+
+/** Send raw ESC/POS buffer to the printer, using whichever connection mode is configured. */
+function printBuffer(buffer) {
+  if (PRINTER_TYPE === 'network') return printViaNetwork(buffer);
+  return printViaUSB(buffer);
+}
+
+/** TCP/network mode — printer must have Ethernet/Wi-Fi and raw port 9100. */
+function printViaNetwork(buffer) {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection({ host: PRINTER_IP, port: parseInt(PRINTER_PORT, 10) || 9100 });
     const timeout = setTimeout(() => {
       socket.destroy();
       reject(new Error(`Printer connection timed out (${PRINTER_IP}:${PRINTER_PORT})`));
     }, 8000);
-
     socket.on('connect', () => {
       socket.write(buffer, (err) => {
         if (err) { clearTimeout(timeout); socket.destroy(); return reject(err); }
@@ -143,6 +164,41 @@ function printToNetworkPrinter(buffer) {
     socket.on('close', () => { clearTimeout(timeout); resolve(); });
     socket.on('error', (err) => { clearTimeout(timeout); reject(err); });
   });
+}
+
+/** USB mode — printer is physically connected to this machine via USB cable. */
+async function printViaUSB(buffer) {
+  const platform = os.platform();
+
+  if (platform === 'win32') {
+    // Windows: use @thiagoelg/node-printer to send raw bytes via Windows print spooler.
+    // The printer must be installed in Windows (plug in USB → Windows auto-installs it,
+    // or use the driver CD). Set PRINTER_NAME to the exact name shown in Devices & Printers.
+    let nodePrinter;
+    try {
+      nodePrinter = require('@thiagoelg/node-printer');
+    } catch {
+      throw new Error(
+        '@thiagoelg/node-printer is not installed. Run: npm install  (inside print-agent/)'
+      );
+    }
+    await new Promise((resolve, reject) => {
+      nodePrinter.printDirect({
+        data:    buffer,
+        printer: PRINTER_NAME,
+        type:    'RAW',
+        success: () => resolve(),
+        error:   (err) => reject(new Error(String(err))),
+      });
+    });
+
+  } else {
+    // Linux / Mac: write raw bytes directly to the USB device file.
+    // Default is /dev/usb/lp0 — check `ls /dev/usb/` if that doesn't work.
+    // On Mac with USB: the device may appear as /dev/cu.usbmodem* or similar.
+    // On Linux you may need: sudo chmod a+rw /dev/usb/lp0  (or add user to 'lp' group)
+    fs.writeFileSync(PRINTER_DEV, buffer);
+  }
 }
 
 // ── API helpers ────────────────────────────────────────────────────────────────
@@ -171,7 +227,7 @@ async function processJob(job) {
     await apiPatch(`/api/print-jobs/${job.id}`, { status: 'printing' });
 
     const ticket = job.job_type === 'receipt' ? buildReceipt(job.payload) : buildKot(job.payload);
-    await printToNetworkPrinter(ticket);
+    await printBuffer(ticket);
 
     await apiPatch(`/api/print-jobs/${job.id}`, { status: 'printed' });
     console.log(`[print-agent] Job ${job.id} printed OK`);
@@ -204,20 +260,28 @@ async function pollOnce() {
 
 async function main() {
   if (process.argv.includes('--test-print')) {
-    console.log(`[print-agent] Sending test ticket to ${PRINTER_IP}:${PRINTER_PORT}...`);
+    const target = PRINTER_TYPE === 'network'
+      ? `${PRINTER_IP}:${PRINTER_PORT} (network)`
+      : os.platform() === 'win32'
+        ? `"${PRINTER_NAME}" (USB/Windows)`
+        : `${PRINTER_DEV} (USB/Linux)`;
+    console.log(`[print-agent] Sending test ticket to ${target}...`);
     const testPayload = {
       orderId: 'TEST', orderNumber: 0, type: 'dine-in', tableId: 'T01',
       customerName: 'Test Order', createdAt: new Date().toISOString(),
-      items: [{ name: 'Test Item', qty: 1 }],
-      notes: 'This is a test print from the Foodie Lover print agent.',
+      items: [{ name: 'Chicken Burger', qty: 2 }, { name: 'Fries (Large)', qty: 1 }],
+      notes: 'Test print from Foodie Lover print agent.',
     };
-    await printToNetworkPrinter(buildKot(testPayload));
-    console.log('[print-agent] Test ticket sent.');
+    await printBuffer(buildKot(testPayload));
+    console.log('[print-agent] Test ticket sent OK.');
     return;
   }
 
+  const target = PRINTER_TYPE === 'network'
+    ? `${PRINTER_IP}:${PRINTER_PORT}`
+    : os.platform() === 'win32' ? `USB → "${PRINTER_NAME}"` : `USB → ${PRINTER_DEV}`;
   console.log(`[print-agent] Starting. Polling ${APP_BASE_URL}/api/print-jobs every ${POLL_MS}ms`);
-  console.log(`[print-agent] Printer target: ${PRINTER_IP}:${PRINTER_PORT} (station "${PRINTER_STATION_ID}")`);
+  console.log(`[print-agent] Printer: ${target} (mode=${PRINTER_TYPE}, station="${PRINTER_STATION_ID}")`);
 
   // eslint-disable-next-line no-constant-condition
   while (true) {

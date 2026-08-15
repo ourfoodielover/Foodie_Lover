@@ -31,6 +31,16 @@ export type RealtimeEventHandlers = {
   // Fired by POST /api/orders/[id]/events — custom audit events such as
   // CustomerConfirmed, FoodDisputed, DisputeResolved appended to an order.
   order_event_added?:        (payload: unknown) => void;
+  // ── Waiter confirmation + print workflow ──────────────────────────────────
+  // Fired when a waiter taps "Confirm & Print" — primary signal for the
+  // kitchen display to add the confirmed order to the active queue.
+  order_confirmed?:          (payload: unknown) => void;
+  // Fired when a waiter rejects an order before it reaches the kitchen.
+  order_rejected?:           (payload: unknown) => void;
+  // Fired when a KOT print job is queued (secondary, print-agent concern).
+  print_job_queued?:         (payload: unknown) => void;
+  // Fired when the print agent updates a job (printed / failed / etc.).
+  print_job_updated?:        (payload: unknown) => void;
 };
 
 // ─── useRealtime hook ─────────────────────────────────────────────────────────
@@ -64,6 +74,8 @@ export function useRealtime(
       'order_issue_reported', 'order_issue_escalated',
       'order_issue_reserving', 'order_issue_resolved',
       'order_event_added',
+      'order_confirmed', 'order_rejected',
+      'print_job_queued', 'print_job_updated',
     ] as const)
       .forEach(event => {
         channel.on('broadcast', { event }, ({ payload }) => {
