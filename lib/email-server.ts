@@ -49,8 +49,33 @@ export type SendReceiptResult =
 const RETRY_DELAY_MS = [0, 60_000, 5 * 60_000] as const; // ms per retry slot
 const MAX_RETRIES    = 3;
 
-// ─── Brand name (from env so it can be customised without code changes) ────────
+// ─── Brand name + app base URL ────────────────────────────────────────────────
 const RESTAURANT_NAME = process.env.RESTAURANT_NAME ?? 'Foodie Lover';
+// NEXT_PUBLIC_APP_URL is set in .env.local / Vercel env vars.
+// Falls back to empty string — links will be relative if not set.
+const APP_BASE_URL = (process.env.NEXT_PUBLIC_APP_URL ?? '').replace(/\/$/, '');
+
+/** Builds a full tracking URL for a pickup/delivery order. */
+function trackingUrl(orderId: string): string {
+  return `${APP_BASE_URL}/track?orderId=${encodeURIComponent(orderId)}`;
+}
+
+/** Renders a prominent CTA button suitable for order-tracking emails. */
+function trackingButtonHtml(orderId: string, label: string, color = '#E65C00'): string {
+  const url = trackingUrl(orderId);
+  return `
+  <div style="text-align:center;margin:24px 0">
+    <a href="${url}" target="_blank" rel="noopener noreferrer"
+       style="display:inline-block;background:${color};color:white;font-weight:800;font-size:15px;
+              padding:14px 32px;border-radius:12px;text-decoration:none;
+              letter-spacing:0.3px;box-shadow:0 4px 12px rgba(0,0,0,0.15)">
+      ${label}
+    </a>
+    <div style="margin-top:8px;font-size:11px;color:#94a3b8">
+      or copy: <a href="${url}" style="color:#7c3aed;font-family:monospace;font-size:11px;word-break:break-all">${url}</a>
+    </div>
+  </div>`;
+}
 
 // ─── Build HTML receipt ───────────────────────────────────────────────────────
 
@@ -778,10 +803,17 @@ function buildConfirmationHtml(order: Record<string, unknown>, items: Record<str
   const custName = (order.customer_name as string) || 'Valued Customer';
   const total    = Number(order.total) || 0;
   const typeRaw  = (order.type as string) || 'dine-in';
+  const isPickup   = typeRaw === 'pickup';
+  const isDelivery = typeRaw === 'delivery';
   const typeLabel =
-    typeRaw === 'delivery' ? '🚗 Delivery' :
-    typeRaw === 'pickup'   ? '🏪 Pickup'   : '🍽️ Dine-In';
+    isDelivery ? '🚗 Delivery' :
+    isPickup   ? '🏪 Pickup'  : '🍽️ Dine-In';
   const deliveryAddr = (order.delivery_address as string) || '';
+
+  // Tracking link — only for pickup and delivery (dine-in uses table page)
+  const trackBtn = (isPickup || isDelivery)
+    ? trackingButtonHtml(orderId, isDelivery ? '📍 Track Your Order' : '📋 View Order Status')
+    : '';
 
   const itemRows = items.map(it => `
     <tr>
@@ -816,9 +848,10 @@ function buildConfirmationHtml(order: Record<string, unknown>, items: Record<str
       <div style="border-top:2px solid #f1f5f9;padding-top:14px;text-align:right">
         <span style="font-size:18px;font-weight:900;color:#E65C00">Total: ₹${total.toFixed(2)}</span>
       </div>
-      <p style="margin:20px 0 0;font-size:13px;color:#64748b;text-align:center">
-        We'll notify you when your order is ready. Keep this email for reference.<br/>
-        <span style="font-family:monospace;font-size:11px;color:#7c3aed">${orderId}</span>
+      ${trackBtn}
+      <p style="margin:${trackBtn ? '4px' : '20px'} 0 0;font-size:12px;color:#94a3b8;text-align:center">
+        Keep this email for reference &nbsp;·&nbsp;
+        <span style="font-family:monospace;color:#7c3aed">${orderId}</span>
       </p>
     </div>
     <div style="text-align:center;padding:16px;font-size:11px;color:#94a3b8">
@@ -858,6 +891,7 @@ function buildOrderReadyHtml(order: Record<string, unknown>): string {
         <div style="font-size:11px;font-weight:700;color:#16a34a;text-transform:uppercase;letter-spacing:1px">Order #${orderNum}</div>
         <div style="font-family:monospace;font-size:11px;color:#94a3b8;margin-top:4px">${orderId}</div>
       </div>
+      ${trackingButtonHtml(orderId, isDelivery ? '🛵 Track Delivery' : '📦 View Order Status', isDelivery ? '#2563eb' : '#16a34a')}
     </div>
     <div style="text-align:center;padding:16px;font-size:11px;color:#94a3b8">
       Thank you for choosing <strong style="color:#E65C00">${RESTAURANT_NAME}</strong>! 🙏
@@ -1040,6 +1074,7 @@ export async function sendOutForDeliveryEmail(orderId: string): Promise<void> {
         <div style="font-size:11px;font-weight:700;color:#2563eb;text-transform:uppercase;letter-spacing:1px">Order #${orderNum}</div>
         <div style="font-family:monospace;font-size:11px;color:#94a3b8;margin-top:4px">${String(raw.id)}</div>
       </div>
+      ${trackingButtonHtml(String(raw.id), '🛵 Track Your Delivery', '#2563eb')}
     </div>
     <div style="text-align:center;padding:16px;font-size:11px;color:#94a3b8">
       Thank you for choosing <strong style="color:#E65C00">${RESTAURANT_NAME}</strong>! 🙏
