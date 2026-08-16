@@ -87,18 +87,7 @@ function WaiterPageInner() {
   // Track order IDs we've already alerted about so we don't re-alert on re-renders
   const seenOrderIds = useRef<Set<string>>(new Set());
 
-  // ── Load kitchen routing mode from admin config ──────────────────────────
-  useEffect(() => {
-    fetch('/api/admin/restaurant-config')
-      .then(r => r.json())
-      .then((d: { kitchen_mode?: string }) => {
-        const mode = d.kitchen_mode;
-        if (mode === 'printer' || mode === 'kitchen_display' || mode === 'ask') {
-          setKitchenRoutingMode(mode);
-        }
-      })
-      .catch(console.error);
-  }, []);
+  // Kitchen routing mode is loaded inside refresh() so it stays live with the 5-second poll.
 
   // ── Auth + shift ID hydration ─────────────────────────────────────────────
   useEffect(() => {
@@ -125,6 +114,18 @@ function WaiterPageInner() {
   const refresh = useCallback(async () => {
     try {
       setFetchError('');
+      // ── Refresh kitchen routing mode alongside order data ────────────────
+      // (fire-and-forget so a config fetch failure doesn't block order rendering)
+      fetch('/api/admin/restaurant-config')
+        .then(r => r.json())
+        .then((d: { kitchen_mode?: string }) => {
+          const mode = d.kitchen_mode;
+          if (mode === 'printer' || mode === 'kitchen_display' || mode === 'ask') {
+            setKitchenRoutingMode(mode);
+          }
+        })
+        .catch(() => { /* non-fatal — keep current mode */ });
+
       const [allOrders, allTabs, allTables, callsData, issues] = await Promise.all([
         // ── Performance: activeOnly skips completed/cancelled/void orders ──────
         // This reduces the payload by excluding historical terminal-state orders.
@@ -869,25 +870,39 @@ function WaiterPageInner() {
               </div>
               {/* Quick action buttons on card */}
               {(canAccept || canServe || canReprint) && (
-                <div style={{ padding: '0 0.75rem 0.6rem', display: 'flex', gap: '0.4rem' }} onClick={e => e.stopPropagation()}>
+                <div style={{ padding: '0 0.75rem 0.6rem', display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }} onClick={e => e.stopPropagation()}>
                   {canAccept && (
                     <>
-                      {/* Show Confirm & Print when mode is 'printer' or 'ask' */}
+                      {/* CONFIRM & PRINT KOT — shown when mode is 'printer' or 'ask' */}
                       {(kitchenRoutingMode === 'printer' || kitchenRoutingMode === 'ask') && (
-                        <button disabled={actionBusy} onClick={() => confirmAndPrint(order)} style={{ ...btn('#f59e0b', '#1A0800'), flex: 2, fontSize: '0.76rem', padding: '0.4rem 0.5rem', opacity: actionBusy ? 0.6 : 1 }}>
-                          🖨️ Print KOT
+                        <button
+                          disabled={actionBusy}
+                          onClick={() => confirmAndPrint(order)}
+                          style={{ ...btn('#f59e0b', '#1A0800'), flex: '1 1 auto', minWidth: 0, fontSize: '0.74rem', padding: '0.45rem 0.6rem', opacity: actionBusy ? 0.6 : 1, whiteSpace: 'nowrap' }}
+                        >
+                          🖨️ {kitchenRoutingMode === 'ask' ? 'Confirm & Print KOT' : 'Confirm & Print KOT'}
                         </button>
                       )}
-                      {/* Show Send to Kitchen when mode is 'kitchen_display' or 'ask' */}
+                      {/* CONFIRM & SEND TO KITCHEN — shown when mode is 'kitchen_display' or 'ask' */}
                       {(kitchenRoutingMode === 'kitchen_display' || kitchenRoutingMode === 'ask') && (
-                        <button disabled={actionBusy} onClick={() => confirmAndKitchen(order)} style={{ ...btn('#7c3aed'), flex: 2, fontSize: '0.76rem', padding: '0.4rem 0.5rem', opacity: actionBusy ? 0.6 : 1 }}>
-                          🖥 Kitchen
+                        <button
+                          disabled={actionBusy}
+                          onClick={() => confirmAndKitchen(order)}
+                          style={{ ...btn('#7c3aed'), flex: '1 1 auto', minWidth: 0, fontSize: '0.74rem', padding: '0.45rem 0.6rem', opacity: actionBusy ? 0.6 : 1, whiteSpace: 'nowrap' }}
+                        >
+                          🖥️ {kitchenRoutingMode === 'ask' ? 'Confirm & Send to Kitchen' : 'Confirm & Send to Kitchen'}
                         </button>
                       )}
-                      <button disabled={actionBusy} onClick={() => { setSelOrder(order); setShowCancelFor(order.id); setCancelReason(''); }} style={{ ...btn('#fef2f2', '#dc2626'), flex: 1, fontSize: '0.76rem', padding: '0.4rem 0.5rem', border: '1px solid #fecaca', opacity: actionBusy ? 0.6 : 1 }}>
+                      <button disabled={actionBusy} onClick={() => { setSelOrder(order); setShowCancelFor(order.id); setCancelReason(''); }} style={{ ...btn('#fef2f2', '#dc2626'), flex: '0 0 auto', fontSize: '0.74rem', padding: '0.45rem 0.6rem', border: '1px solid #fecaca', opacity: actionBusy ? 0.6 : 1, whiteSpace: 'nowrap' }}>
                         🚫 Reject
                       </button>
                     </>
+                  )}
+                  {/* Printer-route failure fallback on card — shown when order is preparing but KOT may not have printed */}
+                  {order.kitchenRoute === 'printer' && order.status === 'preparing' && !canServe && (
+                    <button disabled={actionBusy} onClick={() => switchToKitchenFallback(order)} style={{ ...btn('#eff6ff', '#2563eb'), flex: '1 1 auto', fontSize: '0.72rem', padding: '0.35rem 0.5rem', border: '1px solid #bfdbfe', opacity: actionBusy ? 0.6 : 1, whiteSpace: 'nowrap' }}>
+                      🖥️ Send to Kitchen (print failed?)
+                    </button>
                   )}
                   {canReprint && !canServe && (
                     <button disabled={actionBusy} onClick={() => handleReprint(order)} style={{ ...btn('#e5e7eb', '#444'), flex: 1, fontSize: '0.76rem', padding: '0.4rem 0.5rem', opacity: actionBusy ? 0.6 : 1 }}>
@@ -1020,23 +1035,50 @@ function WaiterPageInner() {
               <div style={{ padding: '0.85rem 1.25rem', borderTop: '2px solid #f5f0e8', background: 'white' }}>
                 {['awaiting_waiter', 'pending'].includes(selOrder.status) && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                    {/* Print KOT button — shown when mode is 'printer' or 'ask' */}
+                    {/* Mode indicator — helps staff quickly see current routing setting */}
+                    {kitchenRoutingMode === 'ask' && (
+                      <div style={{ textAlign: 'center', fontSize: '0.72rem', color: '#7c3aed', fontWeight: 700, padding: '0.25rem 0', background: '#faf5ff', borderRadius: 8 }}>
+                        Choose how to route this order to the kitchen:
+                      </div>
+                    )}
+
+                    {/* ── CONFIRM & PRINT KOT ── shown when mode is 'printer' or 'ask' */}
                     {(kitchenRoutingMode === 'printer' || kitchenRoutingMode === 'ask') && (
-                      <button disabled={actionBusy} onClick={() => confirmAndPrint(selOrder)} style={{ ...btn('#f59e0b', '#1A0800'), width: '100%', padding: '0.75rem', fontSize: '0.95rem', borderRadius: 12, opacity: actionBusy ? 0.6 : 1 }}>
-                        {actionBusy ? '⏳ Processing…' : '🖨️ Confirm & Print KOT'}
+                      <button
+                        disabled={actionBusy}
+                        onClick={() => confirmAndPrint(selOrder)}
+                        style={{ ...btn('#f59e0b', '#1A0800'), width: '100%', padding: '0.8rem', fontSize: '0.95rem', borderRadius: 12, opacity: actionBusy ? 0.6 : 1, fontWeight: 900 }}
+                      >
+                        {actionBusy ? '⏳ Processing…' : '🖨️ CONFIRM & PRINT KOT'}
                       </button>
                     )}
-                    {/* Send to Kitchen Display button — shown when mode is 'kitchen_display' or 'ask' */}
+
+                    {/* ── CONFIRM & SEND TO KITCHEN ── shown when mode is 'kitchen_display' or 'ask' */}
                     {(kitchenRoutingMode === 'kitchen_display' || kitchenRoutingMode === 'ask') && (
-                      <button disabled={actionBusy} onClick={() => confirmAndKitchen(selOrder)} style={{ ...btn('#7c3aed'), width: '100%', padding: '0.75rem', fontSize: '0.95rem', borderRadius: 12, opacity: actionBusy ? 0.6 : 1 }}>
-                        {actionBusy ? '⏳ Processing…' : '🖥 Confirm & Send to Kitchen Display'}
+                      <button
+                        disabled={actionBusy}
+                        onClick={() => confirmAndKitchen(selOrder)}
+                        style={{ ...btn('#7c3aed'), width: '100%', padding: '0.8rem', fontSize: '0.95rem', borderRadius: 12, opacity: actionBusy ? 0.6 : 1, fontWeight: 900 }}
+                      >
+                        {actionBusy ? '⏳ Processing…' : '🖥️ CONFIRM & SEND TO KITCHEN'}
                       </button>
                     )}
-                    {/* Printer failure fallback: only shown if order is printer-routed but still needs attention */}
+
+                    {/* ── Printer failure fallback: shown when order is already printer-routed ('preparing') ── */}
                     {selOrder.kitchenRoute === 'printer' && selOrder.status === 'preparing' && (
-                      <button disabled={actionBusy} onClick={() => switchToKitchenFallback(selOrder)} style={{ ...btn('#eff6ff', '#2563eb'), width: '100%', padding: '0.6rem', fontSize: '0.82rem', borderRadius: 10, border: '1px solid #bfdbfe', opacity: actionBusy ? 0.6 : 1 }}>
-                        🖥 Switch to Kitchen Display (print failed?)
-                      </button>
+                      <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 10, padding: '0.6rem 0.75rem' }}>
+                        <div style={{ fontSize: '0.76rem', fontWeight: 700, color: '#dc2626', marginBottom: '0.4rem' }}>
+                          🖨️ KOT Print Failed?
+                        </div>
+                        <div style={{ display: 'flex', gap: '0.4rem' }}>
+                          <button disabled={actionBusy} onClick={() => handleReprint(selOrder)} style={{ ...btn('#f59e0b', '#1A0800'), flex: 1, fontSize: '0.8rem', padding: '0.45rem', opacity: actionBusy ? 0.6 : 1 }}>
+                            🔄 Retry Print
+                          </button>
+                          <button disabled={actionBusy} onClick={() => switchToKitchenFallback(selOrder)} style={{ ...btn('#2563eb'), flex: 1, fontSize: '0.8rem', padding: '0.45rem', opacity: actionBusy ? 0.6 : 1 }}>
+                            🖥️ Send to Kitchen Display
+                          </button>
+                        </div>
+                      </div>
                     )}
                   </div>
                 )}

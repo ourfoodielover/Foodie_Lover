@@ -81,7 +81,7 @@ export default function AdminPage() {
   const [authChecked, setAuthChecked]   = useState(false);
 
   // ── Navigation ──
-  type Section = 'overview'|'orders'|'sales'|'menu'|'offers'|'tables'|'fraud'|'staff'|'email'|'feedback'|'spin'|'rewards_audit';
+  type Section = 'overview'|'orders'|'sales'|'menu'|'offers'|'tables'|'fraud'|'staff'|'email'|'feedback'|'spin'|'rewards_audit'|'kitchen';
   const [section, setSection] = useState<Section>('overview');
 
   // ── Tabs / filters ──
@@ -374,6 +374,16 @@ export default function AdminPage() {
         if (Array.isArray(data)) setOfferRules(data);
       })
       .catch(e => console.error('[admin] failed to load offers:', e));
+    // ── Auto-load kitchen routing mode from DB (so admin sees real value, not React default) ──
+    fetch('/api/admin/restaurant-config')
+      .then(r => r.json())
+      .then((d: { kitchen_mode?: string }) => {
+        const km = d.kitchen_mode;
+        if (km === 'ask' || km === 'printer' || km === 'kitchen_display') {
+          setKitchenMode(km);
+        }
+      })
+      .catch(e => console.error('[admin] failed to load kitchen mode:', e));
   }, [router]);
 
   useEffect(() => {
@@ -1061,6 +1071,7 @@ export default function AdminPage() {
         <NavBtn id="fraud"    label="🔍 Transparency"     />
         <NavBtn id="staff"         label="👥 Staff"           />
         <NavBtn id="email"         label="📧 Email"           />
+        <NavBtn id="kitchen"       label="🔥 Kitchen"         />
         <NavBtn id="feedback"      label="⭐ Feedback"        />
         <NavBtn id="spin"          label="🎡 Spin & Win"      />
         <NavBtn id="rewards_audit" label="🎟 Rewards Audit"   />
@@ -2913,6 +2924,91 @@ export default function AdminPage() {
             </div>
           )}
         </>}
+
+        {/* ═══════════ KITCHEN ORDER HANDLING ═══════════ */}
+        {section==='kitchen' && (
+          <div style={{maxWidth:520}}>
+            <div style={{fontFamily:"'Playfair Display',serif",fontWeight:700,fontSize:'1.15rem',marginBottom:'0.4rem',color:'#1A0800'}}>🔥 Kitchen Order Handling</div>
+            <p style={{fontSize:'0.82rem',color:'#555',marginBottom:'1.25rem'}}>
+              Controls how each confirmed order reaches the kitchen. This setting is loaded from the database every time the admin panel opens.
+            </p>
+
+            {/* Current value chip */}
+            <div style={{marginBottom:'1rem',display:'flex',alignItems:'center',gap:'0.5rem'}}>
+              <span style={{fontSize:'0.75rem',color:'#888',fontWeight:600}}>Current setting in DB:</span>
+              <span style={{
+                padding:'0.2rem 0.75rem',borderRadius:20,fontWeight:800,fontSize:'0.78rem',
+                background: kitchenMode==='ask'?'#f0fdf4':kitchenMode==='printer'?'#fef9c3':'#eff6ff',
+                color: kitchenMode==='ask'?'#15803d':kitchenMode==='printer'?'#854d0e':'#1d4ed8',
+                border: '1px solid',
+                borderColor: kitchenMode==='ask'?'#86efac':kitchenMode==='printer'?'#fde047':'#bfdbfe',
+              }}>
+                {kitchenMode==='ask' ? '🤝 Ask Waiter Each Time' : kitchenMode==='printer' ? '🖨️ Printer Only' : '🖥️ Kitchen Display Only'}
+              </span>
+            </div>
+
+            <div style={{background:'white',borderRadius:14,padding:'1.25rem',boxShadow:'0 2px 12px rgba(0,0,0,0.07)',border:'1px solid #f0e0d0',marginBottom:'1rem'}}>
+              <label style={{fontWeight:700,fontSize:'0.82rem',color:'#555',display:'block',marginBottom:'0.5rem'}}>Kitchen Order Handling Mode</label>
+              <select
+                value={kitchenMode}
+                onChange={e=>setKitchenMode(e.target.value as 'ask'|'printer'|'kitchen_display')}
+                style={{display:'block',width:'100%',maxWidth:380,padding:'0.6rem 0.75rem',border:'2px solid #e5e7eb',borderRadius:10,fontFamily:'Poppins,sans-serif',fontSize:'0.88rem',marginBottom:'1rem',outline:'none'}}
+              >
+                <option value="ask">Ask Waiter Each Time — show BOTH Print KOT &amp; Send to Kitchen buttons</option>
+                <option value="printer">Printer Only — waiter always prints KOT (no kitchen display button)</option>
+                <option value="kitchen_display">Kitchen Display Only — always sends to kitchen display (no print button)</option>
+              </select>
+
+              {/* Explanations per mode */}
+              {kitchenMode==='ask' && (
+                <div style={{background:'#f0fdf4',border:'1px solid #86efac',borderRadius:10,padding:'0.75rem',fontSize:'0.8rem',color:'#166534',marginBottom:'0.75rem'}}>
+                  <strong>🤝 Ask Waiter Each Time:</strong> For every new order, the waiter sees two buttons:<br/>
+                  <span style={{marginLeft:'0.75rem',display:'inline-block',marginTop:'0.35rem'}}>🖨️ <strong>CONFIRM &amp; PRINT KOT</strong> — routes order to kitchen printer</span><br/>
+                  <span style={{marginLeft:'0.75rem',display:'inline-block'}}>🖥️ <strong>CONFIRM &amp; SEND TO KITCHEN</strong> — routes to Kitchen Display screen</span><br/>
+                  The waiter chooses the route per order. Exactly one route is used; the other is never triggered.
+                </div>
+              )}
+              {kitchenMode==='printer' && (
+                <div style={{background:'#fef9c3',border:'1px solid #fde047',borderRadius:10,padding:'0.75rem',fontSize:'0.8rem',color:'#854d0e',marginBottom:'0.75rem'}}>
+                  <strong>🖨️ Printer Only:</strong> Only <strong>CONFIRM &amp; PRINT KOT</strong> is shown. Kitchen Display will NOT show these orders as actionable. Print failure fallback (Send to Kitchen Display) is still available.
+                </div>
+              )}
+              {kitchenMode==='kitchen_display' && (
+                <div style={{background:'#eff6ff',border:'1px solid #bfdbfe',borderRadius:10,padding:'0.75rem',fontSize:'0.8rem',color:'#1d4ed8',marginBottom:'0.75rem'}}>
+                  <strong>🖥️ Kitchen Display Only:</strong> Only <strong>CONFIRM &amp; SEND TO KITCHEN</strong> is shown. No KOT is printed automatically.
+                </div>
+              )}
+
+              <button
+                onClick={async()=>{
+                  setKitchenModeMsg('⏳ Saving…');
+                  try {
+                    const r = await fetch('/api/admin/restaurant-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kitchen_mode:kitchenMode})});
+                    const d = await r.json() as {ok?:boolean;error?:string};
+                    setKitchenModeMsg(d.ok ? `✅ Saved — Kitchen mode is now "${kitchenMode==='ask'?'Ask Waiter Each Time':kitchenMode==='printer'?'Printer Only':'Kitchen Display Only'}"` : `❌ ${d.error ?? 'Error'}`);
+                  } catch { setKitchenModeMsg('❌ Network error'); }
+                  setTimeout(()=>setKitchenModeMsg(''),4000);
+                }}
+                style={{background:'#1A0800',color:'white',border:'none',borderRadius:10,padding:'0.7rem 1.5rem',fontWeight:800,cursor:'pointer',fontFamily:'Poppins,sans-serif',fontSize:'0.88rem'}}
+              >
+                💾 Save Kitchen Mode
+              </button>
+              {kitchenModeMsg && (
+                <div style={{marginTop:'0.6rem',fontSize:'0.82rem',fontWeight:700,color:kitchenModeMsg.includes('✅')?'#16a34a':'#ef4444'}}>
+                  {kitchenModeMsg}
+                </div>
+              )}
+            </div>
+
+            <div style={{background:'#f9fafb',borderRadius:12,padding:'1rem',fontSize:'0.78rem',color:'#666',lineHeight:1.6}}>
+              <strong style={{color:'#1A0800'}}>How it works:</strong><br/>
+              • <strong>Confirm &amp; Print KOT</strong> sets <code>kitchen_route = printer</code>. The Kitchen Display screen automatically hides printer-routed orders.<br/>
+              • <strong>Confirm &amp; Send to Kitchen</strong> sets <code>kitchen_route = kitchen_display</code>. The order appears on the Kitchen Display and triggers beep/TTS.<br/>
+              • These are mutually exclusive: pressing one button never triggers the other route.<br/>
+              • The waiter page refreshes this setting every 5 seconds, so changes take effect immediately without a page reload.
+            </div>
+          </div>
+        )}
 
       </div>{/* /container */}
 
