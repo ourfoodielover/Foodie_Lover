@@ -37,7 +37,7 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
   // that state from before this workflow existed.
   awaiting_waiter:   ['pending', 'preparing', 'cancelled'],
   pending:           ['preparing', 'cancelled'],
-  preparing:         ['prepared', 'cancelled'],
+  preparing:         ['prepared', 'served', 'cancelled'],
   prepared:          ['served', 'out_for_delivery', 'completed', 'cancelled'],
   // served → out_for_delivery: delivery portal picks up orders that are in 'served'
   // state (backward compat for re-serve flow and any dine-in→delivery handoff edge cases)

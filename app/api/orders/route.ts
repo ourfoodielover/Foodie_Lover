@@ -41,6 +41,7 @@ export async function GET(req: NextRequest) {
         'id, order_number, restaurant_id, type, table_id, tab_id, ' +
         'customer_name, customer_email, phone, status, subtotal, tax, tip, ' +
         'total, discount, discount_reason, payment_method, tracking_token, ' +
+        'kitchen_route, ' +
         'delivery_address, delivery_person, assigned_at, delivered_at, ' +
         'cancel_reason, source, issue_count, created_at, updated_at, ' +
         'order_items(id, name, qty, price, subtotal, item_status, menu_item_id), ' +

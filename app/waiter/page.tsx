@@ -376,6 +376,37 @@ function WaiterPageInner() {
     finally { setActionBusy(false); }
   }
 
+  // ── Printer-route advancement ────────────────────────────────────────────────
+  // Called when a printer-routed order is in 'preparing' and the kitchen has
+  // physically finished cooking (waiter collected food / food is ready at counter).
+  // Does NOT involve the Kitchen Display — this path is entirely printer-only.
+  //
+  //  dine-in  → 'served'   (waiter collected food and brought it to the table)
+  //  pickup   → 'prepared' (food at counter — triggers "Ready for Pickup" email)
+  //  delivery → 'prepared' (food ready for delivery person to collect)
+  async function markPrinterRouteAction(order: Order) {
+    if (actionBusy) return;
+    setActionBusy(true);
+    try {
+      if (order.type === 'dine-in') {
+        await updateOrderStatus(order.id, 'served', session?.name || 'Waiter');
+        setActionMsg('✅ Order marked as served');
+      } else {
+        // pickup / delivery: 'prepared' triggers the "order ready" email automatically
+        await updateOrderStatus(order.id, 'prepared', session?.name || 'Waiter');
+        setActionMsg(
+          order.type === 'pickup'
+            ? '🏪 Marked ready for pickup — customer will be notified!'
+            : '📦 Marked ready — delivery agent can collect.',
+        );
+      }
+      setTimeout(() => setActionMsg(''), 3000);
+      setSelOrder(null);
+      await refresh();
+    } catch (e) { console.error(e); }
+    finally { setActionBusy(false); }
+  }
+
   async function markServed(order: Order) {
     if (actionBusy) return;
     setActionBusy(true);
@@ -898,7 +929,19 @@ function WaiterPageInner() {
                       </button>
                     </>
                   )}
-                  {/* Printer-route failure fallback on card — shown when order is preparing but KOT may not have printed */}
+                  {/* Printer route: food physically ready — waiter marks served/ready without kitchen display */}
+                  {order.kitchenRoute === 'printer' && order.status === 'preparing' && (
+                    <button
+                      disabled={actionBusy}
+                      onClick={() => markPrinterRouteAction(order)}
+                      style={{ ...btn(order.type === 'dine-in' ? '#16a34a' : order.type === 'pickup' ? '#0d9488' : '#2563eb'), flex: '1 1 auto', fontSize: '0.74rem', padding: '0.45rem 0.6rem', opacity: actionBusy ? 0.6 : 1, whiteSpace: 'nowrap' }}
+                    >
+                      {order.type === 'delivery' ? '📦 Mark Ready'
+                       : order.type === 'pickup'  ? '🏪 Mark Ready for Pickup'
+                       : '🍽️ Mark Served'}
+                    </button>
+                  )}
+                  {/* Printer-route failure fallback on card — switch to kitchen display if KOT never printed */}
                   {order.kitchenRoute === 'printer' && order.status === 'preparing' && !canServe && (
                     <button disabled={actionBusy} onClick={() => switchToKitchenFallback(order)} style={{ ...btn('#eff6ff', '#2563eb'), flex: '1 1 auto', fontSize: '0.72rem', padding: '0.35rem 0.5rem', border: '1px solid #bfdbfe', opacity: actionBusy ? 0.6 : 1, whiteSpace: 'nowrap' }}>
                       🖥️ Send to Kitchen (print failed?)
@@ -1031,18 +1074,21 @@ function WaiterPageInner() {
             </div>
 
             {/* Action footer */}
-            {(['awaiting_waiter', 'pending'].includes(selOrder.status) || selOrder.status === 'prepared') && (
+            {(
+              ['awaiting_waiter', 'pending'].includes(selOrder.status) ||
+              selOrder.status === 'prepared' ||
+              (selOrder.kitchenRoute === 'printer' && selOrder.status === 'preparing')
+            ) && (
               <div style={{ padding: '0.85rem 1.25rem', borderTop: '2px solid #f5f0e8', background: 'white' }}>
+
+                {/* ── Awaiting waiter: route to kitchen ── */}
                 {['awaiting_waiter', 'pending'].includes(selOrder.status) && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                    {/* Mode indicator — helps staff quickly see current routing setting */}
                     {kitchenRoutingMode === 'ask' && (
                       <div style={{ textAlign: 'center', fontSize: '0.72rem', color: '#7c3aed', fontWeight: 700, padding: '0.25rem 0', background: '#faf5ff', borderRadius: 8 }}>
                         Choose how to route this order to the kitchen:
                       </div>
                     )}
-
-                    {/* ── CONFIRM & PRINT KOT ── shown when mode is 'printer' or 'ask' */}
                     {(kitchenRoutingMode === 'printer' || kitchenRoutingMode === 'ask') && (
                       <button
                         disabled={actionBusy}
@@ -1052,8 +1098,6 @@ function WaiterPageInner() {
                         {actionBusy ? '⏳ Processing…' : '🖨️ CONFIRM & PRINT KOT'}
                       </button>
                     )}
-
-                    {/* ── CONFIRM & SEND TO KITCHEN ── shown when mode is 'kitchen_display' or 'ask' */}
                     {(kitchenRoutingMode === 'kitchen_display' || kitchenRoutingMode === 'ask') && (
                       <button
                         disabled={actionBusy}
@@ -1063,25 +1107,37 @@ function WaiterPageInner() {
                         {actionBusy ? '⏳ Processing…' : '🖥️ CONFIRM & SEND TO KITCHEN'}
                       </button>
                     )}
-
-                    {/* ── Printer failure fallback: shown when order is already printer-routed ('preparing') ── */}
-                    {selOrder.kitchenRoute === 'printer' && selOrder.status === 'preparing' && (
-                      <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 10, padding: '0.6rem 0.75rem' }}>
-                        <div style={{ fontSize: '0.76rem', fontWeight: 700, color: '#dc2626', marginBottom: '0.4rem' }}>
-                          🖨️ KOT Print Failed?
-                        </div>
-                        <div style={{ display: 'flex', gap: '0.4rem' }}>
-                          <button disabled={actionBusy} onClick={() => handleReprint(selOrder)} style={{ ...btn('#f59e0b', '#1A0800'), flex: 1, fontSize: '0.8rem', padding: '0.45rem', opacity: actionBusy ? 0.6 : 1 }}>
-                            🔄 Retry Print
-                          </button>
-                          <button disabled={actionBusy} onClick={() => switchToKitchenFallback(selOrder)} style={{ ...btn('#2563eb'), flex: 1, fontSize: '0.8rem', padding: '0.45rem', opacity: actionBusy ? 0.6 : 1 }}>
-                            🖥️ Send to Kitchen Display
-                          </button>
-                        </div>
-                      </div>
-                    )}
                   </div>
                 )}
+
+                {/* ── Printer-routed preparing: waiter advances without kitchen display ── */}
+                {selOrder.kitchenRoute === 'printer' && selOrder.status === 'preparing' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    <div style={{ textAlign: 'center', fontSize: '0.72rem', color: '#16a34a', fontWeight: 700, padding: '0.25rem 0', background: '#f0fdf4', borderRadius: 8 }}>
+                      🖨️ Printer route — no Kitchen Display required
+                    </div>
+                    <button
+                      disabled={actionBusy}
+                      onClick={() => markPrinterRouteAction(selOrder)}
+                      style={{ ...btn(selOrder.type === 'dine-in' ? '#16a34a' : selOrder.type === 'pickup' ? '#0d9488' : '#2563eb'), width: '100%', padding: '0.8rem', fontSize: '0.95rem', borderRadius: 12, opacity: actionBusy ? 0.6 : 1, fontWeight: 900 }}
+                    >
+                      {actionBusy ? '⏳ Processing…'
+                       : selOrder.type === 'delivery' ? '📦 MARK READY'
+                       : selOrder.type === 'pickup'   ? '🏪 MARK READY FOR PICKUP'
+                       : '🍽️ MARK SERVED'}
+                    </button>
+                    {/* Printer failure fallback */}
+                    <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 10, padding: '0.6rem 0.75rem' }}>
+                      <div style={{ fontSize: '0.76rem', fontWeight: 700, color: '#dc2626', marginBottom: '0.4rem' }}>🖨️ KOT Print Failed?</div>
+                      <div style={{ display: 'flex', gap: '0.4rem' }}>
+                        <button disabled={actionBusy} onClick={() => handleReprint(selOrder)} style={{ ...btn('#f59e0b', '#1A0800'), flex: 1, fontSize: '0.8rem', padding: '0.45rem', opacity: actionBusy ? 0.6 : 1 }}>🔄 Retry Print</button>
+                        <button disabled={actionBusy} onClick={() => switchToKitchenFallback(selOrder)} style={{ ...btn('#2563eb'), flex: 1, fontSize: '0.8rem', padding: '0.45rem', opacity: actionBusy ? 0.6 : 1 }}>🖥️ Send to Kitchen Display</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ── Kitchen-display prepared: waiter serves ── */}
                 {selOrder.status === 'prepared' && (
                   <button
                     disabled={actionBusy}

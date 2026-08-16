@@ -225,7 +225,10 @@ export default function KitchenPage() {
       setOrders(all);
 
       // Detect new orders → play sound + flash
-      const kitchenOrders = all.filter(o => ['pending','preparing','prepared'].includes(o.status));
+      // Only count kitchen_display-routed orders — printer orders are handled by physical KOT.
+      const kitchenOrders = all.filter(o =>
+        ['pending','preparing','prepared'].includes(o.status) && o.kitchenRoute !== 'printer',
+      );
       const newIds: string[] = [];
       for (const o of kitchenOrders) {
         if (!seenOrderIds.current.has(o.id)) {
@@ -277,9 +280,12 @@ export default function KitchenPage() {
 
   useEffect(() => {
     if (!authChecked) return;
-    // Initial load — populate seenIds without alerting
+    // Initial load — populate seenIds without alerting.
+    // Only track kitchen_display orders; printer orders use physical KOT and must not trigger audio.
     getOrders({ activeOnly: true, limit: 100 }).then(all => {
-      const kitchenOrders = all.filter(o => ['pending','preparing','prepared'].includes(o.status));
+      const kitchenOrders = all.filter(o =>
+        ['pending','preparing','prepared'].includes(o.status) && o.kitchenRoute !== 'printer',
+      );
       kitchenOrders.forEach(o => seenOrderIds.current.add(o.id));
       setOrders(all);
     });
