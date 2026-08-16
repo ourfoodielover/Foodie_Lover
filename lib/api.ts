@@ -115,6 +115,7 @@ export interface CustomerTab {
   paymentMethod:  string;       // 'cod' | 'gpay' | 'card' | etc.
   pin?:           string | null;// 4-digit table session PIN (stored in Supabase)
   email?:         string | null;// optional customer email captured at tab open
+  phone?:         string | null;// optional customer phone captured at tab open
   createdAt:      string;       // mapped from created_at
   closedAt?:      string;       // mapped from closed_at
   orderIds?:      string[];     // optional legacy
@@ -499,7 +500,7 @@ export async function getTabs(status?: string, since?: string): Promise<Customer
 }
 
 export async function createTab(data: {
-  tableId?: string; customerName: string; partySize?: number; pin?: string; email?: string;
+  tableId?: string; customerName: string; partySize?: number; pin?: string; email?: string; phone?: string;
 }): Promise<CustomerTab> {
   return apiFetch<CustomerTab>('/api/tabs', {
     method: 'POST',
@@ -509,8 +510,9 @@ export async function createTab(data: {
 
 // ─── Feedback ─────────────────────────────────────────────────────────────────
 export async function submitFeedback(data: {
-  orderId:  string;
-  rating:   number;   // 0.5–5.0 in 0.5 increments (half-star support)
+  orderId?: string;  // pickup/delivery: provide orderId
+  tabId?:   string;  // dine-in: provide tabId (API resolves to a representative order)
+  rating:   number;  // 0.5–5.0 in 0.5 increments (half-star support)
   comment?: string;
 }): Promise<{ ok: boolean; alreadySubmitted?: boolean }> {
   return apiFetch<{ ok: boolean; alreadySubmitted?: boolean }>('/api/feedback', {

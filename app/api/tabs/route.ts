@@ -20,6 +20,7 @@ function rowToTab(row: Record<string, unknown>) {
     paymentMethod:  (row.payment_method as string) || 'cod',
     pin:            (row.pin as string) || null,   // table session PIN stored server-side
     email:          (row.customer_email as string | null) ?? null,
+    phone:          (row.phone as string | null) ?? null,
     createdAt:      row.created_at,
     closedAt:       row.closed_at ?? null,
     // Coupon fields (added in migration_011)
@@ -117,6 +118,10 @@ export async function POST(req: NextRequest) {
     const rawEmail = body.email ? String(body.email).trim() : null;
     const customerEmail = rawEmail && rawEmail.includes('@') ? rawEmail : null;
 
+    // Validate + store optional customer phone
+    const rawPhone = body.phone ? String(body.phone).trim() : null;
+    const customerPhone = rawPhone && rawPhone.length >= 7 ? rawPhone : null;
+
     const { error } = await sb.from('customer_tabs').insert({
       id,
       restaurant_id:  rid,
@@ -127,6 +132,7 @@ export async function POST(req: NextRequest) {
       party_size:     Number(body.partySize) || 1,
       pin:            body.pin ? String(body.pin) : null,  // 4-digit PIN for table security
       customer_email: customerEmail,
+      phone:          customerPhone,
       status:         'open',
     });
     if (error) {

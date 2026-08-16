@@ -66,12 +66,23 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ eligible: false, reason: 'Email required for Spin & Win' });
     }
 
-    // Check phone
-    if (config.require_phone && !tab.phone) {
+    // Check phone — first try tab.phone, then fall back to any order in the tab
+    let resolvedPhone = tab.phone as string | null;
+    if (config.require_phone && !resolvedPhone) {
+      const { data: orderWithPhone } = await sb
+        .from('orders')
+        .select('phone')
+        .eq('tab_id', tabId)
+        .not('phone', 'is', null)
+        .limit(1)
+        .maybeSingle();
+      resolvedPhone = orderWithPhone?.phone ?? null;
+    }
+    if (config.require_phone && !resolvedPhone) {
       return NextResponse.json({ eligible: false, reason: 'Phone number required for Spin & Win' });
     }
 
-    return NextResponse.json({ eligible: true, alreadySpun: false, qualifyingAmount: tab.total });
+    return NextResponse.json({ eligible: true, alreadySpun: false, qualifyingAmount: tab.total, tabEmail: tab.customer_email, tabPhone: resolvedPhone });
   }
 
   // ── ORDER-BASED SPIN (pickup / delivery) ────────────────────────────────

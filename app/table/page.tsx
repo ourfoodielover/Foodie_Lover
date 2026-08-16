@@ -12,6 +12,7 @@ import {
   createTab         as createTabApi,
   updateTab         as updateTabApi,
   getOrders         as getOrdersApi,
+  submitFeedback,
   registerTabDevice,
   getTabDevices,
   getDeviceTabRecord,
@@ -49,13 +50,14 @@ interface TabUI {
   discount:        number;
   discountReason?: string;
   tableSessionPin: string;     // PIN from Supabase customer_tabs.pin (not localStorage)
-  email?:          string;     // customer email captured at tab open — used for receipts
+  email?:          string;     // customer email captured at tab open — used for receipts/spin
+  phone?:          string;     // customer phone captured at tab open — used for spin eligibility
   createdAt:       string;
 }
 function toTabUI(
   t: { id: string; tableId?: string | null; customerName: string; partySize: number;
        status: string; total: number; discount: number; discountReason?: string | null;
-       pin?: string | null; email?: string | null; createdAt: string },
+       pin?: string | null; email?: string | null; phone?: string | null; createdAt: string },
 ): TabUI {
   const s = (t.status || 'open') as TabStatus;
   return {
@@ -65,6 +67,7 @@ function toTabUI(
     discount: t.discount, discountReason: t.discountReason ?? undefined,
     tableSessionPin: t.pin ?? '',   // PIN comes from Supabase, no localStorage needed
     email: t.email ?? undefined,    // carry email so handlePlaceOrder can send confirmations
+    phone: t.phone ?? undefined,    // carry phone for spin eligibility
     createdAt: t.createdAt,
   };
 }
@@ -159,6 +162,7 @@ function TablePageInner() {
   const [nameInput, setNameInput]         = useState('');
   const [emailInput, setEmailInput]       = useState('');
   const [emailError, setEmailError]       = useState('');
+  const [phoneInput, setPhoneInput]       = useState('');
   const [partyInput, setPartyInput]       = useState('2');
   const [nameError, setNameError]         = useState('');
 
@@ -216,6 +220,32 @@ function TablePageInner() {
   // confirmedRef: tracks which orders the customer already confirmed ✅ this session
   // NOT added for "not received" — dialog must re-appear after re-service
   const confirmedRef = useRef<Set<string>>(new Set<string>());
+
+  // ── Post-payment: Rating & Feedback (shown on closed-tab screen) ──
+  const [tRating,         setTRating]         = useState<number | null>(null);
+  const [tHoverRating,    setTHoverRating]    = useState<number | null>(null);
+  const [tRatingComment,  setTRatingComment]  = useState('');
+  const [tRatingBusy,     setTRatingBusy]     = useState(false);
+  const [tRatingSubmitted,setTRatingSubmitted]= useState(false);
+  const [tRatingMsg,      setTRatingMsg]      = useState('');
+
+  // ── Post-payment: Spin & Win (shown on closed-tab screen) ──
+  const [tSpinEligible,    setTSpinEligible]    = useState(false);
+  const [tSpinChecked,     setTSpinChecked]     = useState(false);
+  const [tSpinBusy,        setTSpinBusy]        = useState(false);
+  const [tSpinAnimating,   setTSpinAnimating]   = useState(false);
+  const [tSpinDeg,         setTSpinDeg]         = useState(0);
+  const [tSpinWheelRewards,setTSpinWheelRewards]= useState<{ id: string; label: string; reward_type: string; sort_order: number }[]>([]);
+  const [tSpinResult,      setTSpinResult]      = useState<{
+    isWinner: boolean; rewardLabel?: string; rewardType?: string;
+    couponCode?: string; expiresAt?: string; alreadySpun?: boolean;
+  } | null>(null);
+  const [tSpinError,       setTSpinError]       = useState('');
+  // Phone input on post-payment screen — for customers who didn't provide phone at session start
+  const [tSpinPhone,       setTSpinPhone]       = useState('');
+
+  // ── Ref: first order ID seen for this tab — used for feedback if tabOrders empty ──
+  const firstOrderIdRef = useRef<string | null>(null);
 
   // ── Reward coupon (for bill) ──
   const [dineCouponCode,    setDineCouponCode]    = useState('');
@@ -318,11 +348,17 @@ function TablePageInner() {
     try {
       const [tabs, myOrders] = await Promise.all([
         getTabsApi(),
-        getOrdersApi({ tabId, activeOnly: true, limit: 50 }),
+        // Fetch ALL tab orders (not just active) so we always have an orderId for feedback
+        // even after tab closes and orders reach terminal statuses.
+        getOrdersApi({ tabId, limit: 50 }),
       ]);
       const apiTab = tabs.find(t => t.id === tabId);
       if (apiTab) setTab(toTabUI(apiTab));  // PIN comes from apiTab.pin (Supabase)
       setOrders(myOrders);
+      // Track first order seen — needed for feedback submission when tab is closed
+      if (!firstOrderIdRef.current && myOrders.length > 0) {
+        firstOrderIdRef.current = myOrders[0].id;
+      }
       void refreshCodiners(tabId);
 
       // ── Check for newly served orders needing food confirmation ──────────────
@@ -354,6 +390,50 @@ function TablePageInner() {
     return () => clearInterval(t);
   }, [refresh, tabId]);
 
+  // ── When tab closes: remove device record + check Spin eligibility ──────────
+  useEffect(() => {
+    if (tab?.tabStatus !== 'closed' || !tabId) return;
+
+    // Remove this device's record so next QR scan starts fresh (non-blocking)
+    if (deviceId) {
+      void removeTabDevice(deviceId, tabId).catch(() => { /* non-critical */ });
+    }
+
+    // Only check spin once per closed-tab session
+    if (tSpinChecked) return;
+    setTSpinChecked(true);
+
+    // Load wheel segments (weights NOT exposed to client)
+    fetch('/api/rewards/wheel-rewards')
+      .then(r => r.json())
+      .then((d: unknown) => { if (Array.isArray(d)) setTSpinWheelRewards(d as { id: string; label: string; reward_type: string; sort_order: number }[]); })
+      .catch(() => {});
+
+    // Check eligibility for this tab
+    fetch(`/api/rewards/eligibility?tabId=${tabId}`)
+      .then(r => r.json())
+      .then((data: { eligible?: boolean; alreadySpun?: boolean; existingResult?: Record<string, unknown>; reason?: string }) => {
+        if (data.eligible) {
+          setTSpinEligible(true);
+        } else if (data.alreadySpun && data.existingResult) {
+          const r   = data.existingResult as Record<string, unknown>;
+          const rwd = r.spin_rewards as Record<string, unknown> | null;
+          const cpn = Array.isArray(r.reward_coupons)
+            ? (r.reward_coupons as Array<Record<string, unknown>>)[0]
+            : (r.reward_coupons as Record<string, unknown> | null);
+          setTSpinResult({
+            isWinner:    Boolean(r.is_winner),
+            rewardLabel: String(rwd?.label ?? ''),
+            couponCode:  String(cpn?.coupon_code ?? ''),
+            expiresAt:   String(cpn?.expires_at ?? ''),
+            alreadySpun: true,
+          });
+        }
+      })
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab?.tabStatus, tabId, deviceId]);
+
   // ─── HANDLER: Create new session (first customer at empty table) ───────────
   async function handleStartSession() {
     const name = nameInput.trim();
@@ -376,12 +456,14 @@ function TablePageInner() {
       // (pin, customer_name, total, discount, orders) is this customer's alone.
       // PIN stored server-side in customer_tabs.pin
       const emailTrimmed = emailInput.trim();
+      const phoneTrimmed = phoneInput.trim();
       const apiTab = await createTabApi({
         tableId,
         customerName: name,
         partySize:    party,
         pin,
         email:        emailTrimmed || undefined,
+        phone:        phoneTrimmed || undefined,
       });
       // Register device with personal PIN — best-effort: tab already created so don't block if this fails
       void registerTabDevice({ tabId: apiTab.id, deviceId, customerName: name, tableId, personalPin: pin }).catch(e => {
@@ -972,7 +1054,7 @@ function TablePageInner() {
 
           <div style={{ marginBottom: '1rem' }}>
             <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>
-              📧 Email <span style={{ fontWeight: 400, color: '#aaa' }}>(optional — for receipt)</span>
+              📧 Email <span style={{ fontWeight: 400, color: '#aaa' }}>(optional — for receipt &amp; rewards)</span>
             </label>
             <input
               type="email" inputMode="email"
@@ -983,6 +1065,19 @@ function TablePageInner() {
               style={{ width: '100%', boxSizing: 'border-box', padding: '0.75rem 0.9rem', border: `2px solid ${emailError ? '#ef4444' : '#e5e7eb'}`, borderRadius: 12, fontFamily: 'Poppins,sans-serif', fontSize: '0.9rem', outline: 'none', transition: 'border-color 0.2s, box-shadow 0.2s' }}
             />
             {emailError && <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem', fontWeight: 600 }}>{emailError}</div>}
+          </div>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.35rem' }}>
+              📱 Phone <span style={{ fontWeight: 400, color: '#aaa' }}>(optional — for Spin &amp; Win rewards)</span>
+            </label>
+            <input
+              type="tel" inputMode="tel"
+              value={phoneInput}
+              onChange={e => setPhoneInput(e.target.value)}
+              placeholder="+91 98765 43210"
+              style={{ width: '100%', boxSizing: 'border-box', padding: '0.75rem 0.9rem', border: '2px solid #e5e7eb', borderRadius: 12, fontFamily: 'Poppins,sans-serif', fontSize: '0.9rem', outline: 'none', transition: 'border-color 0.2s, box-shadow 0.2s' }}
+            />
           </div>
 
           <div style={{ marginBottom: '1.5rem' }}>
@@ -1340,31 +1435,231 @@ function TablePageInner() {
   // ─── VIEW: Tracking — also handles 'closed' thank-you screen ─────────────────
   // ══════════════════════════════════════════════════════════════════════════════
 
-  // Closed tab → Thank You
+  // ── Closed tab → Full completion screen with Rating + Spin ─────────────────
+  // (side-effects — removeTabDevice + spin eligibility check — are in the
+  //  useEffect above that watches tab?.tabStatus === 'closed')
   if (tab?.tabStatus === 'closed') {
-    // Remove device record from Supabase so next scan shows a fresh landing
-    if (deviceId && tabId) {
-      void removeTabDevice(deviceId, tabId).catch(() => { /* non-critical */ });
-    }
+
+    // ── Rating submit handler ────────────────────────────────────────────────
+    const handleTabRatingSubmit = async () => {
+      if (tRating === null || tRatingBusy) return;
+      setTRatingBusy(true);
+      setTRatingMsg('');
+      try {
+        // Use tabId for feedback; API resolves to a representative order in the tab
+        const res = await submitFeedback({ tabId: tabId ?? undefined, rating: tRating, comment: tRatingComment.trim() || undefined });
+        if (res.ok) { setTRatingSubmitted(true); setTRatingMsg('✅ Thank you for your feedback!'); }
+        else         { setTRatingMsg('❌ Could not save. Please try again.'); }
+      } catch { setTRatingMsg('❌ Something went wrong. Please try again.'); }
+      finally  { setTRatingBusy(false); }
+    };
+
+    // ── Spin handler ─────────────────────────────────────────────────────────
+    const handleTabSpin = async () => {
+      if (tSpinBusy || tSpinAnimating || !tabId) return;
+      setTSpinBusy(true);
+      setTSpinAnimating(true);
+      setTSpinError('');
+      try {
+        const phoneForSpin = tab.phone || tSpinPhone.trim();
+        const res = await fetch('/api/rewards/spin', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tabId, customerEmail: tab.email ?? '', customerPhone: phoneForSpin || undefined }),
+        });
+        const data = await res.json() as { isWinner?: boolean; rewardLabel?: string; rewardType?: string; couponCode?: string; expiresAt?: string; rewardId?: string; alreadySpun?: boolean; error?: string };
+        if (data.error) { setTSpinError(data.error); setTSpinAnimating(false); setTSpinBusy(false); return; }
+        // Compute target segment angle for animation
+        const total    = tSpinWheelRewards.length || 1;
+        const segDeg   = 360 / total;
+        const idx      = data.rewardId ? tSpinWheelRewards.findIndex(r => r.id === data.rewardId) : 0;
+        const safIdx   = idx >= 0 ? idx : 0;
+        const landAngle = tSpinDeg + (5 * 360) + (360 - safIdx * segDeg - segDeg / 2);
+        setTSpinDeg(landAngle);
+        setTimeout(() => {
+          setTSpinAnimating(false);
+          setTSpinEligible(false);
+          setTSpinResult({ isWinner: Boolean(data.isWinner), rewardLabel: data.rewardLabel, rewardType: data.rewardType, couponCode: data.couponCode, expiresAt: data.expiresAt });
+          setTSpinBusy(false);
+        }, 4200);
+      } catch { setTSpinError('Connection error. Please try again.'); setTSpinAnimating(false); setTSpinBusy(false); }
+    };
+
+    const toRad = (d: number) => (d * Math.PI) / 180;
+    const WHL_COLORS = ['#7c3aed','#a855f7','#6d28d9','#8b5cf6','#4f46e5','#9333ea','#c026d3','#7c3aed'];
+
     return (
-      <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg,#064e3b,#065f46)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'Poppins,sans-serif', padding: '2rem' }}>
-        <div style={{ textAlign: 'center', color: 'white', maxWidth: 360 }}>
-          <div style={{ fontSize: '4rem', marginBottom: '0.75rem' }}>🙏</div>
-          <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '2rem', fontWeight: 900, color: '#6ee7b7', marginBottom: '0.4rem' }}>Thank You!</div>
-          <div style={{ fontSize: '1.05rem', fontWeight: 700, marginBottom: '0.3rem' }}>Payment Received ✅</div>
-          <div style={{ fontSize: '0.85rem', color: '#a7f3d0', marginBottom: '1rem', lineHeight: 1.5 }}>
-            Hope you enjoyed your meal at Foodie Lover! We look forward to seeing you again.
+      <div style={{ minHeight: '100vh', background: '#faf8f3', fontFamily: 'Poppins,sans-serif', paddingBottom: '2rem' }}>
+        {/* Payment received header */}
+        <div style={{ background: 'linear-gradient(135deg,#064e3b,#065f46)', padding: '1.75rem 1.25rem 1.25rem', textAlign: 'center', color: 'white' }}>
+          <div style={{ fontSize: '3rem', marginBottom: '0.4rem' }}>🙏</div>
+          <div style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.8rem', fontWeight: 900, color: '#6ee7b7', marginBottom: '0.2rem' }}>Thank You!</div>
+          <div style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '0.6rem' }}>Payment Received ✅</div>
+          <div style={{ fontSize: '0.82rem', color: '#a7f3d0', lineHeight: 1.5, marginBottom: '0.75rem' }}>
+            Hope you enjoyed your meal! We look forward to seeing you again.
           </div>
-          {tabDiscount > 0 && (
-            <div style={{ background: 'rgba(255,255,255,0.1)', borderRadius: 10, padding: '0.6rem 1rem', marginBottom: '0.75rem', fontSize: '0.82rem', color: '#d1fae5' }}>
-              🏷️ Discount applied: −₹{tabDiscount}
-            </div>
-          )}
-          <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#6ee7b7', background: 'rgba(255,255,255,0.08)', borderRadius: 10, padding: '0.5rem 1rem', display: 'inline-block' }}>
+          <div style={{ background: 'rgba(255,255,255,0.12)', borderRadius: 12, padding: '0.5rem 1rem', display: 'inline-block', fontSize: '0.85rem', fontWeight: 700, color: '#d1fae5' }}>
             Bill Paid: ₹{billTotal} · Table {tableName || tableId}
           </div>
-          <div style={{ marginTop: '1.5rem', fontSize: '1.5rem' }}>⭐⭐⭐⭐⭐</div>
-          <div style={{ fontSize: '0.72rem', color: '#6ee7b7', marginTop: '0.4rem' }}>Scan QR again to start a new order</div>
+        </div>
+
+        <div style={{ maxWidth: 420, margin: '0 auto', padding: '1.25rem 1rem' }}>
+
+          {/* ── Rating card (always shown, independent of spin) ── */}
+          {!tRatingSubmitted ? (
+            <div style={{ background: 'white', borderRadius: 16, padding: '1.25rem', boxShadow: '0 4px 20px rgba(0,0,0,0.08)', marginBottom: '1.25rem', border: '2px solid #fde68a' }}>
+              <div style={{ textAlign: 'center', marginBottom: '1rem' }}>
+                <div style={{ fontSize: '1.75rem', marginBottom: '0.3rem' }}>⭐</div>
+                <div style={{ fontWeight: 800, color: '#1A0800', fontSize: '0.95rem' }}>How was your experience?</div>
+                <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: '0.2rem' }}>Tap a star to rate (half-stars supported)</div>
+              </div>
+
+              {/* Half-star rating */}
+              <div style={{ display: 'flex', justifyContent: 'center', gap: '0.25rem', marginBottom: '1rem' }}>
+                {[1, 2, 3, 4, 5].map(n => {
+                  const activeVal = tHoverRating ?? tRating ?? 0;
+                  const isFullLit = activeVal >= n;
+                  const isHalfLit = !isFullLit && activeVal >= n - 0.5;
+                  return (
+                    <div key={n} style={{ position: 'relative', width: 40, height: 40, cursor: 'pointer', userSelect: 'none', flexShrink: 0 }}>
+                      <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2.2rem', opacity: 0.2 }}>⭐</span>
+                      {(isFullLit || isHalfLit) && (
+                        <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2.2rem', clipPath: isHalfLit ? 'inset(0 50% 0 0)' : undefined, overflow: 'hidden' }}>⭐</span>
+                      )}
+                      <div style={{ position: 'absolute', left: 0, top: 0, width: '50%', height: '100%' }}
+                        onMouseEnter={() => setTHoverRating(n - 0.5)} onMouseLeave={() => setTHoverRating(null)}
+                        onClick={() => setTRating(n - 0.5)} />
+                      <div style={{ position: 'absolute', right: 0, top: 0, width: '50%', height: '100%' }}
+                        onMouseEnter={() => setTHoverRating(n)} onMouseLeave={() => setTHoverRating(null)}
+                        onClick={() => setTRating(n)} />
+                    </div>
+                  );
+                })}
+              </div>
+
+              {tRating !== null && (
+                <div style={{ textAlign: 'center', fontSize: '0.78rem', fontWeight: 700, color: '#E65C00', marginBottom: '0.75rem' }}>
+                  {tRating <= 1 ? 'Poor' : tRating <= 2 ? 'Fair' : tRating <= 3 ? 'Good' : tRating <= 4 ? 'Great' : 'Excellent!'} ({tRating}/5)
+                </div>
+              )}
+
+              <textarea value={tRatingComment} onChange={e => setTRatingComment(e.target.value)}
+                placeholder="Any comments? (optional)" maxLength={500} rows={2}
+                style={{ width: '100%', boxSizing: 'border-box', padding: '0.6rem 0.75rem', border: '2px solid #e5e7eb', borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '0.85rem', outline: 'none', resize: 'vertical', marginBottom: '0.75rem' }}
+              />
+
+              <button onClick={() => void handleTabRatingSubmit()} disabled={tRating === null || tRatingBusy}
+                style={{ width: '100%', padding: '0.75rem', borderRadius: 12, background: tRating === null ? '#e5e7eb' : '#E65C00', color: tRating === null ? '#9ca3af' : 'white', border: 'none', fontWeight: 800, fontSize: '0.92rem', cursor: tRating === null || tRatingBusy ? 'not-allowed' : 'pointer', fontFamily: 'Poppins,sans-serif' }}>
+                {tRatingBusy ? '⏳ Saving…' : tRating === null ? 'Select a rating to submit' : '📤 Submit Rating'}
+              </button>
+              {tRatingMsg && <div style={{ marginTop: '0.5rem', textAlign: 'center', fontSize: '0.8rem', fontWeight: 600, color: tRatingMsg.includes('✅') ? '#16a34a' : '#dc2626' }}>{tRatingMsg}</div>}
+            </div>
+          ) : (
+            <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 16, padding: '1rem', textAlign: 'center', marginBottom: '1.25rem', fontSize: '0.85rem', color: '#15803d', fontWeight: 700 }}>
+              ⭐ {tRating}/5 — {tRatingMsg}
+            </div>
+          )}
+
+          {/* ── Spin & Win (independent of rating) ── */}
+          {tSpinEligible && !tSpinResult && (
+            <div style={{ marginBottom: '1.25rem', padding: '1.25rem', background: 'linear-gradient(135deg,#faf5ff,#fefce8)', border: '2px solid #d8b4fe', borderRadius: 16, textAlign: 'center' }}>
+              <h3 style={{ fontWeight: 900, color: '#6b21a8', fontSize: '1.05rem', margin: '0 0 0.25rem' }}>🎡 You have unlocked Spin &amp; Win!</h3>
+              <p style={{ fontSize: '0.8rem', color: '#64748b', margin: '0 0 1rem' }}>Your order qualifies for a reward. Spin to find out what you won!</p>
+
+              {/* Phone input if not provided at session start */}
+              {!tab.phone && (
+                <div style={{ marginBottom: '1rem', textAlign: 'left' }}>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: '#6b21a8', display: 'block', marginBottom: '0.3rem' }}>📱 Enter your phone number to spin</label>
+                  <input type="tel" inputMode="tel" value={tSpinPhone} onChange={e => setTSpinPhone(e.target.value)}
+                    placeholder="+91 98765 43210"
+                    style={{ width: '100%', boxSizing: 'border-box', padding: '0.65rem 0.75rem', border: '2px solid #d8b4fe', borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '0.9rem', outline: 'none' }} />
+                </div>
+              )}
+
+              {/* SVG Spin Wheel */}
+              {tSpinWheelRewards.length > 0 && (() => {
+                const segs   = tSpinWheelRewards;
+                const total  = segs.length;
+                const cx = 120; const cy = 120; const r = 110;
+                const segDeg = 360 / total;
+                return (
+                  <div style={{ position: 'relative', display: 'inline-block', marginBottom: '1rem' }}>
+                    <div style={{ position: 'absolute', top: -8, left: '50%', transform: 'translateX(-50%)', zIndex: 2, width: 0, height: 0, borderLeft: '10px solid transparent', borderRight: '10px solid transparent', borderTop: '20px solid #6b21a8' }} />
+                    <svg width={240} height={240} viewBox="0 0 240 240"
+                      style={{ borderRadius: '50%', boxShadow: '0 8px 32px rgba(124,58,237,0.3)', transform: `rotate(${tSpinDeg}deg)`, transition: tSpinAnimating ? 'transform 4s cubic-bezier(0.17,0.67,0.12,0.99)' : 'none', display: 'block' }}>
+                      {segs.map((seg, idx) => {
+                        const startDeg = idx * segDeg - 90; const endDeg = startDeg + segDeg;
+                        const x1 = cx + r * Math.cos(toRad(startDeg)); const y1 = cy + r * Math.sin(toRad(startDeg));
+                        const x2 = cx + r * Math.cos(toRad(endDeg));   const y2 = cy + r * Math.sin(toRad(endDeg));
+                        const path = `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${segDeg > 180 ? 1 : 0} 1 ${x2} ${y2} Z`;
+                        const color = WHL_COLORS[idx % WHL_COLORS.length];
+                        const midDeg = startDeg + segDeg / 2;
+                        const textR = r * 0.62;
+                        const label = seg.label.length > 10 ? seg.label.slice(0, 9) + '…' : seg.label;
+                        return (
+                          <g key={seg.id}>
+                            <path d={path} fill={color} stroke="white" strokeWidth={1.5} />
+                            <text x={cx + textR * Math.cos(toRad(midDeg))} y={cy + textR * Math.sin(toRad(midDeg))}
+                              textAnchor="middle" dominantBaseline="middle"
+                              transform={`rotate(${midDeg + 90},${cx + textR * Math.cos(toRad(midDeg))},${cy + textR * Math.sin(toRad(midDeg))})`}
+                              fill="white" fontSize={total > 6 ? 8 : 10} fontWeight="bold" fontFamily="Poppins,sans-serif"
+                              style={{ pointerEvents: 'none', userSelect: 'none' }}>
+                              {label}
+                            </text>
+                          </g>
+                        );
+                      })}
+                      <circle cx={cx} cy={cy} r={16} fill="white" stroke="#7c3aed" strokeWidth={3} />
+                      <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fontSize={14}>🎡</text>
+                    </svg>
+                  </div>
+                );
+              })()}
+
+              <button onClick={() => void handleTabSpin()} disabled={tSpinBusy || tSpinAnimating}
+                style={{ padding: '0.75rem 2rem', borderRadius: 9999, color: 'white', fontWeight: 800, fontSize: '1rem', border: 'none', cursor: tSpinAnimating ? 'wait' : 'pointer', background: tSpinAnimating ? '#c4b5fd' : 'linear-gradient(135deg,#7c3aed,#a855f7)', boxShadow: tSpinAnimating ? 'none' : '0 4px 16px rgba(124,58,237,0.4)', fontFamily: 'Poppins,sans-serif', transition: 'all 0.2s', display: 'block', margin: '0 auto' }}>
+                {tSpinAnimating ? '🎡 Spinning…' : '🎡 SPIN NOW'}
+              </button>
+              {tSpinError && <p style={{ fontSize: '0.78rem', color: '#dc2626', marginTop: '0.5rem' }}>{tSpinError}</p>}
+            </div>
+          )}
+
+          {tSpinResult && (
+            <div style={{ marginBottom: '1.25rem', padding: '1.25rem', borderRadius: 16, textAlign: 'center', border: tSpinResult.isWinner ? '2px solid #86efac' : '1px solid #e5e7eb', background: tSpinResult.isWinner ? 'linear-gradient(135deg,#fefce8,#f0fdf4)' : '#f9fafb' }}>
+              {tSpinResult.isWinner ? (
+                <>
+                  <div style={{ fontSize: '2.5rem', marginBottom: '0.4rem' }}>🎉</div>
+                  <h3 style={{ fontWeight: 900, color: '#166534', fontSize: '1.05rem', margin: '0 0 0.3rem' }}>You won!</h3>
+                  <p style={{ fontWeight: 800, color: '#15803d', fontSize: '1.1rem', margin: '0 0 1rem' }}>{tSpinResult.rewardLabel}</p>
+                  {tSpinResult.couponCode && (
+                    <div style={{ background: 'white', border: '2px dashed #86efac', borderRadius: 12, padding: '1rem', display: 'inline-block', marginBottom: '0.75rem' }}>
+                      <p style={{ fontSize: '0.7rem', color: '#94a3b8', margin: '0 0 0.3rem' }}>Your reward coupon</p>
+                      <p style={{ fontFamily: 'monospace', fontSize: '1.5rem', fontWeight: 900, color: '#166534', margin: '0 0 0.4rem', letterSpacing: '0.15em' }}>{tSpinResult.couponCode}</p>
+                      <button onClick={() => navigator.clipboard?.writeText(tSpinResult.couponCode ?? '')}
+                        style={{ padding: '0.3rem 0.75rem', borderRadius: 20, background: '#f0fdf4', border: '1px solid #86efac', color: '#16a34a', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', fontFamily: 'Poppins,sans-serif', marginBottom: '0.3rem' }}>
+                        📋 Copy Code
+                      </button>
+                      {tSpinResult.expiresAt && (
+                        <p style={{ fontSize: '0.7rem', color: '#94a3b8', margin: 0 }}>
+                          Valid until {new Date(tSpinResult.expiresAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  <p style={{ fontSize: '0.75rem', color: '#64748b', margin: 0 }}>Use this coupon on your next order!</p>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontSize: '2.5rem', marginBottom: '0.4rem' }}>😅</div>
+                  <h3 style={{ fontWeight: 800, color: '#374151', fontSize: '1rem', margin: '0 0 0.3rem' }}>{tSpinResult.rewardLabel ?? 'Better luck next time!'}</h3>
+                  <p style={{ fontSize: '0.8rem', color: '#94a3b8', margin: 0 }}>Every order is a new chance to win.</p>
+                </>
+              )}
+            </div>
+          )}
+
+          <div style={{ textAlign: 'center', fontSize: '0.72rem', color: '#9ca3af', marginTop: '1rem' }}>
+            Scan QR again to start a new order
+          </div>
         </div>
       </div>
     );
