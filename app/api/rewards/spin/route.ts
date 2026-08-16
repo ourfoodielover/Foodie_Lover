@@ -31,6 +31,13 @@ type SpinReward = {
   weight: number;
   min_next_order: number;
   expires_days: number;
+  // v014 fields
+  max_discount: number | null;
+  daily_win_limit: number | null;
+  monthly_win_limit: number | null;
+  bogo_eligible_items: string[];
+  bogo_eligible_categories: string[];
+  max_free_item_value: number | null;
 };
 
 export async function POST(req: NextRequest) {
@@ -115,8 +122,35 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'No rewards configured' }, { status: 400 });
   }
 
+  // ── Filter out rewards that have hit their daily win limit ──────────────
+  // no_reward type is always eligible (gives nothing, just fills the wheel).
+  // For actual winning rewards, count coupons issued today and skip if at limit.
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const todayStartStr = todayStart.toISOString();
+
+  const eligibleRewards: SpinReward[] = [];
+  for (const r of rewards as SpinReward[]) {
+    if (r.reward_type === 'no_reward' || r.daily_win_limit == null) {
+      eligibleRewards.push(r);
+      continue;
+    }
+    const { count } = await sb
+      .from('reward_coupons')
+      .select('id', { count: 'exact', head: true })
+      .eq('reward_id', r.id)
+      .gte('issued_at', todayStartStr);
+    if ((count ?? 0) < r.daily_win_limit) {
+      eligibleRewards.push(r);
+    }
+    // If count >= daily_win_limit, this reward is excluded from today's pool
+  }
+
+  // Always keep at least one option; if all winning options exhausted, use full list
+  const pool = eligibleRewards.length > 0 ? eligibleRewards : rewards as SpinReward[];
+
   // ── Server-side weighted selection ─────────────────────────────────────
-  const chosen = pickRewardByWeight(rewards as SpinReward[]) as SpinReward;
+  const chosen = pickRewardByWeight(pool) as SpinReward;
   const isWinner = chosen.reward_type !== 'no_reward';
 
   // ── Insert spin result (UNIQUE constraints prevent duplicate spins) ────
@@ -152,20 +186,25 @@ export async function POST(req: NextRequest) {
     let code = generateCouponCode();
     for (let i = 0; i < 10; i++) {
       const insertCoupon: Record<string, unknown> = {
-        id: couponId,
-        coupon_code: code,
-        spin_id: spinId,
-        reward_id: chosen.id,
-        reward_type: chosen.reward_type,
-        reward_value: chosen.reward_value,
-        free_item_id: chosen.free_item_id ?? null,
-        label: chosen.label,
-        customer_email: normEmail,
-        customer_phone: normPhone,
-        issued_at: new Date().toISOString(),
-        expires_at: expiresAtStr,
-        min_next_order: chosen.min_next_order,
-        status: 'active',
+        id:              couponId,
+        coupon_code:     code,
+        spin_id:         spinId,
+        reward_id:       chosen.id,
+        reward_type:     chosen.reward_type,
+        reward_value:    chosen.reward_value,
+        free_item_id:    chosen.free_item_id ?? null,
+        label:           chosen.label,
+        customer_email:  normEmail,
+        customer_phone:  normPhone,
+        issued_at:       new Date().toISOString(),
+        expires_at:      expiresAtStr,
+        min_next_order:  chosen.min_next_order,
+        status:          'active',
+        // v014: snapshot reward terms at issue time
+        max_discount:            chosen.max_discount ?? null,
+        bogo_eligible_items:     chosen.bogo_eligible_items ?? [],
+        bogo_eligible_categories: chosen.bogo_eligible_categories ?? [],
+        max_free_item_value:     chosen.max_free_item_value ?? null,
       };
       // Set source fields: tab-based coupons use source_tab_id, order-based use source_order_id
       if (tabId) {
@@ -190,21 +229,22 @@ export async function POST(req: NextRequest) {
       sendRewardEmail({
         emailRef,
         eventType,
-        recipientEmail: normEmail,
-        rewardLabel: chosen.label,
-        rewardType: chosen.reward_type,
-        couponCode: couponData.couponCode,
-        expiresAt: couponData.expiresAt,
-        minNextOrder: Number(chosen.min_next_order),
+        recipientEmail:  normEmail,
+        rewardLabel:     chosen.label,
+        rewardType:      chosen.reward_type,
+        couponCode:      couponData.couponCode,
+        expiresAt:       couponData.expiresAt,
+        minNextOrder:    Number(chosen.min_next_order),
+        maxDiscount:     chosen.max_discount ?? undefined,
       }).catch(console.error);
     }
   }
 
   return NextResponse.json({
     spinId,
-    rewardId: chosen.id,
+    rewardId:    chosen.id,
     rewardLabel: chosen.label,
-    rewardType: chosen.reward_type,
+    rewardType:  chosen.reward_type,
     rewardValue: chosen.reward_value,
     isWinner,
     ...couponData,
@@ -217,13 +257,13 @@ function formatSpinResult(spin: Record<string, unknown> | null) {
   const couponRaw = spin.reward_coupons;
   const coupon = Array.isArray(couponRaw) ? (couponRaw[0] as Record<string, unknown> | undefined) : couponRaw as Record<string, unknown> | null;
   return {
-    spinId: spin.id,
+    spinId:      spin.id,
     rewardLabel: reward?.label,
-    rewardType: reward?.reward_type,
+    rewardType:  reward?.reward_type,
     rewardValue: reward?.reward_value,
-    isWinner: spin.is_winner,
-    couponCode: coupon?.coupon_code,
-    couponId: coupon?.id,
-    expiresAt: coupon?.expires_at,
+    isWinner:    spin.is_winner,
+    couponCode:  coupon?.coupon_code,
+    couponId:    coupon?.id,
+    expiresAt:   coupon?.expires_at,
   };
 }

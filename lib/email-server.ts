@@ -1119,12 +1119,14 @@ export interface RewardEmailArgs {
   couponCode:     string;
   expiresAt:      string;
   minNextOrder:   number;
+  /** Cap on percent discount in ₹ — shown in email when set (v014) */
+  maxDiscount?:   number;
 }
 
 export async function sendRewardEmail(args: RewardEmailArgs): Promise<void> {
   const TAG = '[email:reward]';
   try {
-    const { emailRef, eventType, recipientEmail, rewardLabel, rewardType, couponCode, expiresAt, minNextOrder } = args;
+    const { emailRef, eventType, recipientEmail, rewardLabel, rewardType, couponCode, expiresAt, minNextOrder, maxDiscount } = args;
 
     // Dedup: only send once per spin (use dedup_key for flexible FK-free deduplication)
     const sb = getServerClient();
@@ -1154,6 +1156,10 @@ export async function sendRewardEmail(args: RewardEmailArgs): Promise<void> {
       ? `<tr><td style="color:#555;padding:4px 0;font-size:13px;">Minimum Purchase</td><td style="font-weight:600;padding:4px 0;font-size:13px;text-align:right;">₹${minNextOrder}</td></tr>`
       : '';
 
+    const maxDiscountSection = (rewardType === 'percent' && maxDiscount != null && maxDiscount > 0)
+      ? `<tr><td style="color:#555;padding:4px 0;font-size:13px;">Maximum Discount</td><td style="font-weight:600;padding:4px 0;font-size:13px;text-align:right;">₹${maxDiscount}</td></tr>`
+      : '';
+
     const html = `<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/></head>
@@ -1179,6 +1185,7 @@ export async function sendRewardEmail(args: RewardEmailArgs): Promise<void> {
           <td style="font-weight:600;padding:4px 0;font-size:13px;text-align:right;">${expiryFormatted}</td>
         </tr>
         ${minOrderSection}
+        ${maxDiscountSection}
       </table>
       <p style="color:#6b7280;font-size:12px;margin:0;line-height:1.5">
         Use this coupon on your next eligible order at ${RESTAURANT_NAME}.<br/>

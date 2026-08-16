@@ -122,7 +122,10 @@ export async function POST(req: NextRequest) {
   // Calculate discount SERVER-SIDE
   let discountAmount = 0;
   if (coupon.reward_type === 'percent') {
-    discountAmount = Math.round(subtotal * Number(coupon.reward_value) / 100);
+    const rawDiscount = Math.round(subtotal * Number(coupon.reward_value) / 100);
+    // Apply max_discount cap if present (snapshotted at coupon issue time)
+    const maxDiscount = coupon.max_discount != null ? Number(coupon.max_discount) : null;
+    discountAmount = maxDiscount != null ? Math.min(rawDiscount, maxDiscount) : rawDiscount;
   } else if (coupon.reward_type === 'fixed') {
     discountAmount = Math.min(Number(coupon.reward_value), subtotal);
   } else if (coupon.reward_type === 'free_item') {
@@ -133,15 +136,19 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({
     valid: true,
-    couponId: coupon.id,
-    couponCode: coupon.coupon_code,
-    label: coupon.label,
-    rewardType: coupon.reward_type,
+    couponId:    coupon.id,
+    couponCode:  coupon.coupon_code,
+    label:       coupon.label,
+    rewardType:  coupon.reward_type,
     rewardValue: coupon.reward_value,
+    maxDiscount: coupon.max_discount ?? null,
     discountAmount,
     finalTotal,
-    freeItemId: coupon.free_item_id,
-    freeItemName: coupon.free_item_name,
-    expiresAt: coupon.expires_at,
+    freeItemId:           coupon.free_item_id,
+    freeItemName:         coupon.free_item_name,
+    bogoEligibleItems:    coupon.bogo_eligible_items ?? [],
+    bogoEligibleCategories: coupon.bogo_eligible_categories ?? [],
+    maxFreeItemValue:     coupon.max_free_item_value ?? null,
+    expiresAt:   coupon.expires_at,
   });
 }
