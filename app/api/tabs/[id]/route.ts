@@ -28,6 +28,10 @@ function rowToTab(row: Record<string, unknown>) {
     email:          (row.customer_email as string | null) ?? null,
     createdAt:      row.created_at,
     closedAt:       row.closed_at ?? null,
+    // Coupon fields (added in migration_012)
+    couponId:       row.coupon_id       ?? null,
+    couponCode:     row.coupon_code     ?? null,
+    couponDiscount: Number(row.coupon_discount ?? 0),
   };
 }
 
@@ -74,17 +78,50 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       const discount       = Number(body.discount) || 0;
       const paymentMethod  = body.paymentMethod || 'cod';
       const discountReason = body.discountReason ?? null;
-      const finalTotal     = Math.max(0, rawTotal - discount);
+
+      // ── Redeem any coupon that was reserved against this tab ───────────────
+      // If a reward coupon was applied (status='reserved', reserved_tab_id=id),
+      // mark it as 'redeemed' and record the discount_given amount.
+      let couponDiscount = 0;
+      let couponCode: string | null = null;
+      let couponId: string | null = null;
+      try {
+        const { data: reservedCoupon } = await sb
+          .from('reward_coupons')
+          .select('id, code, discount_value, reward_type')
+          .eq('status', 'reserved')
+          .eq('reserved_tab_id', id)
+          .maybeSingle();
+        if (reservedCoupon) {
+          couponId       = reservedCoupon.id as string;
+          couponCode     = reservedCoupon.code as string;
+          couponDiscount = Number(reservedCoupon.discount_value) || 0;
+          await sb.from('reward_coupons').update({
+            status:        'redeemed',
+            redeemed_at:   new Date().toISOString(),
+            discount_given: couponDiscount,
+          }).eq('id', couponId);
+        }
+      } catch (couponErr) {
+        console.warn('[tabs/close] coupon redemption error (non-fatal):', couponErr);
+      }
+
+      const finalTotal = Math.max(0, rawTotal - discount - couponDiscount);
 
       // Close the tab
-      const { error: closeErr } = await sb.from('customer_tabs').update({
+      const tabCloseUpdate: Record<string, unknown> = {
         status:          'closed',
         total:           rawTotal,
         discount:        discount,
         discount_reason: discountReason,
         payment_method:  paymentMethod,
         closed_at:       new Date().toISOString(),
-      }).eq('id', id);
+      };
+      if (couponId)       tabCloseUpdate.coupon_id       = couponId;
+      if (couponCode)     tabCloseUpdate.coupon_code     = couponCode;
+      if (couponDiscount) tabCloseUpdate.coupon_discount = couponDiscount;
+
+      const { error: closeErr } = await sb.from('customer_tabs').update(tabCloseUpdate).eq('id', id);
       if (closeErr) {
         console.error('[PATCH /api/tabs/[id]] close tab error:', closeErr.message);
         return NextResponse.json({ error: closeErr.message }, { status: 500 });

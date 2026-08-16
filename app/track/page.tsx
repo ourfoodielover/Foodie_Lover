@@ -96,6 +96,7 @@ function TrackInner() {
   const params     = useSearchParams();
   const urlOrderId = params.get('id')    || '';
   const urlToken   = params.get('token') || '';
+  const urlTabId   = params.get('tabId') || '';
 
   // ── Resolved tracking IDs (from URL or from contact lookup) ──
   const [trackOrderId, setTrackOrderId] = useState(urlOrderId);
@@ -118,9 +119,10 @@ function TrackInner() {
   const [notRecvBusy,   setNotRecvBusy]   = useState(false);
   const [notRecvMsg,    setNotRecvMsg]    = useState('');
 
-  // ── Post-completion rating ──
+  // ── Post-completion rating (half-star: 0.5 increments) ──
   // null = no star selected yet (required before submit)
-  const [rating,            setRating]            = useState<1|2|3|4|5|null>(null);
+  const [rating,            setRating]            = useState<number | null>(null);
+  const [hoverRating,       setHoverRating]       = useState<number | null>(null);
   const [ratingComment,     setRatingComment]     = useState('');
   const [ratingBusy,        setRatingBusy]        = useState(false);
   const [ratingSubmitted,   setRatingSubmitted]   = useState(false);
@@ -131,6 +133,8 @@ function TrackInner() {
   const [spinChecked,    setSpinChecked]    = useState(false);
   const [spinBusy,       setSpinBusy]       = useState(false);
   const [spinAnimating,  setSpinAnimating]  = useState(false);
+  const [spinDeg,        setSpinDeg]        = useState(0);  // total degrees wheel has rotated
+  const [spinWheelRewards, setSpinWheelRewards] = useState<{ id: string; label: string; reward_type: string; sort_order: number }[]>([]);
   const [spinResult,     setSpinResult]     = useState<{
     isWinner: boolean;
     rewardLabel?: string;
@@ -321,13 +325,28 @@ function TrackInner() {
     }
   }
 
+  // ── Spin & Win: load wheel reward segments (fire once on mount) ────────────
+  useEffect(() => {
+    fetch('/api/rewards/wheel-rewards')
+      .then(r => r.json())
+      .then((data: { id: string; label: string; reward_type: string; sort_order: number }[]) => {
+        if (Array.isArray(data)) setSpinWheelRewards(data);
+      })
+      .catch(console.error);
+  }, []);
+
   // ── Spin & Win: check eligibility when order becomes completed ──────────────
   const orderId = trackOrderId;
   useEffect(() => {
+    // For tab-based dine-in, eligibility comes from tabId not orderId
     const isCompleted = order?.status === 'completed' || order?.status === 'delivered';
-    if (!isCompleted || !orderId || spinChecked) return;
+    const canCheck    = (isCompleted && !!orderId) || !!urlTabId;
+    if (!canCheck || spinChecked) return;
     setSpinChecked(true);
-    fetch(`/api/rewards/eligibility?orderId=${orderId}`)
+    const eligUrl = urlTabId
+      ? `/api/rewards/eligibility?tabId=${urlTabId}`
+      : `/api/rewards/eligibility?orderId=${orderId}`;
+    fetch(eligUrl)
       .then(r => r.json())
       .then((data: {
         eligible?: boolean;
@@ -355,11 +374,11 @@ function TrackInner() {
         }
       })
       .catch(console.error);
-  }, [order?.status, orderId, spinChecked]);
+  }, [order?.status, orderId, urlTabId, spinChecked]);
 
   // ── Spin & Win: execute spin ────────────────────────────────────────────────
   async function handleSpin() {
-    if (spinBusy || spinAnimating || !order) return;
+    if (spinBusy || spinAnimating) return;
     setSpinBusy(true);
     setSpinAnimating(true);
     try {
@@ -367,9 +386,10 @@ function TrackInner() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          orderId,
-          customerEmail: order.customerEmail ?? '',
-          customerPhone: order.phone ?? '',
+          orderId:       urlTabId ? undefined : orderId,
+          tabId:         urlTabId || undefined,
+          customerEmail: order?.customerEmail ?? '',
+          customerPhone: order?.phone ?? '',
         }),
       });
       const data = await res.json() as {
@@ -379,8 +399,26 @@ function TrackInner() {
         couponCode?: string;
         expiresAt?: string;
         alreadySpun?: boolean;
+        rewardId?: string;
       };
-      // Wait for animation then show result
+
+      // Calculate where the wheel should land based on the server's chosen reward
+      const total = spinWheelRewards.length || 1;
+      const segDeg = 360 / total;
+      let targetSegIdx = 0;
+      if (data.rewardId) {
+        const idx = spinWheelRewards.findIndex(r => r.id === data.rewardId);
+        if (idx >= 0) targetSegIdx = idx;
+      }
+      // Land in the middle of the target segment, with 5 full rotations + offset
+      // The wheel starts at top, first segment is at angle 0. CSS rotation is clockwise.
+      // Segment idx 0 occupies [0..segDeg], its midpoint is segDeg/2
+      // To land segment `targetSegIdx` at the top (pointer at 270deg in SVG = top),
+      // we rotate by: 5*360 + (360 - targetSegIdx*segDeg - segDeg/2)
+      const landAngle = 5 * 360 + (360 - targetSegIdx * segDeg - segDeg / 2);
+      setSpinDeg(landAngle);
+
+      // Wait for 4s CSS animation then show result
       setTimeout(() => {
         setSpinAnimating(false);
         setSpinEligible(false);
@@ -392,7 +430,7 @@ function TrackInner() {
           expiresAt: data.expiresAt,
           alreadySpun: data.alreadySpun,
         });
-      }, 3000);
+      }, 4200);
     } catch (err) {
       console.error(err);
       setSpinAnimating(false);
@@ -809,33 +847,51 @@ function TrackInner() {
               <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: '0.2rem' }}>Tap a star to rate</div>
             </div>
 
-            {/* Star buttons — no default, explicit click required */}
-            <div style={{ display: 'flex', justifyContent: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
-              {([1, 2, 3, 4, 5] as const).map(n => (
-                <button
-                  key={n}
-                  onClick={() => setRating(n)}
-                  style={{
-                    background: 'none',
-                    border:     'none',
-                    cursor:     'pointer',
-                    fontSize:   rating !== null && n <= rating ? '2.25rem' : '1.9rem',
-                    opacity:    rating !== null && n <= rating ? 1 : 0.35,
-                    transition: 'all 0.1s ease',
-                    lineHeight: 1,
-                    padding:    '0 0.1rem',
-                  }}
-                  aria-label={`Rate ${n} star${n !== 1 ? 's' : ''}`}
-                >
-                  ⭐
-                </button>
-              ))}
+            {/* Half-star rating — left half = N-0.5, right half = N */}
+            <div style={{ display: 'flex', justifyContent: 'center', gap: '0.25rem', marginBottom: '1rem' }}>
+              {[1, 2, 3, 4, 5].map(n => {
+                const activeVal  = hoverRating ?? rating ?? 0;
+                const isFullLit  = activeVal >= n;
+                const isHalfLit  = !isFullLit && activeVal >= n - 0.5;
+                return (
+                  <div key={n} style={{ position: 'relative', width: 36, height: 36, cursor: 'pointer', userSelect: 'none', flexShrink: 0 }}>
+                    {/* Base star (dim) */}
+                    <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2rem', opacity: 0.25 }}>⭐</span>
+                    {/* Lit overlay (full or half clip) */}
+                    {(isFullLit || isHalfLit) && (
+                      <span style={{
+                        position: 'absolute', inset: 0,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: '2rem',
+                        clipPath: isHalfLit ? 'inset(0 50% 0 0)' : undefined,
+                        overflow: 'hidden',
+                      }}>⭐</span>
+                    )}
+                    {/* Left half hitbox → N-0.5 */}
+                    <div
+                      style={{ position: 'absolute', left: 0, top: 0, width: '50%', height: '100%' }}
+                      onMouseEnter={() => setHoverRating(n - 0.5)}
+                      onMouseLeave={() => setHoverRating(null)}
+                      onClick={() => setRating(n - 0.5)}
+                      aria-label={`Rate ${n - 0.5} stars`}
+                    />
+                    {/* Right half hitbox → N */}
+                    <div
+                      style={{ position: 'absolute', right: 0, top: 0, width: '50%', height: '100%' }}
+                      onMouseEnter={() => setHoverRating(n)}
+                      onMouseLeave={() => setHoverRating(null)}
+                      onClick={() => setRating(n)}
+                      aria-label={`Rate ${n} stars`}
+                    />
+                  </div>
+                );
+              })}
             </div>
 
             {/* Selected rating label */}
             {rating !== null && (
               <div style={{ textAlign: 'center', fontSize: '0.78rem', fontWeight: 700, color: '#E65C00', marginBottom: '0.75rem' }}>
-                {rating === 1 ? 'Poor' : rating === 2 ? 'Fair' : rating === 3 ? 'Good' : rating === 4 ? 'Great' : 'Excellent!'} ({rating}/5)
+                {rating <= 1 ? 'Poor' : rating <= 2 ? 'Fair' : rating <= 3 ? 'Good' : rating <= 4 ? 'Great' : 'Excellent!'} ({rating}/5)
               </div>
             )}
 
@@ -883,9 +939,82 @@ function TrackInner() {
         {/* ── Spin & Win section ──────────────────────────────── */}
         {spinEligible && !spinResult && (
           <div style={{ marginBottom: '1.25rem', padding: '1.25rem', background: 'linear-gradient(135deg,#faf5ff,#fefce8)', border: '2px solid #d8b4fe', borderRadius: 16, textAlign: 'center' }}>
-            <div style={{ fontSize: '2.5rem', marginBottom: '0.4rem' }}>🎡</div>
-            <h3 style={{ fontWeight: 900, color: '#6b21a8', fontSize: '1.05rem', margin: '0 0 0.3rem' }}>You have unlocked Spin & Win!</h3>
+            <h3 style={{ fontWeight: 900, color: '#6b21a8', fontSize: '1.05rem', margin: '0 0 0.25rem' }}>You have unlocked Spin & Win!</h3>
             <p style={{ fontSize: '0.8rem', color: '#64748b', margin: '0 0 1rem' }}>Your order qualifies for a reward. Spin to find out what you have won!</p>
+
+            {/* SVG Spin Wheel */}
+            {spinWheelRewards.length > 0 && (() => {
+              const segs   = spinWheelRewards;
+              const total  = segs.length;
+              const cx     = 120;
+              const cy     = 120;
+              const r      = 110;
+              const segDeg = 360 / total;
+              const COLORS = ['#7c3aed','#a855f7','#6d28d9','#8b5cf6','#4f46e5','#9333ea','#7c3aed'];
+              const toRad  = (deg: number) => (deg * Math.PI) / 180;
+              return (
+                <div style={{ position: 'relative', display: 'inline-block', marginBottom: '1rem' }}>
+                  {/* Pointer triangle at top */}
+                  <div style={{ position: 'absolute', top: -8, left: '50%', transform: 'translateX(-50%)', zIndex: 2,
+                    width: 0, height: 0,
+                    borderLeft: '10px solid transparent',
+                    borderRight: '10px solid transparent',
+                    borderTop: '20px solid #6b21a8',
+                  }} />
+                  <svg
+                    width={240} height={240}
+                    viewBox="0 0 240 240"
+                    style={{
+                      borderRadius: '50%',
+                      boxShadow: '0 8px 32px rgba(124,58,237,0.3)',
+                      transform: `rotate(${spinDeg}deg)`,
+                      transition: spinAnimating
+                        ? `transform 4s cubic-bezier(0.17,0.67,0.12,0.99)`
+                        : 'none',
+                      display: 'block',
+                    }}
+                  >
+                    {segs.map((seg, idx) => {
+                      const startDeg = idx * segDeg - 90;
+                      const endDeg   = startDeg + segDeg;
+                      const x1 = cx + r * Math.cos(toRad(startDeg));
+                      const y1 = cy + r * Math.sin(toRad(startDeg));
+                      const x2 = cx + r * Math.cos(toRad(endDeg));
+                      const y2 = cy + r * Math.sin(toRad(endDeg));
+                      const large = segDeg > 180 ? 1 : 0;
+                      const path  = `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} Z`;
+                      const color = COLORS[idx % COLORS.length];
+                      const midDeg  = startDeg + segDeg / 2;
+                      const textR   = r * 0.62;
+                      const textX   = cx + textR * Math.cos(toRad(midDeg));
+                      const textY   = cy + textR * Math.sin(toRad(midDeg));
+                      const maxLen  = 10;
+                      const label   = seg.label.length > maxLen ? seg.label.slice(0, maxLen - 1) + '…' : seg.label;
+                      return (
+                        <g key={seg.id}>
+                          <path d={path} fill={color} stroke="white" strokeWidth={1.5} />
+                          <text
+                            x={textX} y={textY}
+                            textAnchor="middle" dominantBaseline="middle"
+                            transform={`rotate(${midDeg + 90}, ${textX}, ${textY})`}
+                            fill="white"
+                            fontSize={total > 6 ? 8 : 10}
+                            fontWeight="bold"
+                            fontFamily="Poppins,sans-serif"
+                            style={{ pointerEvents: 'none', userSelect: 'none' }}
+                          >
+                            {label}
+                          </text>
+                        </g>
+                      );
+                    })}
+                    <circle cx={cx} cy={cy} r={16} fill="white" stroke="#7c3aed" strokeWidth={3} />
+                    <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fontSize={14}>🎡</text>
+                  </svg>
+                </div>
+              );
+            })()}
+
             <button
               onClick={() => void handleSpin()}
               disabled={spinBusy || spinAnimating}
@@ -895,6 +1024,7 @@ function TrackInner() {
                 background: spinAnimating ? '#c4b5fd' : 'linear-gradient(135deg,#7c3aed,#a855f7)',
                 boxShadow: spinAnimating ? 'none' : '0 4px 16px rgba(124,58,237,0.4)',
                 fontFamily: 'Poppins,sans-serif', transition: 'all 0.2s',
+                display: 'block', margin: '0 auto',
               }}
             >
               {spinAnimating ? '🎡 Spinning…' : '🎡 SPIN NOW'}

@@ -335,8 +335,12 @@ export default function KitchenPage() {
   }
 
   // ── Derived ─────────────────────────────────────────────────────────────────
+  // Exclude printer-routed orders: physical KOT slips handle those.
+  // 'not_set', 'kitchen_display', and missing kitchenRoute → show on display.
+  // 'printer' → hide from kitchen display.
   const kitchenOrders = orders
     .filter(o => ['pending', 'preparing', 'prepared'].includes(o.status))
+    .filter(o => o.kitchenRoute !== 'printer')
     .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
   const shown =

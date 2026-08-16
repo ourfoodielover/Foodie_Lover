@@ -238,6 +238,10 @@ export default function AdminPage() {
   const [spinMsg,        setSpinMsg]        = useState('');
   const [spinRewardForm, setSpinRewardForm] = useState<Omit<SpinRewardRow,'id'>>({ label: '', reward_type: 'percent', reward_value: 10, weight: 1, min_next_order: 0, expires_days: 30, active: true, sort_order: 0 });
 
+  // ── Kitchen routing mode ──
+  const [kitchenMode,    setKitchenMode]    = useState<'ask'|'printer'|'kitchen_display'>('ask');
+  const [kitchenModeMsg, setKitchenModeMsg] = useState('');
+
   // ── Rewards audit state ──
   interface AuditRow { id: string; coupon_code: string; label: string; reward_type: string; reward_value: number; status: string; customer_email: string; customer_phone: string; issued_at: string; expires_at: string; redeemed_at?: string; discount_given?: number; spin_results?: { customer_email: string; spun_at: string }; source_order?: { order_number: number; type: string; total: number } }
   const [auditRows,      setAuditRows]      = useState<AuditRow[]>([]);
@@ -2685,12 +2689,15 @@ export default function AdminPage() {
           <button
             style={{...btn(),marginBottom:'1rem'}}
             onClick={async()=>{
-              const [cfgRes, rwdRes] = await Promise.all([
+              const [cfgRes, rwdRes, kitRes] = await Promise.all([
                 fetch('/api/admin/spin-config').then(r=>r.json()),
                 fetch('/api/admin/spin-rewards').then(r=>r.json()),
+                fetch('/api/admin/restaurant-config').then(r=>r.json()),
               ]);
               setSpinConfig(cfgRes as SpinConfigRow);
               setSpinRewards(rwdRes as SpinRewardRow[]);
+              const km = (kitRes as Record<string,unknown>).kitchen_mode;
+              if (km === 'ask' || km === 'printer' || km === 'kitchen_display') setKitchenMode(km);
               setSpinLoaded(true);
             }}
           >{spinLoaded ? '🔄 Refresh' : '📥 Load Config'}</button>
@@ -2744,6 +2751,34 @@ export default function AdminPage() {
                 style={{...btn('#7c3aed')}}
               >💾 Save Config</button>
               {spinMsg && <span style={{marginLeft:'0.75rem',fontSize:'0.8rem',fontWeight:700,color:spinMsg.includes('✅')?'#16a34a':'#ef4444'}}>{spinMsg}</span>}
+            </div>
+
+            {/* Kitchen routing mode */}
+            <div style={{...card('#0f766e'),marginBottom:'1rem'}}>
+              <h3 style={{margin:'0 0 0.5rem',fontWeight:700,color:'#1A0800',fontSize:'1rem'}}>🔥 Kitchen Routing Mode</h3>
+              <p style={{fontSize:'0.78rem',color:'#555',marginBottom:'0.75rem'}}>Controls how confirmed orders reach the kitchen. Affects the waiter portal buttons.</p>
+              <select
+                value={kitchenMode}
+                onChange={e=>setKitchenMode(e.target.value as 'ask'|'printer'|'kitchen_display')}
+                style={{...inp,marginBottom:'0.75rem',maxWidth:300}}
+              >
+                <option value="ask">Ask each time (show both Print KOT + Kitchen Display buttons)</option>
+                <option value="printer">Printer only (always print KOT, no kitchen display button)</option>
+                <option value="kitchen_display">Kitchen display only (no print KOT button)</option>
+              </select>
+              <div>
+                <button
+                  onClick={async()=>{
+                    setKitchenModeMsg('⏳ Saving…');
+                    const r = await fetch('/api/admin/restaurant-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kitchen_mode:kitchenMode})});
+                    const d = await r.json() as {ok?:boolean;error?:string};
+                    setKitchenModeMsg(d.ok ? '✅ Kitchen mode saved!' : `❌ ${d.error ?? 'Error'}`);
+                    setTimeout(()=>setKitchenModeMsg(''),3000);
+                  }}
+                  style={{...btn('#0f766e')}}
+                >💾 Save Kitchen Mode</button>
+                {kitchenModeMsg && <span style={{marginLeft:'0.75rem',fontSize:'0.8rem',fontWeight:700,color:kitchenModeMsg.includes('✅')?'#16a34a':'#ef4444'}}>{kitchenModeMsg}</span>}
+              </div>
             </div>
 
             {/* Rewards list */}

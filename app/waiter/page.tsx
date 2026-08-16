@@ -7,7 +7,8 @@ import {
   getOrders, updateOrderStatus, getTabs, getTables, closeShift,
   getActiveWaiterCalls, acknowledgeWaiterCallById, createOrderEvent,
   getActiveIssues, startReserving,
-  confirmAndPrintOrder, rejectOrder, reprintOrder,
+  confirmAndPrintOrder, confirmAndKitchenOrder, switchToKitchenDisplay,
+  rejectOrder, reprintOrder,
   CustomerTab, Order, Table, OrderIssue,
 } from '@/lib/api';
 import { useRealtime } from '@/lib/realtime-client';
@@ -80,9 +81,24 @@ function WaiterPageInner() {
   >([]);
   // Shift ID stored in React state instead of localStorage
   const [currentShiftId, setCurrentShiftId] = useState<string | null>(null);
+  // Kitchen routing mode: loaded from admin config
+  const [kitchenRoutingMode, setKitchenRoutingMode] = useState<'ask' | 'printer' | 'kitchen_display'>('ask');
 
   // Track order IDs we've already alerted about so we don't re-alert on re-renders
   const seenOrderIds = useRef<Set<string>>(new Set());
+
+  // ── Load kitchen routing mode from admin config ──────────────────────────
+  useEffect(() => {
+    fetch('/api/admin/restaurant-config')
+      .then(r => r.json())
+      .then((d: { kitchen_mode?: string }) => {
+        const mode = d.kitchen_mode;
+        if (mode === 'printer' || mode === 'kitchen_display' || mode === 'ask') {
+          setKitchenRoutingMode(mode);
+        }
+      })
+      .catch(console.error);
+  }, []);
 
   // ── Auth + shift ID hydration ─────────────────────────────────────────────
   useEffect(() => {
@@ -280,6 +296,41 @@ function WaiterPageInner() {
     } catch (e) {
       console.error(e);
       setActionMsg(`❌ ${e instanceof Error ? e.message : 'Could not confirm order'}`);
+      setTimeout(() => setActionMsg(''), 3500);
+    }
+    finally { setActionBusy(false); }
+  }
+
+  // Confirm & Send to Kitchen Display: no KOT print job; kitchen display shows it.
+  async function confirmAndKitchen(order: Order) {
+    if (actionBusy) return;
+    setActionBusy(true);
+    try {
+      await confirmAndKitchenOrder(order.id, session?.name || 'Waiter');
+      setActionMsg('🖥 Order confirmed — sent to kitchen display');
+      setTimeout(() => setActionMsg(''), 2500);
+      setSelOrder(null);
+      await refresh();
+    } catch (e) {
+      console.error(e);
+      setActionMsg(`❌ ${e instanceof Error ? e.message : 'Could not confirm order'}`);
+      setTimeout(() => setActionMsg(''), 3500);
+    }
+    finally { setActionBusy(false); }
+  }
+
+  // Switch to Kitchen Display: called after printer failure fallback.
+  async function switchToKitchenFallback(order: Order) {
+    if (actionBusy) return;
+    setActionBusy(true);
+    try {
+      await switchToKitchenDisplay(order.id, session?.name || 'Waiter');
+      setActionMsg('🖥 Order switched to kitchen display');
+      setTimeout(() => setActionMsg(''), 2500);
+      await refresh();
+    } catch (e) {
+      console.error(e);
+      setActionMsg(`❌ ${e instanceof Error ? e.message : 'Could not switch routing'}`);
       setTimeout(() => setActionMsg(''), 3500);
     }
     finally { setActionBusy(false); }
@@ -821,9 +872,18 @@ function WaiterPageInner() {
                 <div style={{ padding: '0 0.75rem 0.6rem', display: 'flex', gap: '0.4rem' }} onClick={e => e.stopPropagation()}>
                   {canAccept && (
                     <>
-                      <button disabled={actionBusy} onClick={() => confirmAndPrint(order)} style={{ ...btn('#f59e0b', '#1A0800'), flex: 2, fontSize: '0.76rem', padding: '0.4rem 0.5rem', opacity: actionBusy ? 0.6 : 1 }}>
-                        🖨️ Confirm &amp; Print
-                      </button>
+                      {/* Show Confirm & Print when mode is 'printer' or 'ask' */}
+                      {(kitchenRoutingMode === 'printer' || kitchenRoutingMode === 'ask') && (
+                        <button disabled={actionBusy} onClick={() => confirmAndPrint(order)} style={{ ...btn('#f59e0b', '#1A0800'), flex: 2, fontSize: '0.76rem', padding: '0.4rem 0.5rem', opacity: actionBusy ? 0.6 : 1 }}>
+                          🖨️ Print KOT
+                        </button>
+                      )}
+                      {/* Show Send to Kitchen when mode is 'kitchen_display' or 'ask' */}
+                      {(kitchenRoutingMode === 'kitchen_display' || kitchenRoutingMode === 'ask') && (
+                        <button disabled={actionBusy} onClick={() => confirmAndKitchen(order)} style={{ ...btn('#7c3aed'), flex: 2, fontSize: '0.76rem', padding: '0.4rem 0.5rem', opacity: actionBusy ? 0.6 : 1 }}>
+                          🖥 Kitchen
+                        </button>
+                      )}
                       <button disabled={actionBusy} onClick={() => { setSelOrder(order); setShowCancelFor(order.id); setCancelReason(''); }} style={{ ...btn('#fef2f2', '#dc2626'), flex: 1, fontSize: '0.76rem', padding: '0.4rem 0.5rem', border: '1px solid #fecaca', opacity: actionBusy ? 0.6 : 1 }}>
                         🚫 Reject
                       </button>
@@ -959,9 +1019,26 @@ function WaiterPageInner() {
             {(['awaiting_waiter', 'pending'].includes(selOrder.status) || selOrder.status === 'prepared') && (
               <div style={{ padding: '0.85rem 1.25rem', borderTop: '2px solid #f5f0e8', background: 'white' }}>
                 {['awaiting_waiter', 'pending'].includes(selOrder.status) && (
-                  <button disabled={actionBusy} onClick={() => confirmAndPrint(selOrder)} style={{ ...btn('#f59e0b', '#1A0800'), width: '100%', padding: '0.75rem', fontSize: '0.95rem', borderRadius: 12, opacity: actionBusy ? 0.6 : 1 }}>
-                    {actionBusy ? '⏳ Processing…' : '🖨️ Confirm & Print to Kitchen'}
-                  </button>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    {/* Print KOT button — shown when mode is 'printer' or 'ask' */}
+                    {(kitchenRoutingMode === 'printer' || kitchenRoutingMode === 'ask') && (
+                      <button disabled={actionBusy} onClick={() => confirmAndPrint(selOrder)} style={{ ...btn('#f59e0b', '#1A0800'), width: '100%', padding: '0.75rem', fontSize: '0.95rem', borderRadius: 12, opacity: actionBusy ? 0.6 : 1 }}>
+                        {actionBusy ? '⏳ Processing…' : '🖨️ Confirm & Print KOT'}
+                      </button>
+                    )}
+                    {/* Send to Kitchen Display button — shown when mode is 'kitchen_display' or 'ask' */}
+                    {(kitchenRoutingMode === 'kitchen_display' || kitchenRoutingMode === 'ask') && (
+                      <button disabled={actionBusy} onClick={() => confirmAndKitchen(selOrder)} style={{ ...btn('#7c3aed'), width: '100%', padding: '0.75rem', fontSize: '0.95rem', borderRadius: 12, opacity: actionBusy ? 0.6 : 1 }}>
+                        {actionBusy ? '⏳ Processing…' : '🖥 Confirm & Send to Kitchen Display'}
+                      </button>
+                    )}
+                    {/* Printer failure fallback: only shown if order is printer-routed but still needs attention */}
+                    {selOrder.kitchenRoute === 'printer' && selOrder.status === 'preparing' && (
+                      <button disabled={actionBusy} onClick={() => switchToKitchenFallback(selOrder)} style={{ ...btn('#eff6ff', '#2563eb'), width: '100%', padding: '0.6rem', fontSize: '0.82rem', borderRadius: 10, border: '1px solid #bfdbfe', opacity: actionBusy ? 0.6 : 1 }}>
+                        🖥 Switch to Kitchen Display (print failed?)
+                      </button>
+                    )}
+                  </div>
                 )}
                 {selOrder.status === 'prepared' && (
                   <button

@@ -11,16 +11,19 @@ import { sendEmail } from '@/lib/email';
 
 // ─── Email deduplication log ──────────────────────────────────────────────────
 /**
- * logEmail — inserts into email_log with a UNIQUE(order_id, event_type) constraint.
+ * logEmail — inserts into email_log with UNIQUE(order_id, event_type) constraint.
+ * Also sets dedup_key = `${orderId}:${eventType}` for flexible deduplication.
  * Returns true if the email should be sent (no prior record), false if already sent.
  */
 async function logEmail(orderId: string, eventType: string, sentTo: string): Promise<boolean> {
   const sb = getServerClient();
+  const dedupKey = `${orderId}:${eventType}`;
   const { error } = await sb.from('email_log').insert({
     id: newId('EML'),
     order_id: orderId,
     event_type: eventType,
     sent_to: sentTo,
+    dedup_key: dedupKey,
   });
   // 23505 = unique_violation — already sent, skip
   if (error && error.code === '23505') return false;
@@ -1057,5 +1060,110 @@ export async function sendOutForDeliveryEmail(orderId: string): Promise<void> {
     }
   } catch (err) {
     console.error(`${TAG} Unexpected error:`, err);
+  }
+}
+
+// ─── Public: sendRewardEmail ──────────────────────────────────────────────────
+/**
+ * sendRewardEmail(args)
+ *
+ * Sends a Spin & Win reward coupon email to the customer.
+ * Works for both order-based spins (pickup/delivery) and tab-based spins (dine-in).
+ * Idempotent via email_log.dedup_key — only sends once per spin event.
+ * Fire-and-forget — never blocks the spin API response.
+ */
+
+export interface RewardEmailArgs {
+  /** Used as dedup key base — can be tabId or orderId */
+  emailRef:       string;
+  /** Unique event type like 'reward_tab_XXX' or 'reward_order_XXX' */
+  eventType:      string;
+  recipientEmail: string;
+  rewardLabel:    string;
+  rewardType:     string;
+  couponCode:     string;
+  expiresAt:      string;
+  minNextOrder:   number;
+}
+
+export async function sendRewardEmail(args: RewardEmailArgs): Promise<void> {
+  const TAG = '[email:reward]';
+  try {
+    const { emailRef, eventType, recipientEmail, rewardLabel, rewardType, couponCode, expiresAt, minNextOrder } = args;
+
+    // Dedup: only send once per spin (use dedup_key for flexible FK-free deduplication)
+    const sb = getServerClient();
+    const dedupKey = `${emailRef}:${eventType}`;
+    const { error: logErr } = await sb.from('email_log').insert({
+      id:         newId('EML'),
+      dedup_key:  dedupKey,
+      event_type: eventType,
+      sent_to:    recipientEmail,
+      // order_id is now nullable in migration_012 — leave null for tab-based spins
+    });
+    if (logErr?.code === '23505') {
+      console.info(`${TAG} Already sent (dedup_key=${dedupKey}) — skipping duplicate`);
+      return;
+    }
+
+    const expiryFormatted = new Date(expiresAt).toLocaleDateString('en-IN', {
+      day: 'numeric', month: 'long', year: 'numeric',
+    });
+
+    const isFreeItem = rewardType === 'free_item';
+    const rewardSection = isFreeItem
+      ? `<p style="font-size:1.1rem;font-weight:bold;color:#7c3aed;margin:0 0 0.5rem;">🎁 ${rewardLabel}</p>`
+      : `<p style="font-size:1.1rem;font-weight:bold;color:#7c3aed;margin:0 0 0.5rem;">🎉 ${rewardLabel}</p>`;
+
+    const minOrderSection = minNextOrder > 0
+      ? `<tr><td style="color:#555;padding:4px 0;font-size:13px;">Minimum Purchase</td><td style="font-weight:600;padding:4px 0;font-size:13px;text-align:right;">₹${minNextOrder}</td></tr>`
+      : '';
+
+    const html = `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/></head>
+<body style="font-family:'Segoe UI',Arial,sans-serif;background:#f1f5f9;margin:0;padding:24px 16px">
+  <div style="max-width:480px;margin:0 auto">
+    <div style="background:linear-gradient(135deg,#7c3aed,#4f46e5);border-radius:16px 16px 0 0;padding:28px 24px;text-align:center">
+      <div style="font-size:36px;margin-bottom:8px">🎡</div>
+      <h1 style="margin:0;font-size:22px;font-weight:900;color:white;text-shadow:0 1px 3px rgba(0,0,0,0.2)">
+        Your Spin &amp; Win Reward!
+      </h1>
+      <p style="margin:6px 0 0;font-size:13px;color:rgba(255,255,255,0.9)">${RESTAURANT_NAME}</p>
+    </div>
+    <div style="background:white;border-radius:0 0 16px 16px;padding:28px 24px;box-shadow:0 4px 24px rgba(0,0,0,0.08)">
+      <p style="color:#374151;font-size:14px;margin:0 0 16px;">Congratulations! Here is your reward from your recent visit:</p>
+      ${rewardSection}
+      <div style="background:#f5f3ff;border-radius:10px;padding:16px;margin:16px 0;text-align:center">
+        <p style="color:#6b7280;font-size:11px;margin:0 0 6px;text-transform:uppercase;letter-spacing:1px;font-weight:700">YOUR COUPON CODE</p>
+        <p style="font-family:monospace;font-size:28px;font-weight:bold;color:#4f46e5;letter-spacing:4px;margin:0;">${couponCode}</p>
+      </div>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:16px">
+        <tr>
+          <td style="color:#555;padding:4px 0;font-size:13px;">Valid Until</td>
+          <td style="font-weight:600;padding:4px 0;font-size:13px;text-align:right;">${expiryFormatted}</td>
+        </tr>
+        ${minOrderSection}
+      </table>
+      <p style="color:#6b7280;font-size:12px;margin:0;line-height:1.5">
+        Use this coupon on your next eligible order at ${RESTAURANT_NAME}.<br/>
+        Save this email — your code is <strong style="color:#4f46e5">${couponCode}</strong>.
+      </p>
+    </div>
+    <div style="text-align:center;padding:16px;font-size:11px;color:#94a3b8">
+      Thank you for dining with <strong style="color:#E65C00">${RESTAURANT_NAME}</strong>! 🙏
+    </div>
+  </div>
+</body>
+</html>`;
+
+    await dispatchViaResend(
+      recipientEmail,
+      `🎡 Your Spin & Win Reward: ${rewardLabel}`,
+      html,
+    );
+    console.info(`${TAG} Reward email sent to ${recipientEmail}`);
+  } catch (err) {
+    console.error(`${TAG} Error:`, err);
   }
 }

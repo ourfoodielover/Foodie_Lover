@@ -22,6 +22,10 @@ function rowToTab(row: Record<string, unknown>) {
     email:          (row.customer_email as string | null) ?? null,
     createdAt:      row.created_at,
     closedAt:       row.closed_at ?? null,
+    // Coupon fields (added in migration_011)
+    couponId:       row.coupon_id       ?? null,
+    couponCode:     row.coupon_code     ?? null,
+    couponDiscount: Number(row.coupon_discount ?? 0),
   };
 }
 

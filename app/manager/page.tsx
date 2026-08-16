@@ -479,7 +479,8 @@ export default function ManagerPage() {
   const tabComputedSubtotal = selTab
     ? Math.max(selTab.total || 0, tabMemSubtotal)
     : 0;
-  const tabBillTotal = Math.max(0, tabComputedSubtotal - (selTab?.discount || 0));
+  const tabCouponDiscount = selTab?.couponDiscount || 0;
+  const tabBillTotal = Math.max(0, tabComputedSubtotal - (selTab?.discount || 0) - tabCouponDiscount);
 
   const inProgressOrders = selTab
     ? tabOrders.filter(o => ['awaiting_waiter', 'pending', 'preparing', 'prepared', 're_serve_required'].includes(o.status))
@@ -1183,6 +1184,12 @@ export default function ManagerPage() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '0.25rem', color: '#16a34a' }}>
                     <span>Discount ({selTab.discountReason})</span>
                     <span style={{ fontWeight: 700 }}>−₹{selTab.discount}</span>
+                  </div>
+                )}
+                {(selTab.couponDiscount || 0) > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '0.25rem', color: '#7c3aed' }}>
+                    <span>Coupon Applied ({selTab.couponCode})</span>
+                    <span style={{ fontWeight: 700 }}>−₹{selTab.couponDiscount}</span>
                   </div>
                 )}
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1.05rem', fontWeight: 900, borderTop: '2px solid #16a34a', paddingTop: '0.4rem', marginTop: '0.25rem', color: '#064e3b' }}>

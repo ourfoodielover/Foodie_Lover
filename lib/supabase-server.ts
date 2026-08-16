@@ -66,6 +66,7 @@ export function rowToOrder(
     assignedAt:     row.assigned_at      ?? undefined,   // set when status → out_for_delivery
     deliveredAt:    row.delivered_at     ?? undefined,   // set when status → delivered
     cancelReason:   row.cancel_reason   ?? undefined,
+    kitchenRoute:   row.kitchen_route   ?? 'not_set',
     source:         row.source,
     issueCount:     Number(row.issue_count ?? 0),
     timestamp:      row.created_at,

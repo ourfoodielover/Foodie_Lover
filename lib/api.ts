@@ -48,6 +48,7 @@ export interface Order {
   assignedAt?:     string;   // ISO timestamp set when delivery person is assigned (out_for_delivery)
   deliveredAt?:    string;   // ISO timestamp set when order is delivered
   cancelReason?:   string;
+  kitchenRoute?:   string;   // 'not_set' | 'printer' | 'kitchen_display'
   source?:         string;
   phone?:          string;
   issueCount?:     number;    // increments each time customer reports "not received"
@@ -117,6 +118,10 @@ export interface CustomerTab {
   createdAt:      string;       // mapped from created_at
   closedAt?:      string;       // mapped from closed_at
   orderIds?:      string[];     // optional legacy
+  // Coupon fields (populated at tab close when a reward coupon is redeemed)
+  couponId?:      string | null;
+  couponCode?:    string | null;
+  couponDiscount?:number;       // discount given by the redeemed coupon
 }
 
 // ─── Tab Device type ──────────────────────────────────────────────────────────
@@ -347,6 +352,37 @@ export async function reprintOrder(
   });
 }
 
+/**
+ * confirmAndKitchenOrder — waiter approves an `awaiting_waiter` / `pending`
+ * order and routes it directly to the kitchen display (no KOT print job).
+ * Moves order to 'preparing' and sets kitchen_route = 'kitchen_display'.
+ */
+export async function confirmAndKitchenOrder(
+  id: string,
+  by: string,
+  note?: string,
+): Promise<Order> {
+  return apiFetch<Order>(`/api/orders/${id}`, {
+    method: 'PATCH',
+    body:   JSON.stringify({ action: 'confirm_and_kitchen', by, note }),
+  });
+}
+
+/**
+ * switchToKitchenDisplay — after a print job fails, waiter opts to show
+ * the order on the kitchen display instead. Changes kitchen_route from
+ * 'printer' to 'kitchen_display' and broadcasts 'order_confirmed'.
+ */
+export async function switchToKitchenDisplay(
+  id: string,
+  by: string,
+): Promise<Order> {
+  return apiFetch<Order>(`/api/orders/${id}`, {
+    method: 'PATCH',
+    body:   JSON.stringify({ action: 'switch_to_kitchen', by }),
+  });
+}
+
 export async function applyDiscount(
   id:     string,
   amount: number,
@@ -474,7 +510,7 @@ export async function createTab(data: {
 // ─── Feedback ─────────────────────────────────────────────────────────────────
 export async function submitFeedback(data: {
   orderId:  string;
-  rating:   1 | 2 | 3 | 4 | 5;
+  rating:   number;   // 0.5–5.0 in 0.5 increments (half-star support)
   comment?: string;
 }): Promise<{ ok: boolean; alreadySubmitted?: boolean }> {
   return apiFetch<{ ok: boolean; alreadySubmitted?: boolean }>('/api/feedback', {

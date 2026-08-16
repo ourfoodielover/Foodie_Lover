@@ -240,7 +240,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     //                   Wrapped in try/catch — print failure is non-fatal and
     //                   must NEVER block the order update or kitchen display.
     let confirmPrintJobId: string | undefined;
-    if (body.action === 'confirm_and_print') {
+    if (body.action === 'confirm_and_print' || body.action === 'confirm_and_kitchen') {
       const { data: current, error: curErr } = await sb
         .from('orders')
         .select('*, order_items(*)')
@@ -262,6 +262,13 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       updates.confirmed_by = body.by ?? 'Waiter';
       updates.confirmed_at = new Date().toISOString();
 
+      // Set kitchen routing on the order record
+      if (body.action === 'confirm_and_print') {
+        updates.kitchen_route = 'printer';
+      } else if (body.action === 'confirm_and_kitchen') {
+        updates.kitchen_route = 'kitchen_display';
+      }
+
       await sb.from('order_events').insert([
         { id: newId('EV'), order_id: id, event_type: 'WaiterConfirmed', performed_by: body.by ?? 'Waiter', note: body.note ?? undefined },
         { id: newId('EV'), order_id: id, event_type: statusToEvent('preparing'), performed_by: body.by ?? 'Waiter' },
@@ -276,33 +283,53 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
         );
       }
 
-      // ── Secondary: queue a KOT print job (non-fatal if it fails) ─────────
-      // A print failure must not prevent the order from reaching the kitchen
-      // display or from being updated in Supabase. The kitchen page and the
-      // customer tracking page both respond to the order status in the DB —
-      // not to print job state. If printing fails the waiter can retry via
-      // "Reprint KOT" without any effect on the order lifecycle.
-      try {
-        confirmPrintJobId = newId('PJ');
-        await sb.from('print_jobs').insert({
-          id:            confirmPrintJobId,
-          restaurant_id: rid,
-          order_id:      id,
-          job_type:      'kot',
-          status:        'queued',
-          payload:       buildKotPayload(current as Record<string, unknown>, current.order_items ?? []),
-          requested_by:  body.by ?? 'Waiter',
-          is_reprint:    false,
-        });
-        await sb.from('order_events').insert({
-          id: newId('EV'), order_id: id, event_type: 'PrintQueued',
-          performed_by: body.by ?? 'Waiter', note: `KOT job ${confirmPrintJobId}`,
-        });
-      } catch (printErr) {
-        // Log but do not rethrow — the order update below will still proceed.
-        console.error(`[confirm_and_print] Print job creation failed for order ${id} (non-fatal):`, printErr);
-        confirmPrintJobId = undefined;
+      // ── Secondary: queue a KOT print job (only for confirm_and_print, non-fatal) ─
+      // For confirm_and_kitchen, no print job is created — the kitchen display
+      // receives the order via the 'order_confirmed' Realtime broadcast below.
+      if (body.action === 'confirm_and_print') {
+        try {
+          confirmPrintJobId = newId('PJ');
+          await sb.from('print_jobs').insert({
+            id:            confirmPrintJobId,
+            restaurant_id: rid,
+            order_id:      id,
+            job_type:      'kot',
+            status:        'queued',
+            payload:       buildKotPayload(current as Record<string, unknown>, current.order_items ?? []),
+            requested_by:  body.by ?? 'Waiter',
+            is_reprint:    false,
+          });
+          await sb.from('order_events').insert({
+            id: newId('EV'), order_id: id, event_type: 'PrintQueued',
+            performed_by: body.by ?? 'Waiter', note: `KOT job ${confirmPrintJobId}`,
+          });
+        } catch (printErr) {
+          // Log but do not rethrow — the order update below will still proceed.
+          console.error(`[confirm_and_print] Print job creation failed for order ${id} (non-fatal):`, printErr);
+          confirmPrintJobId = undefined;
+        }
       }
+    }
+
+    // ── Waiter: Switch to Kitchen Display (fallback from failed printer) ──────
+    // Used when printer routing fails and waiter wants to send to kitchen display instead.
+    if (body.action === 'switch_to_kitchen') {
+      const { data: current, error: curErr } = await sb
+        .from('orders')
+        .select('status, kitchen_route')
+        .eq('id', id)
+        .single();
+      if (curErr || !current) {
+        return NextResponse.json({ error: 'Order not found' }, { status: 404 });
+      }
+      if ((current as Record<string, unknown>).kitchen_route !== 'printer') {
+        return NextResponse.json({ error: 'Order is not printer-routed — switch_to_kitchen not applicable' }, { status: 400 });
+      }
+      updates.kitchen_route = 'kitchen_display';
+      await sb.from('order_events').insert({
+        id: newId('EV'), order_id: id, event_type: 'SwitchedToKitchenDisplay',
+        performed_by: body.by ?? 'Waiter', note: 'Switched from printer to kitchen display after print failure',
+      });
     }
 
     // ── Waiter: Reject ────────────────────────────────────────────────────────
@@ -389,16 +416,18 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
 
     // Broadcast fine-grained event so every portal can react precisely
     const event =
-      body.status === 'prepared'            ? 'order_ready'            :
-      body.status === 'served'              ? 'order_served'           :
-      body.status === 're_serve_required'   ? 'order_issue_reported'   :
-      body.status === 'out_for_delivery'    ? 'order_out_for_delivery' :
-      body.status === 'delivered'           ? 'order_delivered'        :
-      body.status === 'completed'           ? 'payment_completed'      :
-      body.action  === 'customer_confirm'   ? 'payment_completed'      :
-      body.action  === 'confirm_and_print'  ? 'order_confirmed'        :
-      body.action  === 'reject'             ? 'order_rejected'         :
-      body.action  === 'reprint'            ? 'print_job_queued'       :
+      body.status === 'prepared'                  ? 'order_ready'            :
+      body.status === 'served'                    ? 'order_served'           :
+      body.status === 're_serve_required'         ? 'order_issue_reported'   :
+      body.status === 'out_for_delivery'          ? 'order_out_for_delivery' :
+      body.status === 'delivered'                 ? 'order_delivered'        :
+      body.status === 'completed'                 ? 'payment_completed'      :
+      body.action  === 'customer_confirm'         ? 'payment_completed'      :
+      body.action  === 'confirm_and_print'        ? 'order_confirmed'        :
+      body.action  === 'confirm_and_kitchen'      ? 'order_confirmed'        :
+      body.action  === 'switch_to_kitchen'        ? 'order_confirmed'        :
+      body.action  === 'reject'                   ? 'order_rejected'         :
+      body.action  === 'reprint'                  ? 'print_job_queued'       :
       'order_status_changed';
     await broadcast(rid, event, order);
 
