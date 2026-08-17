@@ -34,14 +34,28 @@ export async function POST(req: Request) {
 
     const sb = getServerClient();
 
-    // Delete in dependency order:
-    //   order_events → order_items
-    //   → (nullify reward_coupons FK back-refs) → orders
+    // ── Full FK dependency map (all constraints that block order deletion) ────
+    //
+    //  spin_results.order_id        → orders(id)  ON DELETE CASCADE
+    //  reward_coupons.spin_id       → spin_results(id)  RESTRICT  ← blocks cascade
+    //  reward_coupons.source_order_id   → orders(id)  RESTRICT
+    //  reward_coupons.reserved_order_id → orders(id)  RESTRICT
+    //  reward_coupons.redeemed_order_id → orders(id)  RESTRICT
+    //
+    // Correct deletion order:
+    //   order_events → order_items → reward_coupons → spin_results → orders
+    //
+    // Deleting reward_coupons first unblocks both paths:
+    //   • The direct RESTRICT back-refs (source/reserved/redeemed_order_id)
+    //   • The cascade path: orders → spin_results (blocked by spin_id RESTRICT)
+    //
+    // (migration_016 adds ON DELETE CASCADE on spin_id and ON DELETE SET NULL on
+    // the order back-refs so the DB handles this automatically going forward.)
+
     const { error: evErr } = await sb
       .from('order_events')
       .delete()
       .neq('id', '00000000-0000-0000-0000-000000000000');
-
     if (evErr) {
       return NextResponse.json({ error: `Failed to clear order events: ${evErr.message}` }, { status: 500 });
     }
@@ -50,32 +64,33 @@ export async function POST(req: Request) {
       .from('order_items')
       .delete()
       .neq('id', '00000000-0000-0000-0000-000000000000');
-
     if (itErr) {
       return NextResponse.json({ error: `Failed to clear order items: ${itErr.message}` }, { status: 500 });
     }
 
-    // ── Nullify reward_coupons → orders FK references ─────────────────────────
-    // reward_coupons has three columns that reference orders(id):
-    //   source_order_id, reserved_order_id, redeemed_order_id
-    // All use default RESTRICT behaviour, so we must nullify them before
-    // deleting the orders they point to.  (migration_016 adds ON DELETE SET NULL
-    // to make this automatic at the DB level, but this code ensures it works
-    // even before that migration has been applied.)
+    // Delete reward_coupons before spin_results and orders to satisfy all FK constraints
     const { error: rcErr } = await sb
       .from('reward_coupons')
-      .update({ source_order_id: null, reserved_order_id: null, redeemed_order_id: null })
-      .neq('id', '00000000-0000-0000-0000-000000000000'); // matches all rows
-
+      .delete()
+      .neq('id', '00000000-0000-0000-0000-000000000000');
     if (rcErr) {
-      return NextResponse.json({ error: `Failed to clear coupon references: ${rcErr.message}` }, { status: 500 });
+      return NextResponse.json({ error: `Failed to clear reward coupons: ${rcErr.message}` }, { status: 500 });
     }
 
+    // Delete spin_results explicitly (covers no_reward spins that have no coupon)
+    const { error: srErr } = await sb
+      .from('spin_results')
+      .delete()
+      .neq('id', '00000000-0000-0000-0000-000000000000');
+    if (srErr) {
+      return NextResponse.json({ error: `Failed to clear spin results: ${srErr.message}` }, { status: 500 });
+    }
+
+    // Orders can now be deleted — all FK back-refs are gone
     const { error: ordErr } = await sb
       .from('orders')
       .delete()
       .neq('id', '00000000-0000-0000-0000-000000000000');
-
     if (ordErr) {
       return NextResponse.json({ error: `Failed to clear orders: ${ordErr.message}` }, { status: 500 });
     }

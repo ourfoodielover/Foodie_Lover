@@ -1,26 +1,42 @@
--- ─── migration_016: reward_coupons → orders FK: RESTRICT → ON DELETE SET NULL ──
+-- ─── migration_016: Fix all FK constraints that block order deletion ──────────
 --
--- WHY: reward_coupons has three columns that reference orders(id).  The original
--- constraints used default RESTRICT behaviour, which prevents any row in orders
--- from being deleted while a coupon still references it.  This caused:
+-- WHY: Deleting from `orders` hits two separate FK constraint paths:
 --
---   "update or delete on table 'orders' violates foreign key constraint
---    reward_coupons_source_order_id_fkey on table 'reward_coupons'"
+--  PATH A (direct RESTRICT back-refs from reward_coupons → orders):
+--    reward_coupons.source_order_id   → orders(id)  RESTRICT
+--    reward_coupons.reserved_order_id → orders(id)  RESTRICT
+--    reward_coupons.redeemed_order_id → orders(id)  RESTRICT
+--    Fix: ON DELETE SET NULL  (coupon survives order deletion, ref nulled)
 --
--- The correct semantic is ON DELETE SET NULL: when an order is deleted, the
--- coupon loses its back-reference but remains valid for the customer to redeem.
+--  PATH B (cascade chain blocked by reward_coupons → spin_results):
+--    spin_results.order_id → orders(id)  ON DELETE CASCADE  (migration_011)
+--    reward_coupons.spin_id → spin_results(id)  RESTRICT
+--    When Postgres cascades order → spin_results, the spin_id RESTRICT blocks it.
+--    Fix: ON DELETE CASCADE  (coupon is deleted when its spin_result is deleted)
 --
--- Three constraints are affected:
---   • reward_coupons_source_order_id_fkey   (source_order_id   — already nullable via migration_012)
---   • reward_coupons_reserved_order_id_fkey (reserved_order_id — always nullable)
---   • reward_coupons_redeemed_order_id_fkey (redeemed_order_id — always nullable)
+-- After this migration, deleting an order automatically:
+--   • Cascades to spin_results (existing behaviour)
+--   • Cascades spin_results → reward_coupons (new — coupon deleted with its spin)
+--   • Nulls source/reserved/redeemed_order_id on any coupon from another order
 --
--- SAFE TO RUN: All three columns are already nullable, so ON DELETE SET NULL is
--- valid.  The DROP + ADD pattern is the only way to change ON DELETE behaviour
--- in Postgres — ALTER CONSTRAINT cannot change it.
+-- SAFE TO RUN: DROP CONSTRAINT IF EXISTS is idempotent.  All three source/
+-- reserved/redeemed columns are already nullable (migration_012).  The spin_id
+-- column is NOT NULL, which is compatible with ON DELETE CASCADE.
 -- ─────────────────────────────────────────────────────────────────────────────
 
--- 1. source_order_id
+-- ── PATH B: spin_id → ON DELETE CASCADE ──────────────────────────────────────
+
+ALTER TABLE reward_coupons
+  DROP CONSTRAINT IF EXISTS reward_coupons_spin_id_fkey;
+
+ALTER TABLE reward_coupons
+  ADD CONSTRAINT reward_coupons_spin_id_fkey
+  FOREIGN KEY (spin_id)
+  REFERENCES spin_results(id)
+  ON DELETE CASCADE;
+
+-- ── PATH A: order back-refs → ON DELETE SET NULL ──────────────────────────────
+
 ALTER TABLE reward_coupons
   DROP CONSTRAINT IF EXISTS reward_coupons_source_order_id_fkey;
 
@@ -30,7 +46,6 @@ ALTER TABLE reward_coupons
   REFERENCES orders(id)
   ON DELETE SET NULL;
 
--- 2. reserved_order_id
 ALTER TABLE reward_coupons
   DROP CONSTRAINT IF EXISTS reward_coupons_reserved_order_id_fkey;
 
@@ -40,7 +55,6 @@ ALTER TABLE reward_coupons
   REFERENCES orders(id)
   ON DELETE SET NULL;
 
--- 3. redeemed_order_id
 ALTER TABLE reward_coupons
   DROP CONSTRAINT IF EXISTS reward_coupons_redeemed_order_id_fkey;
 

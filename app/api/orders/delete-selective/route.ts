@@ -121,28 +121,58 @@ export async function POST(req: Request) {
     if (orderIds.length === 0)
       return NextResponse.json({ ok: true, deleted: 0, message: 'No matching orders found.' });
 
-    // Delete in dependency order:
-    //   order_events → order_items
-    //   → (nullify reward_coupons FK back-refs) → orders
-    const { error: evErr } = await sb.from('order_events').delete().in('order_id', orderIds);
-    if (evErr) return NextResponse.json({ error: `Events: ${evErr.message}` }, { status: 500 });
+    // ── Full FK dependency map ────────────────────────────────────────────────
+    // spin_results.order_id          → orders(id)  ON DELETE CASCADE
+    // reward_coupons.spin_id         → spin_results(id)  RESTRICT  ← blocks cascade
+    // reward_coupons.source_order_id → orders(id)  RESTRICT
+    // reward_coupons.reserved_order_id → orders(id)  RESTRICT
+    // reward_coupons.redeemed_order_id → orders(id)  RESTRICT
+    //
+    // Deletion sequence:
+    //   1. Find spin_result IDs for these orders
+    //   2. Delete reward_coupons that came from those spins
+    //   3. Nullify remaining reward_coupon back-refs (coupons from OTHER orders
+    //      that were reserved/redeemed on these orders)
+    //   4. Delete order_events, order_items, spin_results (parallel)
+    //   5. Delete orders
 
-    const { error: itErr } = await sb.from('order_items').delete().in('order_id', orderIds);
-    if (itErr) return NextResponse.json({ error: `Items: ${itErr.message}` }, { status: 500 });
+    // Step 1 — find spin_result IDs for affected orders
+    const { data: srRows, error: srLookupErr } = await sb
+      .from('spin_results')
+      .select('id')
+      .in('order_id', orderIds);
+    if (srLookupErr) return NextResponse.json({ error: `Spin lookup: ${srLookupErr.message}` }, { status: 500 });
+    const spinResultIds = (srRows ?? []).map((r: { id: string }) => r.id);
 
-    // ── Nullify reward_coupons → orders FK references ─────────────────────────
-    // Three columns in reward_coupons reference orders(id) with RESTRICT behaviour:
-    //   source_order_id, reserved_order_id, redeemed_order_id
-    // We target only rows referencing the orders we're about to delete, and run
-    // the three updates in parallel to keep this fast.
+    // Step 2 — delete coupons whose spin came from these orders (unblocks spin_results cascade)
+    if (spinResultIds.length > 0) {
+      const { error: rcSpinErr } = await sb
+        .from('reward_coupons')
+        .delete()
+        .in('spin_id', spinResultIds);
+      if (rcSpinErr) return NextResponse.json({ error: `Coupons(spin): ${rcSpinErr.message}` }, { status: 500 });
+    }
+
+    // Step 3 — nullify remaining back-refs: coupons from other orders that were
+    // reserved or redeemed on one of the orders we're deleting
     const [rcSrc, rcRes, rcRed] = await Promise.all([
       sb.from('reward_coupons').update({ source_order_id:   null }).in('source_order_id',   orderIds),
       sb.from('reward_coupons').update({ reserved_order_id: null }).in('reserved_order_id', orderIds),
       sb.from('reward_coupons').update({ redeemed_order_id: null }).in('redeemed_order_id', orderIds),
     ]);
     const rcErr = rcSrc.error ?? rcRes.error ?? rcRed.error;
-    if (rcErr) return NextResponse.json({ error: `Coupons: ${rcErr.message}` }, { status: 500 });
+    if (rcErr) return NextResponse.json({ error: `Coupons(refs): ${rcErr.message}` }, { status: 500 });
 
+    // Step 4 — clear child rows in parallel (spin_results explicit in case of no_reward spins)
+    const [evRes, itRes, srRes] = await Promise.all([
+      sb.from('order_events').delete().in('order_id', orderIds),
+      sb.from('order_items').delete().in('order_id', orderIds),
+      sb.from('spin_results').delete().in('order_id', orderIds),
+    ]);
+    const childErr = evRes.error ?? itRes.error ?? srRes.error;
+    if (childErr) return NextResponse.json({ error: `Children: ${childErr.message}` }, { status: 500 });
+
+    // Step 5 — delete orders (all FK blockers are now cleared)
     const { error: ordErr } = await sb.from('orders').delete().in('id', orderIds);
     if (ordErr) return NextResponse.json({ error: `Orders: ${ordErr.message}` }, { status: 500 });
 
