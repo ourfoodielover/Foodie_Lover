@@ -121,12 +121,27 @@ export async function POST(req: Request) {
     if (orderIds.length === 0)
       return NextResponse.json({ ok: true, deleted: 0, message: 'No matching orders found.' });
 
-    // Delete in dependency order
+    // Delete in dependency order:
+    //   order_events → order_items
+    //   → (nullify reward_coupons FK back-refs) → orders
     const { error: evErr } = await sb.from('order_events').delete().in('order_id', orderIds);
     if (evErr) return NextResponse.json({ error: `Events: ${evErr.message}` }, { status: 500 });
 
     const { error: itErr } = await sb.from('order_items').delete().in('order_id', orderIds);
     if (itErr) return NextResponse.json({ error: `Items: ${itErr.message}` }, { status: 500 });
+
+    // ── Nullify reward_coupons → orders FK references ─────────────────────────
+    // Three columns in reward_coupons reference orders(id) with RESTRICT behaviour:
+    //   source_order_id, reserved_order_id, redeemed_order_id
+    // We target only rows referencing the orders we're about to delete, and run
+    // the three updates in parallel to keep this fast.
+    const [rcSrc, rcRes, rcRed] = await Promise.all([
+      sb.from('reward_coupons').update({ source_order_id:   null }).in('source_order_id',   orderIds),
+      sb.from('reward_coupons').update({ reserved_order_id: null }).in('reserved_order_id', orderIds),
+      sb.from('reward_coupons').update({ redeemed_order_id: null }).in('redeemed_order_id', orderIds),
+    ]);
+    const rcErr = rcSrc.error ?? rcRes.error ?? rcRed.error;
+    if (rcErr) return NextResponse.json({ error: `Coupons: ${rcErr.message}` }, { status: 500 });
 
     const { error: ordErr } = await sb.from('orders').delete().in('id', orderIds);
     if (ordErr) return NextResponse.json({ error: `Orders: ${ordErr.message}` }, { status: 500 });
