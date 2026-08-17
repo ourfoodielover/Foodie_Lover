@@ -51,18 +51,53 @@ const MAX_RETRIES    = 3;
 
 // ─── Brand name + app base URL ────────────────────────────────────────────────
 const RESTAURANT_NAME = process.env.RESTAURANT_NAME ?? 'Foodie Lover';
-// NEXT_PUBLIC_APP_URL is set in .env.local / Vercel env vars.
-// Falls back to empty string — links will be relative if not set.
+
+// NEXT_PUBLIC_APP_URL must be set to your canonical production domain in Vercel.
+// Example: https://www.ourfoodielover.com
+// DO NOT set this to a Vercel preview URL (foodie-lover-next.vercel.app) or
+// localhost — email links must always open the real production application.
 const APP_BASE_URL = (process.env.NEXT_PUBLIC_APP_URL ?? '').replace(/\/$/, '');
 
-/** Builds a full tracking URL for a pickup/delivery order. */
-function trackingUrl(orderId: string): string {
-  return `${APP_BASE_URL}/track?orderId=${encodeURIComponent(orderId)}`;
+// Warn loudly at startup if the base URL is missing or looks like a deployment preview.
+// This prevents silently emailing customers links that open the wrong environment.
+(function warnIfUrlMisconfigured() {
+  if (!APP_BASE_URL) {
+    console.error(
+      '[email] ❌ NEXT_PUBLIC_APP_URL is not set — tracking links in customer emails ' +
+      'will be broken (relative URLs do not work in email clients). ' +
+      'Set it to your production URL in Vercel → Settings → Environment Variables.',
+    );
+  } else if (
+    APP_BASE_URL.includes('.vercel.app') ||
+    APP_BASE_URL.includes('localhost') ||
+    APP_BASE_URL.includes('127.0.0.1')
+  ) {
+    console.warn(
+      `[email] ⚠️  NEXT_PUBLIC_APP_URL is "${APP_BASE_URL}" — this looks like a ` +
+      'local or Vercel preview URL, not a production domain. ' +
+      'Customer email links will open the wrong environment. ' +
+      'Update it to your real production URL in Vercel → Settings → Environment Variables.',
+    );
+  }
+})();
+
+/**
+ * Builds an absolute tracking URL for a pickup/delivery order.
+ *
+ * The track page at /track reads:
+ *   ?id=    → the order UUID
+ *   ?token= → the tracking_token stored on the order row
+ *
+ * Both parameters are required — verifyTrackingToken() rejects requests
+ * where the token is missing or mismatched.
+ */
+function trackingUrl(orderId: string, token: string): string {
+  return `${APP_BASE_URL}/track?id=${encodeURIComponent(orderId)}&token=${encodeURIComponent(token)}`;
 }
 
 /** Renders a prominent CTA button suitable for order-tracking emails. */
-function trackingButtonHtml(orderId: string, label: string, color = '#E65C00'): string {
-  const url = trackingUrl(orderId);
+function trackingButtonHtml(orderId: string, token: string, label: string, color = '#E65C00'): string {
+  const url = trackingUrl(orderId, token);
   return `
   <div style="text-align:center;margin:24px 0">
     <a href="${url}" target="_blank" rel="noopener noreferrer"
@@ -798,21 +833,23 @@ export async function processEmailQueue(): Promise<{
 // ─── HTML builders ─────────────────────────────────────────────────────────
 
 function buildConfirmationHtml(order: Record<string, unknown>, items: Record<string, unknown>[]): string {
-  const orderId  = (order.id as string) || '';
-  const orderNum = (order.order_number as number) ?? String(orderId).slice(-6);
-  const custName = (order.customer_name as string) || 'Valued Customer';
-  const total    = Number(order.total) || 0;
-  const typeRaw  = (order.type as string) || 'dine-in';
-  const isPickup   = typeRaw === 'pickup';
-  const isDelivery = typeRaw === 'delivery';
+  const orderId       = (order.id as string) || '';
+  const orderNum      = (order.order_number as number) ?? String(orderId).slice(-6);
+  const custName      = (order.customer_name as string) || 'Valued Customer';
+  const total         = Number(order.total) || 0;
+  const typeRaw       = (order.type as string) || 'dine-in';
+  const trackingToken = (order.tracking_token as string) || '';
+  const isPickup      = typeRaw === 'pickup';
+  const isDelivery    = typeRaw === 'delivery';
   const typeLabel =
     isDelivery ? '🚗 Delivery' :
     isPickup   ? '🏪 Pickup'  : '🍽️ Dine-In';
   const deliveryAddr = (order.delivery_address as string) || '';
 
-  // Tracking link — only for pickup and delivery (dine-in uses table page)
-  const trackBtn = (isPickup || isDelivery)
-    ? trackingButtonHtml(orderId, isDelivery ? '📍 Track Your Order' : '📋 View Order Status')
+  // Tracking link — only for pickup and delivery orders that have a tracking token.
+  // Dine-in customers track via the table page, not /track.
+  const trackBtn = (isPickup || isDelivery) && trackingToken
+    ? trackingButtonHtml(orderId, trackingToken, isDelivery ? '📍 Track Your Order' : '📋 View Order Status')
     : '';
 
   const itemRows = items.map(it => `
@@ -863,14 +900,15 @@ function buildConfirmationHtml(order: Record<string, unknown>, items: Record<str
 }
 
 function buildOrderReadyHtml(order: Record<string, unknown>): string {
-  const orderId  = (order.id as string) || '';
-  const orderNum = (order.order_number as number) ?? String(orderId).slice(-6);
-  const custName = (order.customer_name as string) || 'Valued Customer';
-  const typeRaw  = (order.type as string) || 'pickup';
-  const isDelivery = typeRaw === 'delivery';
-  const icon     = isDelivery ? '🛵' : '🏪';
-  const headline = isDelivery ? 'Your order is on its way!' : 'Your order is ready for pickup!';
-  const message  = isDelivery
+  const orderId       = (order.id as string) || '';
+  const orderNum      = (order.order_number as number) ?? String(orderId).slice(-6);
+  const custName      = (order.customer_name as string) || 'Valued Customer';
+  const trackingToken = (order.tracking_token as string) || '';
+  const typeRaw       = (order.type as string) || 'pickup';
+  const isDelivery    = typeRaw === 'delivery';
+  const icon          = isDelivery ? '🛵' : '🏪';
+  const headline      = isDelivery ? 'Your order is on its way!' : 'Your order is ready for pickup!';
+  const message       = isDelivery
     ? 'Our delivery team will bring your order to you shortly.'
     : 'Please come to the counter to collect your order.';
 
@@ -891,7 +929,7 @@ function buildOrderReadyHtml(order: Record<string, unknown>): string {
         <div style="font-size:11px;font-weight:700;color:#16a34a;text-transform:uppercase;letter-spacing:1px">Order #${orderNum}</div>
         <div style="font-family:monospace;font-size:11px;color:#94a3b8;margin-top:4px">${orderId}</div>
       </div>
-      ${trackingButtonHtml(orderId, isDelivery ? '🛵 Track Delivery' : '📦 View Order Status', isDelivery ? '#2563eb' : '#16a34a')}
+      ${trackingToken ? trackingButtonHtml(orderId, trackingToken, isDelivery ? '🛵 Track Delivery' : '📦 View Order Status', isDelivery ? '#2563eb' : '#16a34a') : ''}
     </div>
     <div style="text-align:center;padding:16px;font-size:11px;color:#94a3b8">
       Thank you for choosing <strong style="color:#E65C00">${RESTAURANT_NAME}</strong>! 🙏
@@ -972,7 +1010,7 @@ export async function sendOrderReadyEmail(orderId: string): Promise<void> {
   try {
     const { data: raw, error: fetchErr } = await sb
       .from('orders')
-      .select('id, order_number, customer_name, customer_email, type')
+      .select('id, order_number, customer_name, customer_email, type, tracking_token')
       .eq('id', orderId)
       .single();
 
@@ -1051,8 +1089,9 @@ export async function sendOutForDeliveryEmail(orderId: string): Promise<void> {
       return;
     }
 
-    const orderNum = (raw.order_number as number) ?? String(raw.id).slice(-6);
-    const custName = (raw.customer_name as string) || 'there';
+    const orderNum      = (raw.order_number as number) ?? String(raw.id).slice(-6);
+    const custName      = (raw.customer_name as string) || 'there';
+    const trackingToken = (raw.tracking_token as string) || '';
 
     const html = `<!DOCTYPE html>
 <html>
@@ -1074,7 +1113,7 @@ export async function sendOutForDeliveryEmail(orderId: string): Promise<void> {
         <div style="font-size:11px;font-weight:700;color:#2563eb;text-transform:uppercase;letter-spacing:1px">Order #${orderNum}</div>
         <div style="font-family:monospace;font-size:11px;color:#94a3b8;margin-top:4px">${String(raw.id)}</div>
       </div>
-      ${trackingButtonHtml(String(raw.id), '🛵 Track Your Delivery', '#2563eb')}
+      ${trackingToken ? trackingButtonHtml(String(raw.id), trackingToken, '🛵 Track Your Delivery', '#2563eb') : ''}
     </div>
     <div style="text-align:center;padding:16px;font-size:11px;color:#94a3b8">
       Thank you for choosing <strong style="color:#E65C00">${RESTAURANT_NAME}</strong>! 🙏
