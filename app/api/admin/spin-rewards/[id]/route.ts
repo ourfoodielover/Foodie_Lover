@@ -14,9 +14,40 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   return NextResponse.json({ ok: true });
 }
 
+/**
+ * DELETE /api/admin/spin-rewards/[id]
+ *
+ * Safe delete with automatic archive fallback:
+ *  - If the reward has any spin_results or reward_coupons referencing it
+ *    → set archived=true, active=false (soft archive to preserve coupon validity)
+ *  - If no history exists → permanently DELETE the row
+ *
+ * Returns: { ok: true, action: 'archived' | 'deleted' }
+ */
 export async function DELETE(_req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   const sb = getServerClient();
-  await sb.from('spin_rewards').update({ active: false }).eq('id', id);
-  return NextResponse.json({ ok: true });
+
+  // Check for any referenced history
+  const [{ count: spinCount }, { count: couponCount }] = await Promise.all([
+    sb.from('spin_results').select('id', { count: 'exact', head: true }).eq('reward_id', id),
+    sb.from('reward_coupons').select('id', { count: 'exact', head: true }).eq('reward_id', id),
+  ]);
+
+  const hasHistory = (spinCount ?? 0) > 0 || (couponCount ?? 0) > 0;
+
+  if (hasHistory) {
+    // Archive: keep row but hide from all queries & spin pool
+    const { error } = await sb
+      .from('spin_rewards')
+      .update({ active: false, archived: true })
+      .eq('id', id);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ ok: true, action: 'archived' });
+  }
+
+  // No history → safe to hard delete
+  const { error } = await sb.from('spin_rewards').delete().eq('id', id);
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json({ ok: true, action: 'deleted' });
 }

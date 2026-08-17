@@ -117,6 +117,7 @@ export async function POST(req: NextRequest) {
     .select('*')
     .eq('restaurant_id', restaurantId)
     .eq('active', true)
+    .neq('archived', true)   // exclude archived rewards (safe before & after migration_015)
     .order('sort_order');
   if (!rewards?.length) {
     return NextResponse.json({ error: 'No rewards configured' }, { status: 400 });

@@ -239,6 +239,32 @@ export default function AdminPage() {
     monthly_win_limit: number | null;
     bogo_eligible_items: string[]; bogo_eligible_categories: string[];
     max_free_item_value: number | null;
+    // v015
+    archived: boolean; daily_usage: number;
+  }
+  interface SpinImportPreviewRow {
+    action: 'CREATE' | 'UPDATE' | 'NO CHANGE' | 'ERROR';
+    id?: string;
+    label: string;
+    type: string;
+    value: number;
+    max_discount: number | null;
+    daily_win_limit: number | null;
+    weight: number;
+    chance: string;
+    min_next_order: number;
+    expires_days: number;
+    active: boolean;
+    error?: string;
+  }
+  interface SpinImportPreview {
+    totalRows: number;
+    newCount: number;
+    updateCount: number;
+    noChangeCount: number;
+    errorCount: number;
+    errors: string[];
+    rows: SpinImportPreviewRow[];
   }
   interface SpinConfigRow { enabled: boolean; min_order_amount: number; eligible_order_types: string[]; require_email: boolean; require_phone: boolean }
   const [spinConfig,     setSpinConfig]     = useState<SpinConfigRow>({ enabled: false, min_order_amount: 500, eligible_order_types: ['dine-in','pickup','delivery'], require_email: true, require_phone: true });
@@ -250,7 +276,13 @@ export default function AdminPage() {
     min_next_order: 0, expires_days: 30, active: true, sort_order: 0,
     max_discount: null, daily_win_limit: null, monthly_win_limit: null,
     bogo_eligible_items: [], bogo_eligible_categories: [], max_free_item_value: null,
+    archived: false, daily_usage: 0,
   });
+  const [editingRewardId,   setEditingRewardId]   = useState<string | null>(null);
+  const [spinTogglingIds,   setSpinTogglingIds]   = useState<Set<string>>(new Set());
+  const [spinImportPreview, setSpinImportPreview] = useState<SpinImportPreview | null>(null);
+  const [spinImportRows,    setSpinImportRows]    = useState<Record<string, string>[]>([]);
+  const [spinImportBusy,    setSpinImportBusy]    = useState(false);
 
   // ── Kitchen routing mode ──
   const [kitchenMode,    setKitchenMode]    = useState<'ask'|'printer'|'kitchen_display'>('ask');
@@ -1035,6 +1067,228 @@ export default function AdminPage() {
     } catch (e) {
       setManagerPinMsg(`❌ ${e instanceof Error ? e.message : 'Failed to update PIN'}`);
     }
+  }
+
+  // ─────────────────────── SPIN & WIN HANDLERS ─────────────────────────────────
+
+  const SPIN_FORM_RESET: Omit<SpinRewardRow,'id'> = {
+    label:'', reward_type:'percent', reward_value:10, weight:1,
+    min_next_order:0, expires_days:30, active:true, sort_order:0,
+    max_discount:null, daily_win_limit:null, monthly_win_limit:null,
+    bogo_eligible_items:[], bogo_eligible_categories:[], max_free_item_value:null,
+    archived:false, daily_usage:0,
+  };
+
+  async function handleSpinToggleActive(r: SpinRewardRow) {
+    const next = !r.active;
+    setSpinTogglingIds(prev => new Set([...prev, r.id]));
+    try {
+      const res = await fetch(`/api/admin/spin-rewards/${r.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: next }),
+      });
+      const d = await res.json() as { ok?: boolean; error?: string };
+      if (d.ok) {
+        setSpinRewards(prev => prev.map(x => x.id === r.id ? { ...x, active: next } : x));
+        setSpinMsg(`${next ? '✅' : '⭕'} "${r.label}" ${next ? 'activated' : 'deactivated'}`);
+      } else {
+        setSpinMsg(`❌ ${d.error ?? 'Update failed'}`);
+      }
+    } catch {
+      setSpinMsg('❌ Network error');
+    } finally {
+      setSpinTogglingIds(prev => { const s = new Set(prev); s.delete(r.id); return s; });
+      setTimeout(() => setSpinMsg(''), 3000);
+    }
+  }
+
+  function handleSpinEditStart(r: SpinRewardRow) {
+    setEditingRewardId(r.id);
+    setSpinRewardForm({
+      label: r.label, reward_type: r.reward_type, reward_value: r.reward_value,
+      weight: r.weight, min_next_order: r.min_next_order, expires_days: r.expires_days,
+      active: r.active, sort_order: r.sort_order,
+      max_discount: r.max_discount, daily_win_limit: r.daily_win_limit,
+      monthly_win_limit: r.monthly_win_limit,
+      bogo_eligible_items: r.bogo_eligible_items ?? [],
+      bogo_eligible_categories: r.bogo_eligible_categories ?? [],
+      max_free_item_value: r.max_free_item_value,
+      archived: r.archived, daily_usage: r.daily_usage,
+    });
+    setTimeout(() => {
+      document.getElementById('spin-reward-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 80);
+  }
+
+  async function handleSpinDeleteOrArchive(r: SpinRewardRow) {
+    const hasKnownUsage = (r.daily_usage ?? 0) > 0;
+    const msg = hasKnownUsage
+      ? `"${r.label}" has been issued to customers today.\n\nIt will be ARCHIVED (hidden from wheel, existing coupons remain valid) rather than deleted.\n\nContinue?`
+      : `Delete "${r.label}"?\n\n• If it has any spin/coupon history → will be archived\n• If unused → permanently deleted\n\nContinue?`;
+    if (!confirm(msg)) return;
+    try {
+      const res = await fetch(`/api/admin/spin-rewards/${r.id}`, { method: 'DELETE' });
+      const d = await res.json() as { ok?: boolean; action?: string; error?: string };
+      if (d.ok) {
+        setSpinRewards(prev => prev.filter(x => x.id !== r.id));
+        setSpinMsg(d.action === 'archived'
+          ? `📦 "${r.label}" archived (has history — existing coupons unaffected).`
+          : `🗑 "${r.label}" permanently deleted.`);
+      } else {
+        setSpinMsg(`❌ ${d.error ?? 'Could not remove'}`);
+      }
+    } catch {
+      setSpinMsg('❌ Network error');
+    }
+    setTimeout(() => setSpinMsg(''), 4000);
+  }
+
+  async function handleSpinFormSave() {
+    const f = spinRewardForm;
+    if (!f.label.trim()) { setSpinMsg('❌ Label is required'); return; }
+    if (f.reward_type === 'percent') {
+      if (f.reward_value <= 0 || f.reward_value > 100) { setSpinMsg('❌ Percent value must be 1–100'); return; }
+      if (!f.max_discount || f.max_discount <= 0) { setSpinMsg('❌ Maximum Discount (₹) is required for percent rewards'); setTimeout(() => setSpinMsg(''), 4000); return; }
+    }
+    if (f.reward_type === 'fixed' && f.reward_value <= 0) { setSpinMsg('❌ Fixed amount must be > 0'); return; }
+    if (f.weight < 0) { setSpinMsg('❌ Weight cannot be negative'); return; }
+
+    // Duplicate label guard (new rewards only, or if label changed)
+    const editingLabel = editingRewardId ? spinRewards.find(x => x.id === editingRewardId)?.label : undefined;
+    if (!editingRewardId || editingLabel?.toLowerCase() !== f.label.trim().toLowerCase()) {
+      const dupe = spinRewards.find(x =>
+        !x.archived &&
+        x.id !== editingRewardId &&
+        x.label.toLowerCase() === f.label.trim().toLowerCase()
+      );
+      if (dupe) { setSpinMsg(`❌ A reward named "${dupe.label}" already exists. Edit it instead.`); setTimeout(() => setSpinMsg(''), 5000); return; }
+    }
+
+    setSpinMsg('⏳ Saving…');
+    const payload = {
+      label: f.label.trim(), reward_type: f.reward_type, reward_value: f.reward_value,
+      weight: f.weight, min_next_order: f.min_next_order, expires_days: f.expires_days,
+      active: f.active, sort_order: f.sort_order,
+      max_discount: f.max_discount, daily_win_limit: f.daily_win_limit,
+      monthly_win_limit: f.monthly_win_limit,
+      bogo_eligible_items: f.bogo_eligible_items,
+      bogo_eligible_categories: f.bogo_eligible_categories,
+      max_free_item_value: f.max_free_item_value,
+      archived: false,
+    };
+    try {
+      const url = editingRewardId ? `/api/admin/spin-rewards/${editingRewardId}` : '/api/admin/spin-rewards';
+      const method = editingRewardId ? 'PATCH' : 'POST';
+      const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const d = await res.json() as { ok?: boolean; error?: string };
+      if (d.ok) {
+        const updated = await fetch('/api/admin/spin-rewards').then(x => x.json()) as SpinRewardRow[];
+        setSpinRewards(updated);
+        setEditingRewardId(null);
+        setSpinRewardForm(SPIN_FORM_RESET);
+        setSpinMsg(editingRewardId ? '✅ Reward updated!' : '✅ Reward added!');
+      } else {
+        setSpinMsg(`❌ ${d.error ?? 'Error'}`);
+      }
+    } catch {
+      setSpinMsg('❌ Network error');
+    }
+    setTimeout(() => setSpinMsg(''), 3000);
+  }
+
+  async function handleSpinImportFile(file: File) {
+    setSpinImportBusy(true);
+    setSpinMsg('⏳ Parsing CSV…');
+    try {
+      const text = await file.text();
+      // Parse CSV (minimal, handles quoted fields)
+      const lines = text.trim().split(/\r?\n/).filter(l => l.trim());
+      if (lines.length < 2) { setSpinMsg('❌ CSV must have a header row and at least one data row'); setSpinImportBusy(false); return; }
+      const parseRow = (line: string): string[] => {
+        const cols: string[] = []; let cur = '', inQ = false;
+        for (const ch of line) {
+          if (ch === '"') { inQ = !inQ; }
+          else if (ch === ',' && !inQ) { cols.push(cur.trim()); cur = ''; }
+          else { cur += ch; }
+        }
+        cols.push(cur.trim()); return cols;
+      };
+      const header = parseRow(lines[0]).map(h => h.toLowerCase().replace(/^"|"$/g, '').trim());
+      const csvRows: Record<string, string>[] = lines.slice(1).map(line => {
+        const cols = parseRow(line);
+        const obj: Record<string, string> = {};
+        header.forEach((h, i) => { obj[h] = (cols[i] ?? '').replace(/^"|"$/g, '').trim(); });
+        return obj;
+      });
+
+      const res = await fetch('/api/admin/spin-rewards/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rows: csvRows, confirm: false }),
+      });
+      const d = await res.json() as SpinImportPreview & { error?: string };
+      if (d.error) { setSpinMsg(`❌ ${d.error}`); setSpinImportBusy(false); return; }
+      setSpinImportRows(csvRows);
+      setSpinImportPreview(d);
+      setSpinMsg('');
+    } catch (e) {
+      setSpinMsg(`❌ ${e instanceof Error ? e.message : 'Parse error'}`);
+    } finally {
+      setSpinImportBusy(false);
+    }
+  }
+
+  async function handleSpinImportConfirm() {
+    if (!spinImportPreview || spinImportPreview.errorCount > 0) return;
+    setSpinImportBusy(true);
+    try {
+      const res = await fetch('/api/admin/spin-rewards/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rows: spinImportRows, confirm: true }),
+      });
+      const d = await res.json() as { ok?: boolean; error?: string; created?: number; updated?: number };
+      if (d.ok) {
+        const updated = await fetch('/api/admin/spin-rewards').then(x => x.json()) as SpinRewardRow[];
+        setSpinRewards(updated);
+        setSpinImportPreview(null);
+        setSpinImportRows([]);
+        setSpinMsg(`✅ Import complete: ${d.created} created, ${d.updated} updated.`);
+        setTimeout(() => setSpinMsg(''), 4000);
+      } else {
+        setSpinMsg(`❌ ${d.error ?? 'Import failed'}`);
+        setTimeout(() => setSpinMsg(''), 5000);
+      }
+    } catch {
+      setSpinMsg('❌ Network error during import');
+      setTimeout(() => setSpinMsg(''), 4000);
+    } finally {
+      setSpinImportBusy(false);
+    }
+  }
+
+  function handleSpinExportCsv() {
+    window.location.href = '/api/admin/spin-rewards?export=csv';
+  }
+
+  function downloadSpinCsvTemplate() {
+    const csvLines = [
+      'id,label,type,value,weight,max_discount,daily_win_limit,min_next_order,expires_days,active',
+      ',Better Luck Next Time,no_reward,0,10,,0,0,30,true',
+      ',3% OFF,percent,3,25,30,0,150,30,true',
+      ',5% OFF,percent,5,20,50,0,250,30,true',
+      ',7% OFF,percent,7,15,70,0,350,30,true',
+      ',10% OFF,percent,10,12,100,10,500,30,true',
+      ',15% OFF,percent,15,8,150,5,1000,30,true',
+      ',20% OFF JACKPOT,percent,20,4,200,2,2000,14,true',
+      ',30% OFF MEGA JACKPOT,percent,30,1,300,1,3000,14,true',
+    ];
+    const blob = new Blob([csvLines.join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'spin-rewards-template.csv'; a.click();
+    URL.revokeObjectURL(url);
   }
 
   // ─────────────────────────────── RENDER ────────────────────────────────────
@@ -2806,72 +3060,108 @@ export default function AdminPage() {
               </div>
             </div>
 
-            {/* Rewards list */}
+            {/* ── Rewards list ─────────────────────────────────────────── */}
             <div style={{...card('#E65C00'),marginBottom:'1rem'}}>
-              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'1rem',flexWrap:'wrap',gap:'0.5rem'}}>
+
+              {/* Header */}
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'0.6rem',flexWrap:'wrap',gap:'0.5rem'}}>
                 <h3 style={{margin:0,fontWeight:700,color:'#1A0800',fontSize:'1rem'}}>Spin Rewards</h3>
                 {spinRewards.length > 0 && (()=>{
-                  const activeRwds = spinRewards.filter(r=>r.active);
-                  const totalW = activeRwds.reduce((s,r)=>s+r.weight,0);
-                  return (
-                    <span style={{background:'#fff5ed',border:'1px solid #E65C00',borderRadius:20,padding:'0.2rem 0.75rem',fontSize:'0.75rem',fontWeight:700,color:'#E65C00'}}>
-                      Total Active Weight: {totalW}
-                    </span>
-                  );
+                  const totalW = spinRewards.filter(r=>r.active).reduce((s,r)=>s+r.weight,0);
+                  return <span style={{background:'#fff5ed',border:'1px solid #E65C00',borderRadius:20,padding:'0.2rem 0.75rem',fontSize:'0.75rem',fontWeight:700,color:'#E65C00'}}>Active Weight: {totalW}</span>;
                 })()}
               </div>
+
+              {/* Toolbar */}
+              <div style={{display:'flex',gap:'0.5rem',marginBottom:'0.75rem',flexWrap:'wrap',alignItems:'center'}}>
+                <label style={{...btn('#3b82f6'),cursor:'pointer',display:'inline-flex',alignItems:'center',gap:'0.3rem',opacity:spinImportBusy?0.6:1}}>
+                  {spinImportBusy?'⏳ Parsing…':'📥 Import CSV'}
+                  <input type="file" accept=".csv" style={{display:'none'}} disabled={spinImportBusy}
+                    onChange={async e=>{const f=e.target.files?.[0];if(!f)return;await handleSpinImportFile(f);e.target.value='';}} />
+                </label>
+                <button style={{...btn('#6b7280')}} onClick={handleSpinExportCsv}>📤 Export CSV</button>
+                <button style={{...btn('#8b5cf6')}} onClick={downloadSpinCsvTemplate}>📋 Template</button>
+              </div>
+
+              {/* Rewards table */}
               {spinRewards.length === 0
-                ? <p style={{color:'#888',fontSize:'0.85rem'}}>No rewards configured yet.</p>
+                ? <p style={{color:'#888',fontSize:'0.85rem'}}>No rewards configured yet. Use the form below or Import CSV.</p>
                 : (()=>{
-                  const activeRwds = spinRewards.filter(r=>r.active);
-                  const totalW = activeRwds.reduce((s,r)=>s+r.weight,0);
-                  return (
-                    <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.82rem',marginBottom:'1rem'}}>
-                      <thead><tr style={{background:'#fff5ed'}}>
-                        {['Label','Type','Value','Cap','Chance','Weight','Daily Limit','Min Order','Expires','Active',''].map(h=><th key={h} style={{padding:'0.4rem 0.6rem',textAlign:'left',fontWeight:700,fontSize:'0.7rem',color:'#6B5246',textTransform:'uppercase',whiteSpace:'nowrap'}}>{h}</th>)}
-                      </tr></thead>
-                      <tbody>
-                        {spinRewards.map(r=>{
-                          const pct = r.active && totalW > 0 ? ((r.weight/totalW)*100).toFixed(1)+'%' : '—';
-                          const isHighValue = r.reward_type==='percent' && r.reward_value>=30 && !r.max_discount;
-                          return (
-                            <tr key={r.id} style={{borderBottom:'1px solid #f5f0e8',opacity:r.active?1:0.5}}>
-                              <td style={{padding:'0.4rem 0.6rem',fontWeight:600}}>
-                                {r.label}
-                                {isHighValue && <span title="High-value percent reward with no max cap — consider adding a Maximum Discount" style={{marginLeft:4,color:'#f59e0b',fontSize:'0.7rem',cursor:'help'}}>⚠️</span>}
-                              </td>
-                              <td style={{padding:'0.4rem 0.6rem'}}>{r.reward_type}</td>
-                              <td style={{padding:'0.4rem 0.6rem'}}>{r.reward_type==='percent'?`${r.reward_value}%`:r.reward_type==='no_reward'?'—':`₹${r.reward_value}`}</td>
-                              <td style={{padding:'0.4rem 0.6rem',color:'#6b7280',fontSize:'0.78rem'}}>{r.reward_type==='percent' && r.max_discount?`₹${r.max_discount}`:'—'}</td>
-                              <td style={{padding:'0.4rem 0.6rem',fontWeight:700,color:'#7c3aed'}}>{pct}</td>
-                              <td style={{padding:'0.4rem 0.6rem'}}>{r.weight}</td>
-                              <td style={{padding:'0.4rem 0.6rem',color:'#6b7280',fontSize:'0.78rem'}}>{r.daily_win_limit!=null?`${r.daily_win_limit}/day`:'∞'}</td>
-                              <td style={{padding:'0.4rem 0.6rem'}}>₹{r.min_next_order}</td>
-                              <td style={{padding:'0.4rem 0.6rem'}}>{r.expires_days}d</td>
-                              <td style={{padding:'0.4rem 0.6rem'}}>
-                                <input type="checkbox" checked={r.active} onChange={async e=>{
-                                  await fetch(`/api/admin/spin-rewards/${r.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({active:e.target.checked})});
-                                  setSpinRewards(prev=>prev.map(x=>x.id===r.id?{...x,active:e.target.checked}:x));
-                                }} />
-                              </td>
-                              <td style={{padding:'0.4rem 0.6rem'}}>
-                                <button style={{...btn('#ef4444'),padding:'0.25rem 0.5rem',fontSize:'0.72rem'}} onClick={async()=>{
-                                  await fetch(`/api/admin/spin-rewards/${r.id}`,{method:'DELETE'});
-                                  setSpinRewards(prev=>prev.filter(x=>x.id!==r.id));
-                                }}>🗑</button>
-                              </td>
+                    const totalW = spinRewards.filter(r=>r.active).reduce((s,r)=>s+r.weight,0);
+                    return (
+                      <div style={{overflowX:'auto',marginBottom:'1rem'}}>
+                        <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.8rem',minWidth:680}}>
+                          <thead>
+                            <tr style={{background:'#fff5ed'}}>
+                              {['Label','Type','Value','Cap','Chance','Wt','Today','Min₹','Exp','Active','',''].map((h,i)=>(
+                                <th key={i} style={{padding:'0.35rem 0.5rem',textAlign:'left',fontWeight:700,fontSize:'0.68rem',color:'#6B5246',textTransform:'uppercase',whiteSpace:'nowrap'}}>{h}</th>
+                              ))}
                             </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  );
-                })()
+                          </thead>
+                          <tbody>
+                            {spinRewards.map(r=>{
+                              const pct = r.active && totalW>0 ? ((r.weight/totalW)*100).toFixed(1)+'%' : '—';
+                              const isHighVal = r.reward_type==='percent' && r.reward_value>=30 && !r.max_discount;
+                              const isToggling = spinTogglingIds.has(r.id);
+                              const atLimit = r.daily_win_limit!=null && (r.daily_usage??0)>=r.daily_win_limit;
+                              const todayStr = r.daily_win_limit!=null
+                                ? `${r.daily_usage??0}/${r.daily_win_limit}`
+                                : `${r.daily_usage??0}/∞`;
+                              return (
+                                <tr key={r.id} style={{borderBottom:'1px solid #f5f0e8',opacity:r.active?1:0.55,background:editingRewardId===r.id?'#fffbf0':'transparent'}}>
+                                  <td style={{padding:'0.35rem 0.5rem',fontWeight:600,maxWidth:140}}>
+                                    {r.label}
+                                    {isHighVal&&<span title="High-value percent with no max cap" style={{marginLeft:4,cursor:'help'}}>⚠️</span>}
+                                  </td>
+                                  <td style={{padding:'0.35rem 0.5rem',color:'#6b7280',fontSize:'0.75rem'}}>{r.reward_type}</td>
+                                  <td style={{padding:'0.35rem 0.5rem',whiteSpace:'nowrap'}}>{r.reward_type==='percent'?`${r.reward_value}%`:r.reward_type==='no_reward'?'—':`₹${r.reward_value}`}</td>
+                                  <td style={{padding:'0.35rem 0.5rem',color:'#6b7280',fontSize:'0.75rem',whiteSpace:'nowrap'}}>{r.reward_type==='percent'&&r.max_discount?`₹${r.max_discount}`:'—'}</td>
+                                  <td style={{padding:'0.35rem 0.5rem',fontWeight:700,color:'#7c3aed'}}>{pct}</td>
+                                  <td style={{padding:'0.35rem 0.5rem'}}>{r.weight}</td>
+                                  <td style={{padding:'0.35rem 0.5rem',fontSize:'0.75rem',fontWeight:600,color:atLimit?'#ef4444':'#374151',whiteSpace:'nowrap'}}>{todayStr}</td>
+                                  <td style={{padding:'0.35rem 0.5rem',whiteSpace:'nowrap'}}>₹{r.min_next_order}</td>
+                                  <td style={{padding:'0.35rem 0.5rem',whiteSpace:'nowrap'}}>{r.expires_days}d</td>
+                                  <td style={{padding:'0.35rem 0.5rem'}}>
+                                    <button
+                                      disabled={isToggling}
+                                      onClick={()=>handleSpinToggleActive(r)}
+                                      style={{...btn(r.active?'#16a34a':'#9ca3af'),padding:'0.18rem 0.45rem',fontSize:'0.7rem',opacity:isToggling?0.55:1,cursor:isToggling?'wait':'pointer',minWidth:38}}
+                                      title={r.active?'Deactivate':'Activate'}
+                                    >{isToggling?'…':r.active?'ON':'OFF'}</button>
+                                  </td>
+                                  <td style={{padding:'0.35rem 0.5rem'}}>
+                                    <button
+                                      style={{...btn('#f59e0b','#1a0800'),padding:'0.18rem 0.45rem',fontSize:'0.7rem'}}
+                                      onClick={()=>handleSpinEditStart(r)} title="Edit"
+                                    >✏️</button>
+                                  </td>
+                                  <td style={{padding:'0.35rem 0.5rem'}}>
+                                    <button
+                                      style={{...btn('#ef4444'),padding:'0.18rem 0.45rem',fontSize:'0.7rem'}}
+                                      onClick={()=>handleSpinDeleteOrArchive(r)}
+                                      title={(r.daily_usage??0)>0?'Archive (has history)':'Delete'}
+                                    >{(r.daily_usage??0)>0?'📦':'🗑'}</button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })()
               }
 
-              {/* Add reward form */}
-              <div style={{background:'#f8fafc',borderRadius:10,padding:'1rem',marginTop:'0.5rem'}}>
-                <div style={{fontWeight:700,fontSize:'0.85rem',marginBottom:'0.6rem',color:'#1A0800'}}>Add New Reward</div>
+              {/* ── Add / Edit reward form ─────────────────────────────── */}
+              <div id="spin-reward-form" style={{background:'#f8fafc',borderRadius:10,padding:'1rem',marginTop:'0.5rem',border:editingRewardId?'2px solid #E65C00':'2px solid transparent',transition:'border-color 0.2s'}}>
+                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'0.6rem'}}>
+                  <div style={{fontWeight:700,fontSize:'0.85rem',color:'#1A0800'}}>
+                    {editingRewardId ? '✏️ Edit Reward' : '+ Add New Reward'}
+                  </div>
+                  {editingRewardId && (
+                    <button style={{...btn('#9ca3af'),padding:'0.2rem 0.6rem',fontSize:'0.75rem'}} onClick={()=>{setEditingRewardId(null);setSpinRewardForm(SPIN_FORM_RESET);}}>✕ Cancel</button>
+                  )}
+                </div>
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'0.5rem',marginBottom:'0.5rem'}}>
                   <div>
                     <label style={{fontSize:'0.72rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.2rem'}}>Label *</label>
@@ -2887,32 +3177,34 @@ export default function AdminPage() {
                     </select>
                   </div>
                   <div>
-                    <label style={{fontSize:'0.72rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.2rem'}}>Value</label>
+                    <label style={{fontSize:'0.72rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.2rem'}}>
+                      {spinRewardForm.reward_type==='percent'?'Discount (%)':spinRewardForm.reward_type==='fixed'?'Amount (₹)':'Value'}
+                    </label>
                     <input type="number" value={spinRewardForm.reward_value} onChange={e=>setSpinRewardForm(f=>({...f,reward_value:Number(e.target.value)}))} style={{...inp}} />
                   </div>
                   <div>
                     <label style={{fontSize:'0.72rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.2rem'}}>Weight (higher = more likely)</label>
-                    <input type="number" value={spinRewardForm.weight} min={1} onChange={e=>setSpinRewardForm(f=>({...f,weight:Number(e.target.value)}))} style={{...inp}} />
+                    <input type="number" value={spinRewardForm.weight} min={0} onChange={e=>setSpinRewardForm(f=>({...f,weight:Number(e.target.value)}))} style={{...inp}} />
                   </div>
                   {spinRewardForm.reward_type==='percent' && (
                     <div>
-                      <label style={{fontSize:'0.72rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.2rem'}}>Max Discount (₹) <span style={{color:'#9ca3af',fontWeight:400}}>optional cap</span></label>
+                      <label style={{fontSize:'0.72rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.2rem'}}>
+                        Max Discount (₹) <span style={{color:'#ef4444',fontWeight:800}}>*</span> <span style={{color:'#9ca3af',fontWeight:400}}>required</span>
+                      </label>
                       <input
-                        type="number"
-                        min={0}
-                        placeholder="e.g. 100 — leave blank for no cap"
+                        type="number" min={1}
+                        placeholder="e.g. 100"
                         value={spinRewardForm.max_discount ?? ''}
                         onChange={e=>setSpinRewardForm(f=>({...f,max_discount:e.target.value===''?null:Number(e.target.value)}))}
-                        style={{...inp}}
+                        style={{...inp,borderColor:!spinRewardForm.max_discount?'#ef4444':''}}
                       />
                     </div>
                   )}
                   <div>
-                    <label style={{fontSize:'0.72rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.2rem'}}>Daily Win Limit <span style={{color:'#9ca3af',fontWeight:400}}>optional</span></label>
+                    <label style={{fontSize:'0.72rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.2rem'}}>Daily Win Limit <span style={{color:'#9ca3af',fontWeight:400}}>blank = unlimited</span></label>
                     <input
-                      type="number"
-                      min={1}
-                      placeholder="e.g. 5 — blank = unlimited"
+                      type="number" min={1}
+                      placeholder="blank = unlimited"
                       value={spinRewardForm.daily_win_limit ?? ''}
                       onChange={e=>setSpinRewardForm(f=>({...f,daily_win_limit:e.target.value===''?null:Number(e.target.value)}))}
                       style={{...inp}}
@@ -2927,34 +3219,95 @@ export default function AdminPage() {
                     <input type="number" value={spinRewardForm.expires_days} min={1} onChange={e=>setSpinRewardForm(f=>({...f,expires_days:Number(e.target.value)}))} style={{...inp}} />
                   </div>
                 </div>
+                {/* Live preview */}
+                <div style={{background:'#f0fdf4',border:'1px dashed #86efac',borderRadius:8,padding:'0.5rem 0.75rem',marginBottom:'0.5rem',fontSize:'0.79rem',color:'#166534'}}>
+                  <strong>Preview:</strong>{' '}
+                  <em>{spinRewardForm.label||'(no label)'}</em> —{' '}
+                  {spinRewardForm.reward_type==='percent'
+                    ? `${spinRewardForm.reward_value}% off${spinRewardForm.max_discount?` (max ₹${spinRewardForm.max_discount})`:''}${!spinRewardForm.max_discount?' ⚠️ uncapped':''}`
+                    : spinRewardForm.reward_type==='fixed' ? `₹${spinRewardForm.reward_value} off`
+                    : spinRewardForm.reward_type==='no_reward' ? 'No Reward (filler)'
+                    : 'Free Item'}
+                  {spinRewardForm.min_next_order>0 ? ` · min ₹${spinRewardForm.min_next_order}` : ''}
+                  {' · '}weight {spinRewardForm.weight}
+                  {spinRewardForm.daily_win_limit ? ` · max ${spinRewardForm.daily_win_limit}/day` : ' · unlimited/day'}
+                </div>
                 {/* Profitability warning */}
                 {spinRewardForm.reward_type==='percent' && spinRewardForm.reward_value>=25 && !spinRewardForm.max_discount && (
                   <div style={{background:'#fef9c3',border:'1px solid #fcd34d',borderRadius:8,padding:'0.5rem 0.75rem',marginBottom:'0.5rem',fontSize:'0.78rem',color:'#92400e'}}>
-                    ⚠️ <strong>{spinRewardForm.reward_value}% off</strong> with no cap could be very costly on large orders. Consider adding a Maximum Discount (₹) above.
+                    ⚠️ <strong>{spinRewardForm.reward_value}% off</strong> with no cap could be very costly on large orders. Add a Maximum Discount above to protect margins.
                   </div>
                 )}
-                <button
-                  style={{...btn('#16a34a')}}
-                  onClick={async()=>{
-                    if (!spinRewardForm.label) { setSpinMsg('Label required'); return; }
-                    const r = await fetch('/api/admin/spin-rewards',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spinRewardForm)});
-                    const d = await r.json() as {ok?:boolean;error?:string};
-                    if (d.ok) {
-                      const updated = await fetch('/api/admin/spin-rewards').then(x=>x.json()) as SpinRewardRow[];
-                      setSpinRewards(updated);
-                      setSpinRewardForm({
-                        label:'', reward_type:'percent', reward_value:10, weight:1,
-                        min_next_order:0, expires_days:30, active:true, sort_order:0,
-                        max_discount:null, daily_win_limit:null, monthly_win_limit:null,
-                        bogo_eligible_items:[], bogo_eligible_categories:[], max_free_item_value:null,
-                      });
-                      setSpinMsg('✅ Reward added!');
-                    } else { setSpinMsg(`❌ ${d.error ?? 'Error'}`); }
-                    setTimeout(()=>setSpinMsg(''),3000);
-                  }}
-                >✅ Add Reward</button>
+                <button style={{...btn('#16a34a')}} onClick={handleSpinFormSave}>
+                  {editingRewardId ? '💾 Save Changes' : '✅ Add Reward'}
+                </button>
               </div>
             </div>
+
+            {/* ── Import preview modal ────────────────────────────────── */}
+            {spinImportPreview && (
+              <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.55)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center',padding:'1rem'}}>
+                <div style={{background:'white',borderRadius:14,padding:'1.5rem',maxWidth:760,width:'100%',maxHeight:'82vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+                  <h3 style={{margin:'0 0 0.75rem',fontWeight:800,color:'#1A0800',fontSize:'1.05rem'}}>📋 CSV Import Preview</h3>
+                  <div style={{display:'flex',gap:'0.6rem',flexWrap:'wrap',marginBottom:'1rem',fontSize:'0.8rem'}}>
+                    <span style={{background:'#dcfce7',color:'#166534',padding:'0.2rem 0.65rem',borderRadius:20,fontWeight:700}}>+{spinImportPreview.newCount} CREATE</span>
+                    <span style={{background:'#dbeafe',color:'#1e40af',padding:'0.2rem 0.65rem',borderRadius:20,fontWeight:700}}>~{spinImportPreview.updateCount} UPDATE</span>
+                    <span style={{background:'#f3f4f6',color:'#6b7280',padding:'0.2rem 0.65rem',borderRadius:20,fontWeight:700}}>{spinImportPreview.noChangeCount} NO CHANGE</span>
+                    {spinImportPreview.errorCount>0 && <span style={{background:'#fee2e2',color:'#991b1b',padding:'0.2rem 0.65rem',borderRadius:20,fontWeight:700}}>⚠️ {spinImportPreview.errorCount} ERRORS</span>}
+                  </div>
+                  {spinImportPreview.errors.length>0 && (
+                    <div style={{background:'#fee2e2',borderRadius:8,padding:'0.75rem',marginBottom:'0.75rem',fontSize:'0.78rem',color:'#991b1b'}}>
+                      <strong>Fix these errors in your CSV and re-import:</strong>
+                      <ul style={{margin:'0.3rem 0 0 1rem',padding:0}}>
+                        {spinImportPreview.errors.map((e,i)=><li key={i}>{e}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                  <div style={{overflowX:'auto'}}>
+                    <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.75rem'}}>
+                      <thead>
+                        <tr style={{background:'#f3f4f6'}}>
+                          {['Action','Label','Type','Value','Cap','Wt','Chance','Min₹','Exp','Active'].map(h=>(
+                            <th key={h} style={{padding:'0.3rem 0.5rem',textAlign:'left',fontWeight:700,color:'#374151',whiteSpace:'nowrap'}}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {spinImportPreview.rows.map((row,i)=>{
+                          const bgMap: Record<string,string> = {CREATE:'#f0fdf4',UPDATE:'#eff6ff','NO CHANGE':'#f9fafb',ERROR:'#fef2f2'};
+                          const labelMap: Record<string,string> = {CREATE:'+ CREATE',UPDATE:'~ UPDATE','NO CHANGE':'= SAME',ERROR:'✗ ERROR'};
+                          return (
+                            <tr key={i} style={{borderBottom:'1px solid #f3f4f6',background:bgMap[row.action]??'white'}}>
+                              <td style={{padding:'0.3rem 0.5rem',fontWeight:700,fontSize:'0.7rem',whiteSpace:'nowrap'}}>{labelMap[row.action]??row.action}</td>
+                              <td style={{padding:'0.3rem 0.5rem'}}>
+                                {row.label}
+                                {row.error && <span style={{color:'#ef4444',display:'block',fontSize:'0.68rem'}}>{row.error}</span>}
+                              </td>
+                              <td style={{padding:'0.3rem 0.5rem',whiteSpace:'nowrap'}}>{row.type}</td>
+                              <td style={{padding:'0.3rem 0.5rem',whiteSpace:'nowrap'}}>{row.type==='percent'?`${row.value}%`:row.type==='no_reward'?'—':`₹${row.value}`}</td>
+                              <td style={{padding:'0.3rem 0.5rem',whiteSpace:'nowrap'}}>{row.max_discount?`₹${row.max_discount}`:'—'}</td>
+                              <td style={{padding:'0.3rem 0.5rem'}}>{row.weight}</td>
+                              <td style={{padding:'0.3rem 0.5rem',color:'#7c3aed',fontWeight:700}}>{row.chance}</td>
+                              <td style={{padding:'0.3rem 0.5rem',whiteSpace:'nowrap'}}>₹{row.min_next_order}</td>
+                              <td style={{padding:'0.3rem 0.5rem',whiteSpace:'nowrap'}}>{row.expires_days}d</td>
+                              <td style={{padding:'0.3rem 0.5rem'}}>{row.active?'✅':'⭕'}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{display:'flex',gap:'0.5rem',marginTop:'1.1rem',justifyContent:'flex-end'}}>
+                    <button style={{...btn('#9ca3af')}} onClick={()=>{setSpinImportPreview(null);setSpinImportRows([]);}}>Cancel</button>
+                    <button
+                      style={{...btn('#16a34a'),opacity:(spinImportPreview.errorCount>0||spinImportBusy)?0.45:1}}
+                      disabled={spinImportPreview.errorCount>0||spinImportBusy}
+                      onClick={handleSpinImportConfirm}
+                    >{spinImportBusy?'⏳ Importing…':'✅ Confirm Import'}</button>
+                  </div>
+                </div>
+              </div>
+            )}
           </>}
         </>}
 
