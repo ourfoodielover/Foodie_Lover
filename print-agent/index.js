@@ -34,10 +34,6 @@ const {
   MAX_ATTEMPTS           = '5',
 } = process.env;
 
-if (!APP_BASE_URL) {
-  console.error('FATAL: APP_BASE_URL is not set. Copy .env.example to .env and configure it.');
-  process.exit(1);
-}
 if (PRINTER_TYPE === 'network' && !PRINTER_IP) {
   console.error('FATAL: PRINTER_TYPE=network but PRINTER_IP is not set.');
   process.exit(1);
@@ -206,7 +202,7 @@ public class WinPrint {
 
 $hPrinter = [IntPtr]::Zero
 if (-not [WinPrint]::OpenPrinter($PrinterName, [ref]$hPrinter, [IntPtr]::Zero)) {
-    throw "OpenPrinter('$PrinterName') failed — verify PRINTER_NAME in .env matches Windows Devices and Printers exactly."
+    throw "OpenPrinter('$PrinterName') failed -- verify PRINTER_NAME in .env matches the name in Windows Devices and Printers exactly."
 }
 
 $doc = New-Object WinPrint+DOCINFOA
@@ -247,7 +243,10 @@ async function printViaUSB(buffer) {
     const tmpPs1 = nodePath.join(os.tmpdir(), `fl-print-${process.pid}-${Date.now()}.ps1`);
     try {
       fs.writeFileSync(tmpBin, buffer);
-      fs.writeFileSync(tmpPs1, WIN_PRINT_PS1, 'utf8');
+      // Write PS1 with UTF-8 BOM so Windows PowerShell 5.1 reads it as UTF-8
+      // regardless of the system ANSI code page (avoids 0x94 → " misparse).
+      const UTF8_BOM = Buffer.from([0xEF, 0xBB, 0xBF]);
+      fs.writeFileSync(tmpPs1, Buffer.concat([UTF8_BOM, Buffer.from(WIN_PRINT_PS1, 'utf8')]));
       try {
         execFileSync('powershell.exe', [
           '-NoProfile',
@@ -352,6 +351,12 @@ async function main() {
     await printBuffer(buildKot(testPayload));
     console.log('[print-agent] Test ticket sent OK.');
     return;
+  }
+
+  // APP_BASE_URL is only required for live polling — not for --test-print above.
+  if (!APP_BASE_URL) {
+    console.error('FATAL: APP_BASE_URL is not set. Copy .env.example to .env and configure it.');
+    process.exit(1);
   }
 
   const target = PRINTER_TYPE === 'network'
