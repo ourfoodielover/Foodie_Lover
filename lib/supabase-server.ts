@@ -1,6 +1,7 @@
 // ─── Foodie Lover — Supabase Server Client ────────────────────────────────────
 // ONLY import in API routes (server-side). Never expose service role key to browser.
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { randomBytes } from 'crypto';
 
 export function getServerClient(): SupabaseClient {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -18,6 +19,16 @@ export function getServerClient(): SupabaseClient {
 
 export function newId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Generates a cryptographically random spin token (48 hex chars = 192 bits).
+ * Used as a single-use URL token in Spin & Win email links.
+ * Token is tied to a specific order or tab — reusing the same token always
+ * maps to the same spin entitlement. It never expires or regenerates.
+ */
+export function generateSpinToken(): string {
+  return randomBytes(24).toString('hex'); // 24 bytes → 48 hex chars
 }
 
 export function now(): string {

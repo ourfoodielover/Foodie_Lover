@@ -6,7 +6,7 @@
 //   sendReceiptEmail(orderId)    — attempt an immediate send (used by the queue worker)
 // ────────────────────────────────────────────────────────────────────────────
 
-import { getServerClient, newId } from '@/lib/supabase-server';
+import { getServerClient, newId, generateSpinToken } from '@/lib/supabase-server';
 import { sendEmail } from '@/lib/email';
 
 // ─── Email deduplication log ──────────────────────────────────────────────────
@@ -1246,5 +1246,350 @@ export async function sendRewardEmail(args: RewardEmailArgs): Promise<void> {
     console.info(`${TAG} Reward email sent to ${recipientEmail}`);
   } catch (err) {
     console.error(`${TAG} Error:`, err);
+  }
+}
+
+// ─── Spin & Win Invite Email ──────────────────────────────────────────────────
+
+/** Builds the HTML for a spin invite email (sent BEFORE the customer spins). */
+function buildSpinInviteHtml(args: {
+  spinUrl:      string;
+  customerName: string;
+  orderTotal?:  number;
+  orderType?:   string;
+}): string {
+  const { spinUrl, customerName, orderTotal, orderType } = args;
+  const typeLabel =
+    orderType === 'delivery' ? 'delivery order' :
+    orderType === 'pickup'   ? 'pickup order'   :
+    orderType === 'dine-in'  ? 'dine-in visit'  : 'recent visit';
+
+  const totalLine = orderTotal != null && orderTotal > 0
+    ? `<p style="font-size:14px;color:#6b7280;margin:0 0 20px;">Your qualifying ${typeLabel} total: <strong style="color:#4f46e5">₹${orderTotal.toFixed(0)}</strong></p>`
+    : '';
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>🎡 You've Unlocked Spin &amp; Win!</title>
+</head>
+<body style="font-family:'Segoe UI',Arial,sans-serif;background:#f5f3ff;margin:0;padding:24px 16px">
+  <div style="max-width:520px;margin:0 auto">
+
+    <!-- Header -->
+    <div style="background:linear-gradient(135deg,#7c3aed,#4f46e5,#6d28d9);border-radius:20px 20px 0 0;padding:36px 28px;text-align:center">
+      <div style="font-size:52px;margin-bottom:10px;display:block">🎡</div>
+      <h1 style="margin:0;font-size:26px;font-weight:900;color:white;letter-spacing:-0.5px;text-shadow:0 2px 8px rgba(0,0,0,0.3)">
+        You&apos;ve Unlocked<br/>Spin &amp; Win!
+      </h1>
+      <p style="margin:8px 0 0;font-size:14px;color:rgba(255,255,255,0.85)">${RESTAURANT_NAME}</p>
+    </div>
+
+    <!-- Card -->
+    <div style="background:white;border-radius:0 0 20px 20px;padding:32px 28px;box-shadow:0 8px 32px rgba(109,40,217,0.12)">
+
+      <p style="font-size:16px;font-weight:700;color:#1f2937;margin:0 0 8px;">
+        Hi ${customerName}! 🎉
+      </p>
+      <p style="font-size:14px;color:#374151;margin:0 0 16px;line-height:1.6">
+        Your ${typeLabel} at <strong>${RESTAURANT_NAME}</strong> has qualified you for a
+        <strong style="color:#7c3aed">Spin &amp; Win</strong> reward!
+        Give the wheel a spin to reveal your prize.
+      </p>
+
+      ${totalLine}
+
+      <!-- CTA button -->
+      <div style="text-align:center;margin:28px 0 24px">
+        <a href="${spinUrl}" target="_blank" rel="noopener noreferrer"
+           style="display:inline-block;background:linear-gradient(135deg,#7c3aed,#4f46e5);color:white;
+                  font-weight:900;font-size:17px;padding:16px 40px;border-radius:14px;
+                  text-decoration:none;letter-spacing:0.3px;
+                  box-shadow:0 6px 20px rgba(109,40,217,0.4)">
+          🎡 &nbsp; Spin Now!
+        </a>
+        <div style="margin-top:10px;font-size:11px;color:#9ca3af">
+          or copy this link:<br/>
+          <a href="${spinUrl}" style="color:#7c3aed;font-family:monospace;font-size:10px;word-break:break-all">${spinUrl}</a>
+        </div>
+      </div>
+
+      <!-- Terms note -->
+      <div style="background:#f5f3ff;border-radius:10px;padding:14px 16px;font-size:12px;color:#6b7280;line-height:1.6;border:1px solid #ede9fe">
+        <strong style="color:#7c3aed">📋 How it works:</strong><br/>
+        Each qualifying order gives you <strong>one spin</strong>. Your spin link is unique to this order.
+        Rewards can include discounts, free items, and more — whatever the wheel lands on is yours!
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div style="text-align:center;padding:20px;font-size:11px;color:#9ca3af">
+      Thank you for choosing <strong style="color:#7c3aed">${RESTAURANT_NAME}</strong>! 🙏<br/>
+      <span style="font-size:10px">This invite is tied to your specific order. Each order = one spin.</span>
+    </div>
+
+  </div>
+</body>
+</html>`;
+}
+
+// ─── Public: sendSpinInviteEmail ──────────────────────────────────────────────
+/**
+ * sendSpinInviteEmail(args)
+ *
+ * Sends a Spin & Win invitation email with a secure spin URL to the customer.
+ * Also updates spin_invite_sent_at on the order or tab to track send history.
+ *
+ * This email is RESENDABLE — each send is logged but never blocked by dedup.
+ * The spin entitlement (ONE per order) is always enforced server-side by the
+ * UNIQUE constraint on spin_results, not by the email or token.
+ */
+export async function sendSpinInviteEmail(args: {
+  orderId?:     string;
+  tabId?:       string;
+  spinToken:    string;
+  recipientEmail: string;
+  customerName?: string;
+  orderTotal?:  number;
+  orderType?:   string;
+}): Promise<{ sent: boolean; reason?: string }> {
+  const { orderId, tabId, spinToken, recipientEmail, customerName, orderTotal, orderType } = args;
+  const TAG = `[email:spin_invite ${orderId ? `orderId=${orderId}` : `tabId=${tabId}`}]`;
+
+  try {
+    // Build spin URL pointing to the new /spin page
+    const entityParam = orderId
+      ? `orderId=${encodeURIComponent(orderId)}`
+      : `tabId=${encodeURIComponent(tabId!)}`;
+    const spinUrl = `${APP_BASE_URL}/spin?${entityParam}&token=${encodeURIComponent(spinToken)}`;
+
+    const html    = buildSpinInviteHtml({
+      spinUrl,
+      customerName: customerName || 'Valued Customer',
+      orderTotal,
+      orderType,
+    });
+    const subject = `🎡 You've unlocked Spin & Win at ${RESTAURANT_NAME}!`;
+
+    console.info(`${TAG} Sending spin invite to ${recipientEmail}`);
+    const result = await dispatchViaResend(recipientEmail, subject, html);
+
+    if ('error' in result) {
+      console.error(`${TAG} Failed: ${result.error}`);
+      return { sent: false, reason: result.error };
+    }
+
+    // Update spin_invite_sent_at on the entity for "Send" vs "Resend" UX
+    const sb = getServerClient();
+    const sentAt = new Date().toISOString();
+    if (orderId) {
+      await sb.from('orders').update({ spin_invite_sent_at: sentAt }).eq('id', orderId);
+    } else if (tabId) {
+      await sb.from('customer_tabs').update({ spin_invite_sent_at: sentAt }).eq('id', tabId);
+    }
+
+    console.info(`${TAG} ✅ Invite sent to ${recipientEmail} — messageId: ${result.messageId}`);
+    return { sent: true };
+  } catch (err) {
+    console.error(`${TAG} Unexpected error:`, err);
+    return { sent: false, reason: String(err) };
+  }
+}
+
+// ─── Internal: triggerSpinInviteForOrder ─────────────────────────────────────
+/**
+ * triggerSpinInviteForOrder(orderId)
+ *
+ * Called fire-and-forget from PATCH /api/orders/[id] when isNowComplete fires.
+ * 1. Fetches the order and spin_config.
+ * 2. Generates spin_token if not already set.
+ * 3. Checks if the order is eligible (type, amount).
+ * 4. Sends invite email if customer email exists.
+ * Silently skips if ineligible or if email is missing.
+ */
+export async function triggerSpinInviteForOrder(orderId: string): Promise<void> {
+  const TAG = `[email:spin_trigger/order orderId=${orderId}]`;
+  const sb  = getServerClient();
+  const rid = process.env.NEXT_PUBLIC_RESTAURANT_ID ?? 'rest_default';
+
+  try {
+    // 1. Fetch order
+    const { data: order } = await sb
+      .from('orders')
+      .select('id, customer_email, customer_name, type, total, status, spin_token, phone')
+      .eq('id', orderId)
+      .single();
+
+    if (!order) {
+      console.warn(`${TAG} Order not found — skipping`);
+      return;
+    }
+
+    // 2. Fetch spin config
+    const { data: config } = await sb
+      .from('spin_config')
+      .select('enabled, min_order_amount, eligible_order_types, require_email, require_phone')
+      .eq('restaurant_id', rid)
+      .single();
+
+    if (!config?.enabled) {
+      console.info(`${TAG} Spin & Win disabled — skipping`);
+      return;
+    }
+
+    // 3. Check amount and order type eligibility
+    const total = Number(order.total) || 0;
+    if (total < Number(config.min_order_amount)) {
+      console.info(`${TAG} Below min amount (${total} < ${config.min_order_amount}) — skipping`);
+      return;
+    }
+
+    const eligibleTypes = (config.eligible_order_types as string[]) ?? [];
+    const effectiveType = (order.type as string) === 'online' ? 'delivery' : (order.type as string);
+    if (!eligibleTypes.includes(effectiveType) && !eligibleTypes.includes(order.type as string)) {
+      console.info(`${TAG} Order type "${order.type}" not eligible — skipping`);
+      return;
+    }
+
+    // 3a. Contact requirements — same rules as GET /api/rewards/eligibility
+    if (config.require_email && !order.customer_email) {
+      console.info(`${TAG} require_email set but order has no customer_email — skipping`);
+      return;
+    }
+    if (config.require_phone && !order.phone) {
+      console.info(`${TAG} require_phone set but order has no phone — skipping`);
+      return;
+    }
+
+    // 4. Generate spin_token if missing
+    let spinToken = order.spin_token as string | null;
+    if (!spinToken) {
+      spinToken = generateSpinToken();
+      await sb.from('orders').update({ spin_token: spinToken }).eq('id', orderId);
+      console.info(`${TAG} Generated new spin_token`);
+    }
+
+    // 5. Send invite if email exists
+    const email = order.customer_email as string | null;
+    if (!email) {
+      console.info(`${TAG} No customer_email — spin_token saved but invite not sent`);
+      return;
+    }
+
+    await sendSpinInviteEmail({
+      orderId,
+      spinToken,
+      recipientEmail:  email,
+      customerName:    (order.customer_name as string) || 'Valued Customer',
+      orderTotal:      total,
+      orderType:       effectiveType,
+    });
+  } catch (err) {
+    console.error(`${TAG} Unexpected error:`, err);
+  }
+}
+
+// ─── Internal: triggerSpinInviteForTab ───────────────────────────────────────
+/**
+ * triggerSpinInviteForTab(tabId)
+ *
+ * Called fire-and-forget from PATCH /api/tabs/[id] when a tab closes.
+ * Works exactly like triggerSpinInviteForOrder but for dine-in tabs.
+ * Checks for 'dine-in' in eligible_order_types.
+ */
+export async function triggerSpinInviteForTab(tabId: string): Promise<void> {
+  const TAG = `[email:spin_trigger/tab tabId=${tabId}]`;
+  const sb  = getServerClient();
+  const rid = process.env.NEXT_PUBLIC_RESTAURANT_ID ?? 'rest_default';
+
+  try {
+    // 1. Fetch tab
+    const { data: tab } = await sb
+      .from('customer_tabs')
+      .select('id, customer_email, customer_name, total, status, spin_token, phone')
+      .eq('id', tabId)
+      .single();
+
+    if (!tab) {
+      console.warn(`${TAG} Tab not found — skipping`);
+      return;
+    }
+
+    // 2. Fetch spin config
+    const { data: config } = await sb
+      .from('spin_config')
+      .select('enabled, min_order_amount, eligible_order_types, require_email, require_phone')
+      .eq('restaurant_id', rid)
+      .single();
+
+    if (!config?.enabled) {
+      console.info(`${TAG} Spin & Win disabled — skipping`);
+      return;
+    }
+
+    // 3. Check 'dine-in' eligibility
+    const eligibleTypes = (config.eligible_order_types as string[]) ?? [];
+    if (!eligibleTypes.includes('dine-in')) {
+      console.info(`${TAG} dine-in not in eligible_order_types — skipping`);
+      return;
+    }
+
+    // 4. Check amount
+    const total = Number(tab.total) || 0;
+    if (total < Number(config.min_order_amount)) {
+      console.info(`${TAG} Below min amount (${total} < ${config.min_order_amount}) — skipping`);
+      return;
+    }
+
+    // 4a. Contact requirements — same rules as GET /api/rewards/eligibility (with tab→orders phone fallback)
+    if (config.require_email && !tab.customer_email) {
+      console.info(`${TAG} require_email set but tab has no customer_email — skipping`);
+      return;
+    }
+    if (config.require_phone) {
+      let resolvedPhone = (tab.phone as string | null) ?? null;
+      if (!resolvedPhone) {
+        const { data: orderWithPhone } = await sb
+          .from('orders')
+          .select('phone')
+          .eq('tab_id', tabId)
+          .not('phone', 'is', null)
+          .limit(1)
+          .maybeSingle();
+        resolvedPhone = (orderWithPhone?.phone as string | null) ?? null;
+      }
+      if (!resolvedPhone) {
+        console.info(`${TAG} require_phone set but no phone on tab or orders — skipping`);
+        return;
+      }
+    }
+
+    // 5. Generate spin_token if missing
+    let spinToken = tab.spin_token as string | null;
+    if (!spinToken) {
+      spinToken = generateSpinToken();
+      await sb.from('customer_tabs').update({ spin_token: spinToken }).eq('id', tabId);
+      console.info(`${TAG} Generated new spin_token`);
+    }
+
+    // 6. Send invite if email exists
+    const email = tab.customer_email as string | null;
+    if (!email) {
+      console.info(`${TAG} No customer_email — spin_token saved but invite not sent`);
+      return;
+    }
+
+    await sendSpinInviteEmail({
+      tabId,
+      spinToken,
+      recipientEmail:  email,
+      customerName:    (tab.customer_name as string) || 'Valued Customer',
+      orderTotal:      total,
+      orderType:       'dine-in',
+    });
+  } catch (err) {
+    console.error(`${TAG} Unexpected error:`, err);
   }
 }

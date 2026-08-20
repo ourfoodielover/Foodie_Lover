@@ -81,6 +81,22 @@ export default function ManagerPage() {
   const [receiptMsg,   setReceiptMsg]   = useState('');
   const [sendingEmail, setSendingEmail] = useState(false);
 
+  // Spin & Win invite email (post-close, staff send/resend for selected tab)
+  const [spinEmailBusy,   setSpinEmailBusy]   = useState(false);
+  const [spinEmailMsg,    setSpinEmailMsg]     = useState('');
+  const [spinEmailInput,  setSpinEmailInput]   = useState(''); // optional email override if tab has none
+
+  // Spin & Win invite email — pickup modal success state
+  const [pickupSpinBusy,  setPickupSpinBusy]  = useState(false);
+  const [pickupSpinMsg,   setPickupSpinMsg]   = useState('');
+  const [pickupSpinEmail, setPickupSpinEmail] = useState('');
+
+  // Spin & Win invite email — generic order modal (delivery + completed pickup resend)
+  const [orderSpinModal,  setOrderSpinModal]  = useState<Order | null>(null);
+  const [orderSpinBusy,   setOrderSpinBusy]   = useState(false);
+  const [orderSpinMsg,    setOrderSpinMsg]    = useState('');
+  const [orderSpinEmail,  setOrderSpinEmail]  = useState('');
+
   // Pre-close email modal (intercepts "Collect & Close Tab" button)
   const [showPreCloseModal, setShowPreCloseModal] = useState(false);
   const [preCloseEmail,     setPreCloseEmail]     = useState('');
@@ -387,18 +403,22 @@ export default function ManagerPage() {
       }
       const discAmt    = pickupDiscApplied?.amount ?? 0;
       const discReason = pickupDiscApplied?.reason ?? '';
+      const completedOrderEmail = (pickupPayOrder as unknown as { customerEmail?: string }).customerEmail ?? '';
       await updateOrderStatus(
         pickupPayOrder.id, 'completed', session?.name || 'Counter',
         { paymentMethod: pickupPayMethod, discount: discAmt, discountReason: discReason },
       );
-      setPickupPayOrder(null);
-      setPickupPayMsg('');
+      // Keep modal open in success state so staff can send Spin & Win email
       setShowPickupSplit(false);
       setPickupSplitRows([{ method: 'cod', amount: '' }, { method: 'upi', amount: '' }]);
       setPickupPayMethod('cod');
       setPickupDiscApplied(null);
       setPickupDiscAmt('');
       setPickupDiscNote('');
+      setPickupDiscPin('');
+      setPickupSpinMsg('');
+      setPickupSpinEmail(completedOrderEmail);
+      setPickupPayMsg('✅ Payment recorded!');
       await refresh();
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Unknown error';
@@ -945,6 +965,26 @@ export default function ManagerPage() {
               {activePickup.length === 0 && (
                 <div style={{ fontSize: '0.75rem', color: '#94a3b8', textAlign: 'center', padding: '0.5rem 0' }}>No active pickup orders</div>
               )}
+              {/* Completed pickup orders — staff can resend Spin & Win email */}
+              {todayPickup.filter(o => o.status === 'completed').length > 0 && (
+                <div style={{ marginTop: '0.5rem', borderTop: '1px solid #dcfce7', paddingTop: '0.45rem' }}>
+                  <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>Completed Today</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', maxHeight: 110, overflowY: 'auto' }}>
+                    {todayPickup.filter(o => o.status === 'completed').map(o => (
+                      <div key={o.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.22rem 0.5rem', background: '#f0fdf4', borderRadius: 6, fontSize: '0.74rem' }}>
+                        <span style={{ fontWeight: 700 }}>#{o.orderNum || o.id.slice(-4)}</span>
+                        <span style={{ color: '#64748b', fontSize: '0.7rem', maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.customerName}</span>
+                        <span style={{ fontWeight: 800, color: '#16a34a' }}>₹{o.total}</span>
+                        <button
+                          onClick={() => { setOrderSpinModal(o); setOrderSpinEmail((o as unknown as { customerEmail?: string }).customerEmail ?? ''); setOrderSpinMsg(''); }}
+                          title="Send Spin & Win email"
+                          style={{ background: '#f5f3ff', border: '1px solid #ddd6fe', borderRadius: 5, padding: '0.12rem 0.38rem', cursor: 'pointer', fontFamily: 'Poppins,sans-serif', fontSize: '0.68rem', color: '#7c3aed', fontWeight: 700 }}
+                        >🎡</button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -988,6 +1028,26 @@ export default function ManagerPage() {
               )}
               {activeDelivery.length === 0 && (
                 <div style={{ fontSize: '0.75rem', color: '#94a3b8', textAlign: 'center', padding: '0.5rem 0' }}>No active delivery orders</div>
+              )}
+              {/* Completed delivery orders — staff can send/resend Spin & Win email */}
+              {todayDelivery.filter(o => o.status === 'completed' || o.status === 'delivered').length > 0 && (
+                <div style={{ marginTop: '0.5rem', borderTop: '1px solid #e0e7ff', paddingTop: '0.45rem' }}>
+                  <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>Completed Today</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', maxHeight: 110, overflowY: 'auto' }}>
+                    {todayDelivery.filter(o => o.status === 'completed' || o.status === 'delivered').map(o => (
+                      <div key={o.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.22rem 0.5rem', background: '#f0fdf4', borderRadius: 6, fontSize: '0.74rem' }}>
+                        <span style={{ fontWeight: 700 }}>#{o.orderNum || o.id.slice(-4)}</span>
+                        <span style={{ color: '#64748b', fontSize: '0.7rem', maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.customerName}</span>
+                        <span style={{ fontWeight: 800, color: '#16a34a' }}>₹{o.total}</span>
+                        <button
+                          onClick={() => { setOrderSpinModal(o); setOrderSpinEmail((o as unknown as { customerEmail?: string }).customerEmail ?? ''); setOrderSpinMsg(''); }}
+                          title="Send Spin & Win email"
+                          style={{ background: '#f5f3ff', border: '1px solid #ddd6fe', borderRadius: 5, padding: '0.12rem 0.38rem', cursor: 'pointer', fontFamily: 'Poppins,sans-serif', fontSize: '0.68rem', color: '#7c3aed', fontWeight: 700 }}
+                        >🎡</button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               )}
             </div>
           </div>
@@ -1679,6 +1739,72 @@ export default function ManagerPage() {
                       </div>
                     )}
                   </div>
+
+                  {/* ── Spin & Win Email ────────────────────────────────── */}
+                  <div style={{ background: '#f5f3ff', borderRadius: 10, padding: '0.85rem', border: '1px solid #ede9fe' }}>
+                    <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#6d28d9', marginBottom: '0.25rem' }}>
+                      🎡 Send Spin &amp; Win Email
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: '#64748b', marginBottom: '0.5rem' }}>
+                      Sends the spin invite to the email on file.
+                      If no email is saved, enter one below — it will be saved to this tab.
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.4rem' }}>
+                      <input
+                        type="email"
+                        placeholder={selTab?.email ? `Saved: ${selTab.email}` : 'Enter email (required)'}
+                        value={spinEmailInput}
+                        onChange={e => { setSpinEmailInput(e.target.value); setSpinEmailMsg(''); }}
+                        style={{ flex: 1, padding: '0.5rem 0.75rem', border: '1px solid #ddd6fe', borderRadius: 8, fontSize: '0.85rem', outline: 'none', fontFamily: 'Poppins,sans-serif', background: 'white' }}
+                      />
+                      <button
+                        disabled={spinEmailBusy || (!selTab?.email && !spinEmailInput.includes('@'))}
+                        onClick={async () => {
+                          if (!selTab) return;
+                          const emailToUse = spinEmailInput.trim() || selTab.email || '';
+                          if (!emailToUse.includes('@')) {
+                            setSpinEmailMsg('❌ Please enter a valid email address.');
+                            return;
+                          }
+                          setSpinEmailBusy(true);
+                          setSpinEmailMsg('');
+                          try {
+                            const res = await fetch('/api/rewards/spin-invite', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ tabId: selTab.id, email: emailToUse }),
+                            });
+                            const data = await res.json() as { sent?: boolean; action?: string; sentTo?: string; reason?: string; needsEmail?: boolean; error?: string };
+                            if (data.sent) {
+                              const action = data.action === 'result_summary' ? 'result summary' : 'spin invite';
+                              setSpinEmailMsg(`✅ Spin ${action} sent to ${data.sentTo ?? emailToUse}`);
+                            } else if (data.needsEmail) {
+                              setSpinEmailMsg('❌ No email on file — enter one above to send the spin invite.');
+                            } else {
+                              const reason = data.reason ?? data.error ?? 'Unknown error';
+                              if (reason.includes('RESEND_DOMAIN_REQUIRED')) {
+                                setSpinEmailMsg('❌ Resend free tier only allows sending to the verified account email. Verify a domain at resend.com/domains.');
+                              } else {
+                                setSpinEmailMsg(`❌ ${reason}`);
+                              }
+                            }
+                          } catch (err) {
+                            setSpinEmailMsg(`❌ Failed: ${err instanceof Error ? err.message : 'Network error'}`);
+                          } finally {
+                            setSpinEmailBusy(false);
+                          }
+                        }}
+                        style={{ ...btn('#6d28d9'), padding: '0.5rem 0.85rem', fontSize: '0.8rem', opacity: spinEmailBusy ? 0.7 : 1 }}
+                      >
+                        {spinEmailBusy ? '⏳' : '🎡 Send'}
+                      </button>
+                    </div>
+                    {spinEmailMsg && (
+                      <div style={{ fontSize: '0.78rem', color: spinEmailMsg.includes('✅') ? '#16a34a' : '#dc2626' }}>
+                        {spinEmailMsg}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -1704,9 +1830,64 @@ export default function ManagerPage() {
                   <div style={{ fontWeight: 900, fontSize: '1.05rem' }}>🏪 Pickup Order #{o.orderNum || o.id.slice(-4)}</div>
                   <div style={{ fontSize: '0.82rem', opacity: 0.9 }}>₹{o.total} · {o.customerName}</div>
                 </div>
-                <button onClick={() => { if (!pickupPayBusy) setPickupPayOrder(null); }} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', color: 'white', fontSize: '1.4rem', cursor: 'pointer', borderRadius: 8, lineHeight: 1, padding: '0.15rem 0.4rem' }}>×</button>
+                <button onClick={() => { if (!pickupPayBusy) { setPickupPayOrder(null); setPickupPayMsg(''); setPickupSpinMsg(''); setPickupSpinEmail(''); } }} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', color: 'white', fontSize: '1.4rem', cursor: 'pointer', borderRadius: 8, lineHeight: 1, padding: '0.15rem 0.4rem' }}>×</button>
               </div>
               <div style={{ padding: '1.2rem 1.4rem' }}>
+
+                {/* ── SUCCESS STATE: payment done, offer spin email ── */}
+                {pickupPayMsg.includes('✅') ? (
+                  <div>
+                    <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 10, padding: '0.75rem 1rem', marginBottom: '1rem', fontWeight: 700, fontSize: '0.88rem', color: '#16a34a' }}>
+                      ✅ Payment recorded!
+                    </div>
+                    <div style={{ background: '#f5f3ff', border: '1px solid #ddd6fe', borderRadius: 10, padding: '0.9rem' }}>
+                      <div style={{ fontWeight: 800, fontSize: '0.82rem', color: '#7c3aed', marginBottom: '0.5rem' }}>🎡 Spin &amp; Win Email</div>
+                      <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.55rem' }}>
+                        Send or resend the Spin &amp; Win invite for this order.
+                      </div>
+                      <input
+                        type="email"
+                        placeholder="Customer email"
+                        value={pickupSpinEmail}
+                        onChange={e => setPickupSpinEmail(e.target.value)}
+                        style={{ ...inp, fontSize: '0.82rem', marginBottom: '0.5rem' }}
+                      />
+                      <button
+                        onClick={async () => {
+                          setPickupSpinBusy(true); setPickupSpinMsg('');
+                          try {
+                            const res = await fetch('/api/rewards/spin-invite', {
+                              method: 'POST', headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ orderId: o.id, email: pickupSpinEmail.trim() || undefined }),
+                            });
+                            const result = await res.json() as { sent?: boolean; action?: string; needsEmail?: boolean; needsPhone?: boolean; reason?: string; error?: string };
+                            if (result.needsEmail) setPickupSpinMsg('❌ Add customer email first');
+                            else if (result.needsPhone) setPickupSpinMsg('❌ Phone number required for Spin & Win');
+                            else if (result.sent) setPickupSpinMsg(`✅ ${result.action === 'result_summary' ? 'Result summary' : 'Spin invite'} sent!`);
+                            else setPickupSpinMsg(`❌ ${result.reason || result.error || 'Failed'}`);
+                          } catch { setPickupSpinMsg('❌ Network error'); }
+                          finally { setPickupSpinBusy(false); }
+                        }}
+                        disabled={pickupSpinBusy}
+                        style={{ ...btn('#7c3aed'), width: '100%', fontSize: '0.82rem', opacity: pickupSpinBusy ? 0.7 : 1 }}
+                      >
+                        {pickupSpinBusy ? '⏳ Sending…' : '🎡 Send Spin & Win Email'}
+                      </button>
+                      {pickupSpinMsg && (
+                        <div style={{ fontSize: '0.78rem', marginTop: '0.4rem', fontWeight: 600, color: pickupSpinMsg.includes('✅') ? '#16a34a' : '#dc2626' }}>
+                          {pickupSpinMsg}
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => { setPickupPayOrder(null); setPickupPayMsg(''); setPickupSpinMsg(''); setPickupSpinEmail(''); }}
+                      style={{ width: '100%', marginTop: '0.75rem', padding: '0.65rem', background: '#f3f4f6', border: 'none', borderRadius: 10, cursor: 'pointer', fontFamily: 'Poppins,sans-serif', fontWeight: 700, fontSize: '0.88rem', color: '#374151' }}
+                    >
+                      ✓ Done
+                    </button>
+                  </div>
+                ) : (
+                <>{/* ── PAYMENT FORM (normal state) ── */}
 
                 {/* Items list */}
                 <div style={{ marginBottom: '0.85rem' }}>
@@ -1937,15 +2118,70 @@ export default function ManagerPage() {
                   {pickupPayBusy ? '⏳ Processing…' : `✅ Confirm ₹${finalTotal} Payment`}
                 </button>
                 <button
-                  onClick={() => { if (!pickupPayBusy) { setPickupPayOrder(null); setShowPickupSplit(false); setPickupSplitRows([{ method: 'cod', amount: '' }, { method: 'upi', amount: '' }]); } }}
+                  onClick={() => { if (!pickupPayBusy) { setPickupPayOrder(null); setPickupPayMsg(''); setPickupSpinMsg(''); setPickupSpinEmail(''); setShowPickupSplit(false); setPickupSplitRows([{ method: 'cod', amount: '' }, { method: 'upi', amount: '' }]); } }}
                   disabled={pickupPayBusy}
                   style={{ width: '100%', marginTop: '0.5rem', padding: '0.6rem', background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontFamily: 'Poppins,sans-serif', fontSize: '0.85rem', fontWeight: 600 }}
                 >✗ Cancel</button>
+                </>)}
               </div>
             </div>
           </div>
         );
       })()}
+
+      {/* ══════════════════ ORDER SPIN EMAIL MODAL (pickup/delivery) ══════════════════ */}
+      {orderSpinModal && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}
+          onClick={e => { if (e.target === e.currentTarget) { setOrderSpinModal(null); setOrderSpinMsg(''); setOrderSpinEmail(''); } }}
+        >
+          <div style={{ background: 'white', borderRadius: 16, padding: '1.4rem', maxWidth: 380, width: '100%', boxShadow: '0 8px 30px rgba(0,0,0,0.2)', fontFamily: 'Poppins,sans-serif' }}>
+            <div style={{ fontWeight: 900, fontSize: '1rem', marginBottom: '0.35rem', color: '#4f46e5' }}>🎡 Spin &amp; Win Email</div>
+            <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: '0.85rem' }}>
+              Order #{orderSpinModal.orderNum || orderSpinModal.id.slice(-4)} · ₹{orderSpinModal.total}
+              {orderSpinModal.customerName ? ` · ${orderSpinModal.customerName}` : ''}
+            </div>
+            <label style={{ fontSize: '0.75rem', fontWeight: 700, color: '#555', display: 'block', marginBottom: '0.3rem' }}>Customer Email</label>
+            <input
+              type="email"
+              placeholder="e.g. customer@email.com"
+              value={orderSpinEmail}
+              onChange={e => setOrderSpinEmail(e.target.value)}
+              style={{ ...inp, fontSize: '0.85rem', marginBottom: '0.75rem' }}
+            />
+            <button
+              onClick={async () => {
+                setOrderSpinBusy(true); setOrderSpinMsg('');
+                try {
+                  const res = await fetch('/api/rewards/spin-invite', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ orderId: orderSpinModal.id, email: orderSpinEmail.trim() || undefined }),
+                  });
+                  const result = await res.json() as { sent?: boolean; action?: string; needsEmail?: boolean; needsPhone?: boolean; reason?: string; error?: string };
+                  if (result.needsEmail)  setOrderSpinMsg('❌ Add customer email first');
+                  else if (result.needsPhone) setOrderSpinMsg('❌ Phone number required for Spin & Win');
+                  else if (result.sent)   setOrderSpinMsg(`✅ ${result.action === 'result_summary' ? 'Result summary' : 'Spin invite'} sent!`);
+                  else setOrderSpinMsg(`❌ ${result.reason || result.error || 'Failed'}`);
+                } catch { setOrderSpinMsg('❌ Network error'); }
+                finally { setOrderSpinBusy(false); }
+              }}
+              disabled={orderSpinBusy}
+              style={{ ...btn('#7c3aed'), width: '100%', fontSize: '0.88rem', marginBottom: '0.4rem', opacity: orderSpinBusy ? 0.7 : 1 }}
+            >
+              {orderSpinBusy ? '⏳ Sending…' : '🎡 Send Spin & Win Email'}
+            </button>
+            {orderSpinMsg && (
+              <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.4rem', color: orderSpinMsg.includes('✅') ? '#16a34a' : '#dc2626' }}>
+                {orderSpinMsg}
+              </div>
+            )}
+            <button
+              onClick={() => { setOrderSpinModal(null); setOrderSpinMsg(''); setOrderSpinEmail(''); }}
+              style={{ width: '100%', padding: '0.5rem', background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontFamily: 'Poppins,sans-serif', fontSize: '0.82rem', fontWeight: 600 }}
+            >Close</button>
+          </div>
+        </div>
+      )}
 
       {/* ── Pre-close Email Modal ─────────────────────────────────────────────── */}
       {/* Shown when manager clicks "Collect & Close Tab" — intercepts to offer   */}

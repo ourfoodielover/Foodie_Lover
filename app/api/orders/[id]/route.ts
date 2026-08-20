@@ -2,7 +2,7 @@
 // PATCH /api/orders/[id]  — update order (status / discount / payment / items)
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId, rowToOrder, broadcast } from '@/lib/supabase-server';
-import { enqueueReceiptEmail, sendReceiptEmail, sendOrderReadyEmail, sendOrderConfirmationEmail, sendOutForDeliveryEmail } from '@/lib/email-server';
+import { enqueueReceiptEmail, sendReceiptEmail, sendOrderReadyEmail, sendOrderConfirmationEmail, sendOutForDeliveryEmail, triggerSpinInviteForOrder } from '@/lib/email-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -503,6 +503,17 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
         console.info(`[PATCH /api/orders/[id]] receipt sent for ${id}: ${result.messageId}`);
       }).catch(err =>
         console.error(`[PATCH /api/orders/[id]] email error for ${id}:`, err),
+      );
+    }
+
+    // ── Spin & Win invite email — fire-and-forget at completion ─────────────
+    // triggerSpinInviteForOrder checks eligibility (config, amount, type),
+    // generates spin_token if absent, and sends the invite only if the order
+    // has an email. Silently skips if Spin & Win is disabled or ineligible.
+    // One-per-order: the DB UNIQUE(order_id) on spin_results is the true guard.
+    if (isNowComplete && !isIdempotent) {
+      triggerSpinInviteForOrder(id).catch(err =>
+        console.error(`[PATCH /api/orders/[id]] spin invite error for ${id}:`, err),
       );
     }
 

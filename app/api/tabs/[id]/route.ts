@@ -1,7 +1,7 @@
 // PATCH /api/tabs/[id] — update or close a tab
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId, broadcast } from '@/lib/supabase-server';
-import { enqueueReceiptEmail, sendReceiptEmail, sendTabReceiptEmail } from '@/lib/email-server';
+import { enqueueReceiptEmail, sendReceiptEmail, sendTabReceiptEmail, triggerSpinInviteForTab } from '@/lib/email-server';
 
 export const dynamic = 'force-dynamic';
 type Ctx = { params: Promise<{ id: string }> };
@@ -246,6 +246,14 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
           }
         }
       }).catch(err => console.error(`[tabs/close] tab receipt error for ${id}:`, err));
+
+      // ── Spin & Win invite email — fire-and-forget at tab close ────────────
+      // triggerSpinInviteForTab checks eligibility (config, amount, dine-in type),
+      // generates spin_token if absent, and sends the invite only if the tab
+      // has a customer_email. Silently skips if ineligible.
+      triggerSpinInviteForTab(id).catch(err =>
+        console.error(`[PATCH /api/tabs/[id]] spin invite error for ${id}:`, err),
+      );
 
       // Return updated tab
       const { data: updated } = await sb.from('customer_tabs').select('*').eq('id', id).single();

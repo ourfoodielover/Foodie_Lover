@@ -7,60 +7,86 @@ export const dynamic = 'force-dynamic';
 function normalizeEmail(e: string) { return e.trim().toLowerCase(); }
 function normalizePhone(p: string) { return p.trim().replace(/\D/g, ''); }
 
-function pickRewardByWeight(rewards: Array<{ id: string; weight: number }>) {
-  const totalWeight = rewards.reduce((s, r) => s + r.weight, 0);
-  let rand = Math.random() * totalWeight;
-  for (const r of rewards) {
-    rand -= r.weight;
-    if (rand <= 0) return r;
-  }
-  return rewards[rewards.length - 1];
-}
-
-function generateCouponCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  return 'FL-' + Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
-}
-
 type SpinReward = {
   id: string;
   label: string;
   reward_type: string;
   reward_value: number;
-  free_item_id: string | null;
-  weight: number;
   min_next_order: number;
-  expires_days: number;
-  // v014 fields
   max_discount: number | null;
-  daily_win_limit: number | null;
-  monthly_win_limit: number | null;
-  bogo_eligible_items: string[];
-  bogo_eligible_categories: string[];
-  max_free_item_value: number | null;
 };
 
 export async function POST(req: NextRequest) {
   const body = await req.json() as {
-    orderId?: string;
-    tabId?: string;
-    customerEmail: string;
+    orderId?:       string;
+    tabId?:         string;
+    customerEmail?: string;
     customerPhone?: string;
-    restaurantId?: string;
+    restaurantId?:  string;
+    // Token-based auth (from /spin page via email link) — mutually exclusive with customerEmail.
+    // When spinToken is provided, email/phone are fetched server-side from the order/tab.
+    spinToken?:     string;
   };
-  const { orderId, tabId, customerEmail, customerPhone } = body;
+  const { orderId, tabId, customerEmail, customerPhone, spinToken } = body;
   const restaurantId = body.restaurantId ?? process.env.NEXT_PUBLIC_RESTAURANT_ID ?? 'rest_default';
 
-  if (!customerEmail) {
-    return NextResponse.json({ error: 'customerEmail required' }, { status: 400 });
-  }
   if (!orderId && !tabId) {
     return NextResponse.json({ error: 'orderId or tabId required' }, { status: 400 });
   }
 
   const sb = getServerClient();
-  const normEmail = normalizeEmail(customerEmail);
-  const normPhone = customerPhone ? normalizePhone(customerPhone) : '';
+  let normEmail: string;
+  let normPhone: string;
+
+  if (spinToken) {
+    // ── Token-based auth path (from /spin page via email link) ──────────────
+    // Validate token against spin_token stored on the order/tab.
+    // Fetch email/phone server-side — customer does not need to supply them.
+    if (orderId) {
+      const { data: entity } = await sb
+        .from('orders')
+        .select('spin_token, customer_email, phone')
+        .eq('id', orderId)
+        .single();
+      if (!entity || entity.spin_token !== spinToken) {
+        return NextResponse.json({ error: 'Invalid or expired spin token' }, { status: 403 });
+      }
+      normEmail = normalizeEmail((entity.customer_email as string) || '');
+      normPhone = normalizePhone((entity.phone as string) || '');
+    } else {
+      const { data: entity } = await sb
+        .from('customer_tabs')
+        .select('spin_token, customer_email, phone')
+        .eq('id', tabId!)
+        .single();
+      if (!entity || entity.spin_token !== spinToken) {
+        return NextResponse.json({ error: 'Invalid or expired spin token' }, { status: 403 });
+      }
+      normEmail = normalizeEmail((entity.customer_email as string) || '');
+      normPhone = normalizePhone((entity.phone as string) || '');
+      // Tab phone fallback: if tab has no phone, check if any order in the tab does
+      if (!normPhone) {
+        const { data: orderWithPhone } = await sb
+          .from('orders')
+          .select('phone')
+          .eq('tab_id', tabId!)
+          .not('phone', 'is', null)
+          .limit(1)
+          .maybeSingle();
+        if (orderWithPhone?.phone) {
+          normPhone = normalizePhone(orderWithPhone.phone as string);
+        }
+      }
+    }
+  } else {
+    // ── Legacy email-based auth path (from /track page) ─────────────────────
+    // Kept for backward compatibility — the track page passes customerEmail in body.
+    if (!customerEmail) {
+      return NextResponse.json({ error: 'customerEmail required' }, { status: 400 });
+    }
+    normEmail = normalizeEmail(customerEmail);
+    normPhone = customerPhone ? normalizePhone(customerPhone) : '';
+  }
 
   // ── Fetch config ────────────────────────────────────────────────────────
   const { data: config } = await sb
@@ -70,6 +96,18 @@ export async function POST(req: NextRequest) {
     .single();
   if (!config?.enabled) {
     return NextResponse.json({ error: 'Spin & Win not active' }, { status: 400 });
+  }
+
+  // ── Contact requirements (token-based path) — mirror GET /api/rewards/eligibility ──
+  // Legacy email-based path: normEmail is already validated (customerEmail required in body).
+  // Token-based path: we fetched email/phone from the entity — now enforce config flags.
+  if (spinToken) {
+    if (config.require_email && !normEmail) {
+      return NextResponse.json({ error: 'Email address required for Spin & Win' }, { status: 403 });
+    }
+    if (config.require_phone && !normPhone) {
+      return NextResponse.json({ error: 'Phone number required for Spin & Win' }, { status: 403 });
+    }
   }
 
   // ── Get qualifying entity (tab or order) ────────────────────────────────
@@ -102,7 +140,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `Minimum qualifying amount is ₹${config.min_order_amount}` }, { status: 400 });
   }
 
-  // ── Check / return existing spin result (idempotent) ────────────────────
+  // ── Check / return existing spin result (idempotent fast path) ───────────
   const existingQuery = tabId
     ? sb.from('spin_results').select('*, reward_coupons(*), spin_rewards(label, reward_type, reward_value)').eq('tab_id', tabId).maybeSingle()
     : sb.from('spin_results').select('*, reward_coupons(*), spin_rewards(label, reward_type, reward_value)').eq('order_id', orderId!).maybeSingle();
@@ -117,58 +155,43 @@ export async function POST(req: NextRequest) {
     .select('*')
     .eq('restaurant_id', restaurantId)
     .eq('active', true)
-    .neq('archived', true)   // exclude archived rewards (safe before & after migration_015)
+    .neq('archived', true)
     .order('sort_order');
   if (!rewards?.length) {
     return NextResponse.json({ error: 'No rewards configured' }, { status: 400 });
   }
 
-  // ── Filter out rewards that have hit their daily win limit ──────────────
-  // no_reward type is always eligible (gives nothing, just fills the wheel).
-  // For actual winning rewards, count coupons issued today and skip if at limit.
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const todayStartStr = todayStart.toISOString();
+  const spinId = newId('SR');
+  const tz = (config.timezone as string) || 'Asia/Kolkata';
 
-  const eligibleRewards: SpinReward[] = [];
-  for (const r of rewards as SpinReward[]) {
-    if (r.reward_type === 'no_reward' || r.daily_win_limit == null) {
-      eligibleRewards.push(r);
-      continue;
-    }
-    const { count } = await sb
-      .from('reward_coupons')
-      .select('id', { count: 'exact', head: true })
-      .eq('reward_id', r.id)
-      .gte('issued_at', todayStartStr);
-    if ((count ?? 0) < r.daily_win_limit) {
-      eligibleRewards.push(r);
-    }
-    // If count >= daily_win_limit, this reward is excluded from today's pool
+  // ── Atomically allocate reward via DB function ───────────────────────────
+  // perform_spin() acquires FOR UPDATE locks on all spin_rewards rows, checks
+  // daily/monthly limits inside the lock, picks a reward by weighted probability,
+  // and inserts spin_results + reward_coupons in a single transaction.
+  //
+  // This means: if daily_win_limit = 1 for a reward and two requests arrive
+  // simultaneously, only ONE will succeed at the lock stage; the second sees
+  // the updated coupon count inside the same lock scope and cannot exceed the limit.
+  const { data: allocation, error: rpcErr } = await sb.rpc('perform_spin', {
+    p_spin_id:       spinId,
+    p_order_id:      orderId ?? null,
+    p_tab_id:        tabId   ?? null,
+    p_restaurant_id: restaurantId,
+    p_email:         normEmail,
+    p_phone:         normPhone,
+    p_timezone:      tz,
+    p_reward_ids:    (rewards as Array<{ id: string }>).map(r => r.id),
+  });
+
+  if (rpcErr) {
+    console.error('[POST /api/rewards/spin] RPC error:', rpcErr);
+    return NextResponse.json({ error: 'Spin allocation failed. Please try again.' }, { status: 500 });
   }
 
-  // Always keep at least one option; if all winning options exhausted, use full list
-  const pool = eligibleRewards.length > 0 ? eligibleRewards : rewards as SpinReward[];
+  const result = allocation as Record<string, unknown>;
 
-  // ── Server-side weighted selection ─────────────────────────────────────
-  const chosen = pickRewardByWeight(pool) as SpinReward;
-  const isWinner = chosen.reward_type !== 'no_reward';
-
-  // ── Insert spin result (UNIQUE constraints prevent duplicate spins) ────
-  const spinId = newId('SR');
-  const insertData: Record<string, unknown> = {
-    id: spinId,
-    reward_id: chosen.id,
-    is_winner: isWinner,
-    customer_email: normEmail,
-    customer_phone: normPhone,
-  };
-  if (tabId) insertData.tab_id = tabId;
-  else insertData.order_id = orderId;
-
-  const { error: spinErr } = await sb.from('spin_results').insert(insertData);
-  if (spinErr) {
-    // UNIQUE violation = race condition, return existing
+  // ── Handle race condition or idempotency return from RPC ─────────────────
+  if (result.already_spun) {
     const raceQuery = tabId
       ? sb.from('spin_results').select('*, reward_coupons(*), spin_rewards(label, reward_type, reward_value)').eq('tab_id', tabId).single()
       : sb.from('spin_results').select('*, reward_coupons(*), spin_rewards(label, reward_type, reward_value)').eq('order_id', orderId!).single();
@@ -176,79 +199,39 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ alreadySpun: true, ...formatSpinResult(raceResult as Record<string, unknown>) });
   }
 
-  // ── Issue coupon if winner ──────────────────────────────────────────────
-  let couponData: { couponId: string; couponCode: string; expiresAt: string } | null = null;
-  if (isWinner) {
-    const couponId = newId('CPN');
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + chosen.expires_days);
-    const expiresAtStr = expiresAt.toISOString();
+  const isWinner   = result.is_winner  as boolean;
+  const couponId   = result.coupon_id   as string | null;
+  const couponCode = result.coupon_code as string | null;
+  const expiresAt  = result.expires_at  as string | null;
 
-    let code = generateCouponCode();
-    for (let i = 0; i < 10; i++) {
-      const insertCoupon: Record<string, unknown> = {
-        id:              couponId,
-        coupon_code:     code,
-        spin_id:         spinId,
-        reward_id:       chosen.id,
-        reward_type:     chosen.reward_type,
-        reward_value:    chosen.reward_value,
-        free_item_id:    chosen.free_item_id ?? null,
-        label:           chosen.label,
-        customer_email:  normEmail,
-        customer_phone:  normPhone,
-        issued_at:       new Date().toISOString(),
-        expires_at:      expiresAtStr,
-        min_next_order:  chosen.min_next_order,
-        status:          'active',
-        // v014: snapshot reward terms at issue time
-        max_discount:            chosen.max_discount ?? null,
-        bogo_eligible_items:     chosen.bogo_eligible_items ?? [],
-        bogo_eligible_categories: chosen.bogo_eligible_categories ?? [],
-        max_free_item_value:     chosen.max_free_item_value ?? null,
-      };
-      // Set source fields: tab-based coupons use source_tab_id, order-based use source_order_id
-      if (tabId) {
-        insertCoupon.source_tab_id = tabId;
-      } else {
-        insertCoupon.source_order_id = orderId;
-      }
-
-      const { error: cErr } = await sb.from('reward_coupons').insert(insertCoupon);
-      if (!cErr) {
-        couponData = { couponId, couponCode: code, expiresAt: expiresAtStr };
-        break;
-      }
-      if (cErr.code !== '23505') break; // not a unique violation, stop retrying
-      code = generateCouponCode();
-    }
-
-    // ── Send reward email (fire and forget, idempotent via dedup_key) ───
-    if (couponData) {
-      const emailRef = tabId ?? orderId!;
-      const eventType = tabId ? `reward_tab_${tabId}` : `reward_order_${orderId}`;
-      sendRewardEmail({
-        emailRef,
-        eventType,
-        recipientEmail:  normEmail,
-        rewardLabel:     chosen.label,
-        rewardType:      chosen.reward_type,
-        couponCode:      couponData.couponCode,
-        expiresAt:       couponData.expiresAt,
-        minNextOrder:    Number(chosen.min_next_order),
-        maxDiscount:     chosen.max_discount ?? undefined,
-      }).catch(console.error);
-    }
+  // ── Send reward email (fire-and-forget, idempotent via dedup_key) ────────
+  if (isWinner && couponCode && expiresAt) {
+    const chosenReward = (rewards as SpinReward[]).find(r => r.id === (result.reward_id as string));
+    const emailRef  = tabId ?? orderId!;
+    const eventType = tabId ? `reward_tab_${tabId}` : `reward_order_${orderId}`;
+    sendRewardEmail({
+      emailRef,
+      eventType,
+      recipientEmail:  normEmail,
+      rewardLabel:     result.reward_label as string,
+      rewardType:      result.reward_type  as string,
+      couponCode,
+      expiresAt,
+      minNextOrder:    Number(chosenReward?.min_next_order ?? 0),
+      maxDiscount:     chosenReward?.max_discount ?? undefined,
+    }).catch(console.error);
   }
 
   return NextResponse.json({
-    spinId,
-    rewardId:    chosen.id,
-    rewardLabel: chosen.label,
-    rewardType:  chosen.reward_type,
-    rewardValue: chosen.reward_value,
+    spinId:      result.spin_id,
+    rewardId:    result.reward_id,
+    rewardLabel: result.reward_label,
+    rewardType:  result.reward_type,
+    rewardValue: result.reward_value,
     isWinner,
-    ...couponData,
+    couponId:    isWinner ? (couponId   ?? undefined) : undefined,
+    couponCode:  isWinner ? (couponCode ?? undefined) : undefined,
+    expiresAt:   isWinner ? (expiresAt  ?? undefined) : undefined,
   });
 }
 
