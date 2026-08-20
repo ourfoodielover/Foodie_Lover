@@ -12,9 +12,6 @@
   "dependencies": {
     "dotenv": "^16.4.5"
   },
-  "optionalDependencies": {
-    "@thiagoelg/node-printer": "^0.5.4"
-  },
   "engines": {
     "node": ">=18"
   }

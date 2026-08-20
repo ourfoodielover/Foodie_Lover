@@ -9,9 +9,11 @@
 // Run on the laptop or PC that has the printer plugged in. See README.md.
 
 require('dotenv').config();
-const net = require('net');
-const os  = require('os');
-const fs  = require('fs');
+const net              = require('net');
+const os               = require('os');
+const fs               = require('fs');
+const nodePath         = require('path');
+const { execFileSync } = require('child_process');
 
 const {
   APP_BASE_URL,
@@ -166,31 +168,106 @@ function printViaNetwork(buffer) {
   });
 }
 
+// ── Windows raw-print script (Winspool.Drv P/Invoke via PowerShell) ──────────
+// Sends a binary ESC/POS file to a named Windows printer with datatype=RAW.
+// Parameters: -PrinterName <string>  -DataFile <path>
+// No native addons — works on any Node.js version; PowerShell is built into Windows 10/11.
+const WIN_PRINT_PS1 = `
+param([string]$PrinterName, [string]$DataFile)
+
+$bytes = [System.IO.File]::ReadAllBytes($DataFile)
+
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class WinPrint {
+    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Ansi)]
+    public class DOCINFOA {
+        [MarshalAs(UnmanagedType.LPStr)] public string pDocName;
+        [MarshalAs(UnmanagedType.LPStr)] public string pOutputFile;
+        [MarshalAs(UnmanagedType.LPStr)] public string pDataType;
+    }
+    [DllImport("winspool.Drv", EntryPoint="OpenPrinterA",     SetLastError=true, CharSet=CharSet.Ansi, ExactSpelling=true, CallingConvention=CallingConvention.StdCall)]
+    public static extern bool OpenPrinter([MarshalAs(UnmanagedType.LPStr)] string szPrinter, out IntPtr hPrinter, IntPtr pd);
+    [DllImport("winspool.Drv", EntryPoint="ClosePrinter",     SetLastError=true, ExactSpelling=true, CallingConvention=CallingConvention.StdCall)]
+    public static extern bool ClosePrinter(IntPtr hPrinter);
+    [DllImport("winspool.Drv", EntryPoint="StartDocPrinterA", SetLastError=true, CharSet=CharSet.Ansi, ExactSpelling=true, CallingConvention=CallingConvention.StdCall)]
+    public static extern Int32 StartDocPrinter(IntPtr hPrinter, Int32 level, [In, MarshalAs(UnmanagedType.LPStruct)] DOCINFOA di);
+    [DllImport("winspool.Drv", EntryPoint="EndDocPrinter",    SetLastError=true, ExactSpelling=true, CallingConvention=CallingConvention.StdCall)]
+    public static extern bool EndDocPrinter(IntPtr hPrinter);
+    [DllImport("winspool.Drv", EntryPoint="StartPagePrinter", SetLastError=true, ExactSpelling=true, CallingConvention=CallingConvention.StdCall)]
+    public static extern bool StartPagePrinter(IntPtr hPrinter);
+    [DllImport("winspool.Drv", EntryPoint="EndPagePrinter",   SetLastError=true, ExactSpelling=true, CallingConvention=CallingConvention.StdCall)]
+    public static extern bool EndPagePrinter(IntPtr hPrinter);
+    [DllImport("winspool.Drv", EntryPoint="WritePrinter",     SetLastError=true, ExactSpelling=true, CallingConvention=CallingConvention.StdCall)]
+    public static extern bool WritePrinter(IntPtr hPrinter, IntPtr pBytes, Int32 dwCount, out Int32 dwWritten);
+}
+"@
+
+$hPrinter = [IntPtr]::Zero
+if (-not [WinPrint]::OpenPrinter($PrinterName, [ref]$hPrinter, [IntPtr]::Zero)) {
+    throw "OpenPrinter('$PrinterName') failed — verify PRINTER_NAME in .env matches Windows Devices and Printers exactly."
+}
+
+$doc = New-Object WinPrint+DOCINFOA
+$doc.pDocName    = 'FL-PRINT'
+$doc.pOutputFile = $null
+$doc.pDataType   = 'RAW'
+
+$jobId = [WinPrint]::StartDocPrinter($hPrinter, 1, $doc)
+if ($jobId -le 0) {
+    [WinPrint]::ClosePrinter($hPrinter)
+    throw "StartDocPrinter failed"
+}
+
+[WinPrint]::StartPagePrinter($hPrinter) | Out-Null
+
+$ptr     = [System.Runtime.InteropServices.Marshal]::AllocHGlobal($bytes.Length)
+$written = 0
+[System.Runtime.InteropServices.Marshal]::Copy($bytes, 0, $ptr, $bytes.Length)
+[WinPrint]::WritePrinter($hPrinter, $ptr, $bytes.Length, [ref]$written) | Out-Null
+[System.Runtime.InteropServices.Marshal]::FreeHGlobal($ptr)
+
+[WinPrint]::EndPagePrinter($hPrinter)  | Out-Null
+[WinPrint]::EndDocPrinter($hPrinter)   | Out-Null
+[WinPrint]::ClosePrinter($hPrinter)    | Out-Null
+
+Write-Host "Sent $written of $($bytes.Length) bytes to '$PrinterName' (job $jobId)"
+`;
+
 /** USB mode — printer is physically connected to this machine via USB cable. */
 async function printViaUSB(buffer) {
   const platform = os.platform();
 
   if (platform === 'win32') {
-    // Windows: use @thiagoelg/node-printer to send raw bytes via Windows print spooler.
-    // The printer must be installed in Windows (plug in USB → Windows auto-installs it,
-    // or use the driver CD). Set PRINTER_NAME to the exact name shown in Devices & Printers.
-    let nodePrinter;
+    // Windows: send raw ESC/POS bytes via Winspool.Drv P/Invoke through PowerShell.
+    // No native addon or build tools required — works on any Node.js version.
+    // PRINTER_NAME must match the name exactly as shown in Windows Devices & Printers.
+    const tmpBin = nodePath.join(os.tmpdir(), `fl-escpos-${process.pid}-${Date.now()}.bin`);
+    const tmpPs1 = nodePath.join(os.tmpdir(), `fl-print-${process.pid}-${Date.now()}.ps1`);
     try {
-      nodePrinter = require('@thiagoelg/node-printer');
-    } catch {
-      throw new Error(
-        '@thiagoelg/node-printer is not installed. Run: npm install  (inside print-agent/)'
-      );
+      fs.writeFileSync(tmpBin, buffer);
+      fs.writeFileSync(tmpPs1, WIN_PRINT_PS1, 'utf8');
+      try {
+        execFileSync('powershell.exe', [
+          '-NoProfile',
+          '-NonInteractive',
+          '-ExecutionPolicy', 'Bypass',
+          '-File', tmpPs1,
+          '-PrinterName', PRINTER_NAME,
+          '-DataFile', tmpBin,
+        ], { stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000 });
+      } catch (err) {
+        const detail = (err.stderr && err.stderr.length)
+          ? err.stderr.toString().trim()
+          : err.message;
+        throw new Error(`Windows print failed: ${detail}`);
+      }
+    } finally {
+      for (const f of [tmpBin, tmpPs1]) {
+        try { fs.unlinkSync(f); } catch { /* ignore cleanup errors */ }
+      }
     }
-    await new Promise((resolve, reject) => {
-      nodePrinter.printDirect({
-        data:    buffer,
-        printer: PRINTER_NAME,
-        type:    'RAW',
-        success: () => resolve(),
-        error:   (err) => reject(new Error(String(err))),
-      });
-    });
 
   } else {
     // Linux / Mac: write raw bytes directly to the USB device file.
