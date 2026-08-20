@@ -20,7 +20,7 @@
     "react-dom": "19.2.3",
     "recharts": "^2.10.3",
     "resend": "^3.0.0",
-    "uuid": "^9.0.1"
+    "uuid": "^14.0.2"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
