@@ -128,21 +128,11 @@ function TrackInner() {
   const [ratingSubmitted,   setRatingSubmitted]   = useState(false);
   const [ratingMsg,         setRatingMsg]         = useState('');
 
-  // ── Spin & Win ──
-  const [spinEligible,   setSpinEligible]   = useState(false);
+  // ── Spin & Win — email-only entitlement ──
+  // The spin wheel is accessed exclusively via the secure link in the invite email.
+  // This page only shows a prompt if the order is eligible and the email has been sent.
+  const [spinInviteSent, setSpinInviteSent] = useState(false);
   const [spinChecked,    setSpinChecked]    = useState(false);
-  const [spinBusy,       setSpinBusy]       = useState(false);
-  const [spinAnimating,  setSpinAnimating]  = useState(false);
-  const [spinDeg,        setSpinDeg]        = useState(0);  // total degrees wheel has rotated
-  const [spinWheelRewards, setSpinWheelRewards] = useState<{ id: string; label: string; reward_type: string; sort_order: number }[]>([]);
-  const [spinResult,     setSpinResult]     = useState<{
-    isWinner: boolean;
-    rewardLabel?: string;
-    rewardType?: string;
-    couponCode?: string;
-    expiresAt?: string;
-    alreadySpun?: boolean;
-  } | null>(null);
 
   const showLookupForm = !trackOrderId && !trackToken;
 
@@ -325,20 +315,9 @@ function TrackInner() {
     }
   }
 
-  // ── Spin & Win: load wheel reward segments (fire once on mount) ────────────
-  useEffect(() => {
-    fetch('/api/rewards/wheel-rewards')
-      .then(r => r.json())
-      .then((data: { id: string; label: string; reward_type: string; sort_order: number }[]) => {
-        if (Array.isArray(data)) setSpinWheelRewards(data);
-      })
-      .catch(console.error);
-  }, []);
-
-  // ── Spin & Win: check eligibility when order becomes completed ──────────────
+  // ── Spin & Win: check if an invite has been sent (to show email prompt) ──────
   const orderId = trackOrderId;
   useEffect(() => {
-    // For tab-based dine-in, eligibility comes from tabId not orderId
     const isCompleted = order?.status === 'completed' || order?.status === 'delivered';
     const canCheck    = (isCompleted && !!orderId) || !!urlTabId;
     if (!canCheck || spinChecked) return;
@@ -348,95 +327,12 @@ function TrackInner() {
       : `/api/rewards/eligibility?orderId=${orderId}`;
     fetch(eligUrl)
       .then(r => r.json())
-      .then((data: {
-        eligible?: boolean;
-        alreadySpun?: boolean;
-        existingResult?: {
-          is_winner: boolean;
-          spin_rewards?: { label?: string };
-          reward_coupons?: { coupon_code?: string; expires_at?: string } | Array<{ coupon_code?: string; expires_at?: string }>;
-        };
-      }) => {
-        if (data.eligible) {
-          setSpinEligible(true);
-        } else if (data.alreadySpun && data.existingResult) {
-          const r = data.existingResult;
-          const reward = r.spin_rewards;
-          const couponRaw = r.reward_coupons;
-          const coupon = Array.isArray(couponRaw) ? couponRaw[0] : couponRaw;
-          setSpinResult({
-            isWinner: r.is_winner,
-            rewardLabel: reward?.label,
-            couponCode: coupon?.coupon_code,
-            expiresAt: coupon?.expires_at,
-            alreadySpun: true,
-          });
-        }
+      .then((data: { eligible?: boolean; alreadySpun?: boolean; inviteSent?: boolean }) => {
+        // Show email prompt only when eligible (invite not yet used) or invite was sent
+        if (data.eligible || data.inviteSent) setSpinInviteSent(true);
       })
       .catch(console.error);
   }, [order?.status, orderId, urlTabId, spinChecked]);
-
-  // ── Spin & Win: execute spin ────────────────────────────────────────────────
-  async function handleSpin() {
-    if (spinBusy || spinAnimating) return;
-    setSpinBusy(true);
-    setSpinAnimating(true);
-    try {
-      const res = await fetch('/api/rewards/spin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          orderId:       urlTabId ? undefined : orderId,
-          tabId:         urlTabId || undefined,
-          customerEmail: order?.customerEmail ?? '',
-          customerPhone: order?.phone ?? '',
-        }),
-      });
-      const data = await res.json() as {
-        isWinner?: boolean;
-        rewardLabel?: string;
-        rewardType?: string;
-        couponCode?: string;
-        expiresAt?: string;
-        alreadySpun?: boolean;
-        rewardId?: string;
-      };
-
-      // Calculate where the wheel should land based on the server's chosen reward
-      const total = spinWheelRewards.length || 1;
-      const segDeg = 360 / total;
-      let targetSegIdx = 0;
-      if (data.rewardId) {
-        const idx = spinWheelRewards.findIndex(r => r.id === data.rewardId);
-        if (idx >= 0) targetSegIdx = idx;
-      }
-      // Land in the middle of the target segment, with 5 full rotations + offset
-      // The wheel starts at top, first segment is at angle 0. CSS rotation is clockwise.
-      // Segment idx 0 occupies [0..segDeg], its midpoint is segDeg/2
-      // To land segment `targetSegIdx` at the top (pointer at 270deg in SVG = top),
-      // we rotate by: 5*360 + (360 - targetSegIdx*segDeg - segDeg/2)
-      const landAngle = 5 * 360 + (360 - targetSegIdx * segDeg - segDeg / 2);
-      setSpinDeg(landAngle);
-
-      // Wait for 4s CSS animation then show result
-      setTimeout(() => {
-        setSpinAnimating(false);
-        setSpinEligible(false);
-        setSpinResult({
-          isWinner: data.isWinner ?? false,
-          rewardLabel: data.rewardLabel,
-          rewardType: data.rewardType,
-          couponCode: data.couponCode,
-          expiresAt: data.expiresAt,
-          alreadySpun: data.alreadySpun,
-        });
-      }, 4200);
-    } catch (err) {
-      console.error(err);
-      setSpinAnimating(false);
-      setSpinBusy(false);
-    }
-  }
 
   // ════════════════════════════════════════════════════════════════
   // ── LOOKUP FORM ──────────────────────────────────────────────────
@@ -936,135 +832,18 @@ function TrackInner() {
           </div>
         )}
 
-        {/* ── Spin & Win section ──────────────────────────────── */}
-        {spinEligible && !spinResult && (
+        {/* ── Spin & Win — email prompt ──────────────────────────── */}
+        {spinInviteSent && (
           <div style={{ marginBottom: '1.25rem', padding: '1.25rem', background: 'linear-gradient(135deg,#faf5ff,#fefce8)', border: '2px solid #d8b4fe', borderRadius: 16, textAlign: 'center' }}>
-            <h3 style={{ fontWeight: 900, color: '#6b21a8', fontSize: '1.05rem', margin: '0 0 0.25rem' }}>You have unlocked Spin & Win!</h3>
-            <p style={{ fontSize: '0.8rem', color: '#64748b', margin: '0 0 1rem' }}>Your order qualifies for a reward. Spin to find out what you have won!</p>
-
-            {/* SVG Spin Wheel */}
-            {spinWheelRewards.length > 0 && (() => {
-              const segs   = spinWheelRewards;
-              const total  = segs.length;
-              const cx     = 120;
-              const cy     = 120;
-              const r      = 110;
-              const segDeg = 360 / total;
-              const COLORS = ['#7c3aed','#a855f7','#6d28d9','#8b5cf6','#4f46e5','#9333ea','#7c3aed'];
-              const toRad  = (deg: number) => (deg * Math.PI) / 180;
-              return (
-                <div style={{ position: 'relative', display: 'inline-block', marginBottom: '1rem' }}>
-                  {/* Pointer triangle at top */}
-                  <div style={{ position: 'absolute', top: -8, left: '50%', transform: 'translateX(-50%)', zIndex: 2,
-                    width: 0, height: 0,
-                    borderLeft: '10px solid transparent',
-                    borderRight: '10px solid transparent',
-                    borderTop: '20px solid #6b21a8',
-                  }} />
-                  <svg
-                    width={240} height={240}
-                    viewBox="0 0 240 240"
-                    style={{
-                      borderRadius: '50%',
-                      boxShadow: '0 8px 32px rgba(124,58,237,0.3)',
-                      transform: `rotate(${spinDeg}deg)`,
-                      transition: spinAnimating
-                        ? `transform 4s cubic-bezier(0.17,0.67,0.12,0.99)`
-                        : 'none',
-                      display: 'block',
-                    }}
-                  >
-                    {segs.map((seg, idx) => {
-                      const startDeg = idx * segDeg - 90;
-                      const endDeg   = startDeg + segDeg;
-                      const x1 = cx + r * Math.cos(toRad(startDeg));
-                      const y1 = cy + r * Math.sin(toRad(startDeg));
-                      const x2 = cx + r * Math.cos(toRad(endDeg));
-                      const y2 = cy + r * Math.sin(toRad(endDeg));
-                      const large = segDeg > 180 ? 1 : 0;
-                      const path  = `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} Z`;
-                      const color = COLORS[idx % COLORS.length];
-                      const midDeg  = startDeg + segDeg / 2;
-                      const textR   = r * 0.62;
-                      const textX   = cx + textR * Math.cos(toRad(midDeg));
-                      const textY   = cy + textR * Math.sin(toRad(midDeg));
-                      const maxLen  = 10;
-                      const label   = seg.label.length > maxLen ? seg.label.slice(0, maxLen - 1) + '…' : seg.label;
-                      return (
-                        <g key={seg.id}>
-                          <path d={path} fill={color} stroke="white" strokeWidth={1.5} />
-                          <text
-                            x={textX} y={textY}
-                            textAnchor="middle" dominantBaseline="middle"
-                            transform={`rotate(${midDeg + 90}, ${textX}, ${textY})`}
-                            fill="white"
-                            fontSize={total > 6 ? 8 : 10}
-                            fontWeight="bold"
-                            fontFamily="Poppins,sans-serif"
-                            style={{ pointerEvents: 'none', userSelect: 'none' }}
-                          >
-                            {label}
-                          </text>
-                        </g>
-                      );
-                    })}
-                    <circle cx={cx} cy={cy} r={16} fill="white" stroke="#7c3aed" strokeWidth={3} />
-                    <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fontSize={14}>🎡</text>
-                  </svg>
-                </div>
-              );
-            })()}
-
-            <button
-              onClick={() => void handleSpin()}
-              disabled={spinBusy || spinAnimating}
-              style={{
-                padding: '0.75rem 2rem', borderRadius: 9999, color: 'white', fontWeight: 800,
-                fontSize: '1rem', border: 'none', cursor: spinAnimating ? 'wait' : 'pointer',
-                background: spinAnimating ? '#c4b5fd' : 'linear-gradient(135deg,#7c3aed,#a855f7)',
-                boxShadow: spinAnimating ? 'none' : '0 4px 16px rgba(124,58,237,0.4)',
-                fontFamily: 'Poppins,sans-serif', transition: 'all 0.2s',
-                display: 'block', margin: '0 auto',
-              }}
-            >
-              {spinAnimating ? '🎡 Spinning…' : '🎡 SPIN NOW'}
-            </button>
+            <div style={{ fontSize: '2rem', marginBottom: '0.4rem' }}>🎡</div>
+            <h3 style={{ fontWeight: 900, color: '#6b21a8', fontSize: '1.05rem', margin: '0 0 0.4rem' }}>You&apos;ve unlocked Spin &amp; Win!</h3>
+            <p style={{ fontSize: '0.85rem', color: '#64748b', margin: 0, lineHeight: 1.5 }}>
+              Check your email for your personal spin link.<br/>
+              <span style={{ fontSize: '0.78rem', color: '#a78bfa' }}>Each order gives you one spin — yours is waiting in your inbox.</span>
+            </p>
           </div>
         )}
 
-        {spinResult && (
-          <div style={{
-            marginBottom: '1.25rem', padding: '1.25rem', borderRadius: 16, textAlign: 'center',
-            border: spinResult.isWinner ? '2px solid #86efac' : '1px solid #e5e7eb',
-            background: spinResult.isWinner ? 'linear-gradient(135deg,#fefce8,#f0fdf4)' : '#f9fafb',
-          }}>
-            {spinResult.isWinner ? (
-              <>
-                <div style={{ fontSize: '2.5rem', marginBottom: '0.4rem' }}>🎉</div>
-                <h3 style={{ fontWeight: 900, color: '#166534', fontSize: '1.05rem', margin: '0 0 0.3rem' }}>You won!</h3>
-                <p style={{ fontWeight: 800, color: '#15803d', fontSize: '1.1rem', margin: '0 0 1rem' }}>{spinResult.rewardLabel}</p>
-                {spinResult.couponCode && (
-                  <div style={{ background: 'white', border: '2px dashed #86efac', borderRadius: 12, padding: '1rem', display: 'inline-block', marginBottom: '0.75rem' }}>
-                    <p style={{ fontSize: '0.7rem', color: '#94a3b8', margin: '0 0 0.3rem' }}>Your reward coupon</p>
-                    <p style={{ fontFamily: 'monospace', fontSize: '1.5rem', fontWeight: 900, color: '#166534', margin: '0 0 0.2rem', letterSpacing: '0.15em' }}>{spinResult.couponCode}</p>
-                    {spinResult.expiresAt && (
-                      <p style={{ fontSize: '0.7rem', color: '#94a3b8', margin: 0 }}>
-                        Valid until {new Date(spinResult.expiresAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
-                      </p>
-                    )}
-                  </div>
-                )}
-                <p style={{ fontSize: '0.75rem', color: '#64748b', margin: 0 }}>Use this coupon on your next order!</p>
-              </>
-            ) : (
-              <>
-                <div style={{ fontSize: '2.5rem', marginBottom: '0.4rem' }}>😅</div>
-                <h3 style={{ fontWeight: 800, color: '#374151', fontSize: '1rem', margin: '0 0 0.3rem' }}>{spinResult.rewardLabel ?? 'Better luck next time!'}</h3>
-                <p style={{ fontSize: '0.8rem', color: '#94a3b8', margin: 0 }}>Every order is a new chance to win.</p>
-              </>
-            )}
-          </div>
-        )}
 
         {/* Event log (collapsible) */}
         {timeline.length > 0 && (

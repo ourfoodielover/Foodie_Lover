@@ -229,20 +229,11 @@ function TablePageInner() {
   const [tRatingSubmitted,setTRatingSubmitted]= useState(false);
   const [tRatingMsg,      setTRatingMsg]      = useState('');
 
-  // ── Post-payment: Spin & Win (shown on closed-tab screen) ──
-  const [tSpinEligible,    setTSpinEligible]    = useState(false);
+  // ── Post-payment: Spin & Win — email-only entitlement ──
+  // The spin is now accessed exclusively via the secure link in the invite email.
+  // This page shows a prompt when the tab is eligible and an invite was sent.
+  const [tSpinInviteSent,  setTSpinInviteSent]  = useState(false);
   const [tSpinChecked,     setTSpinChecked]     = useState(false);
-  const [tSpinBusy,        setTSpinBusy]        = useState(false);
-  const [tSpinAnimating,   setTSpinAnimating]   = useState(false);
-  const [tSpinDeg,         setTSpinDeg]         = useState(0);
-  const [tSpinWheelRewards,setTSpinWheelRewards]= useState<{ id: string; label: string; reward_type: string; sort_order: number }[]>([]);
-  const [tSpinResult,      setTSpinResult]      = useState<{
-    isWinner: boolean; rewardLabel?: string; rewardType?: string;
-    couponCode?: string; expiresAt?: string; alreadySpun?: boolean;
-  } | null>(null);
-  const [tSpinError,       setTSpinError]       = useState('');
-  // Phone input on post-payment screen — for customers who didn't provide phone at session start
-  const [tSpinPhone,       setTSpinPhone]       = useState('');
 
   // ── Ref: first order ID seen for this tab — used for feedback if tabOrders empty ──
   const firstOrderIdRef = useRef<string | null>(null);
@@ -403,32 +394,11 @@ function TablePageInner() {
     if (tSpinChecked) return;
     setTSpinChecked(true);
 
-    // Load wheel segments (weights NOT exposed to client)
-    fetch('/api/rewards/wheel-rewards')
-      .then(r => r.json())
-      .then((d: unknown) => { if (Array.isArray(d)) setTSpinWheelRewards(d as { id: string; label: string; reward_type: string; sort_order: number }[]); })
-      .catch(() => {});
-
-    // Check eligibility for this tab
+    // Check eligibility — show email prompt if spin invite was sent or eligible
     fetch(`/api/rewards/eligibility?tabId=${tabId}`)
       .then(r => r.json())
-      .then((data: { eligible?: boolean; alreadySpun?: boolean; existingResult?: Record<string, unknown>; reason?: string }) => {
-        if (data.eligible) {
-          setTSpinEligible(true);
-        } else if (data.alreadySpun && data.existingResult) {
-          const r   = data.existingResult as Record<string, unknown>;
-          const rwd = r.spin_rewards as Record<string, unknown> | null;
-          const cpn = Array.isArray(r.reward_coupons)
-            ? (r.reward_coupons as Array<Record<string, unknown>>)[0]
-            : (r.reward_coupons as Record<string, unknown> | null);
-          setTSpinResult({
-            isWinner:    Boolean(r.is_winner),
-            rewardLabel: String(rwd?.label ?? ''),
-            couponCode:  String(cpn?.coupon_code ?? ''),
-            expiresAt:   String(cpn?.expires_at ?? ''),
-            alreadySpun: true,
-          });
-        }
+      .then((data: { eligible?: boolean; alreadySpun?: boolean; inviteSent?: boolean }) => {
+        if (data.eligible || data.inviteSent) setTSpinInviteSent(true);
       })
       .catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1454,39 +1424,6 @@ function TablePageInner() {
       finally  { setTRatingBusy(false); }
     };
 
-    // ── Spin handler ─────────────────────────────────────────────────────────
-    const handleTabSpin = async () => {
-      if (tSpinBusy || tSpinAnimating || !tabId) return;
-      setTSpinBusy(true);
-      setTSpinAnimating(true);
-      setTSpinError('');
-      try {
-        const phoneForSpin = tab.phone || tSpinPhone.trim();
-        const res = await fetch('/api/rewards/spin', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tabId, customerEmail: tab.email ?? '', customerPhone: phoneForSpin || undefined }),
-        });
-        const data = await res.json() as { isWinner?: boolean; rewardLabel?: string; rewardType?: string; couponCode?: string; expiresAt?: string; rewardId?: string; alreadySpun?: boolean; error?: string };
-        if (data.error) { setTSpinError(data.error); setTSpinAnimating(false); setTSpinBusy(false); return; }
-        // Compute target segment angle for animation
-        const total    = tSpinWheelRewards.length || 1;
-        const segDeg   = 360 / total;
-        const idx      = data.rewardId ? tSpinWheelRewards.findIndex(r => r.id === data.rewardId) : 0;
-        const safIdx   = idx >= 0 ? idx : 0;
-        const landAngle = tSpinDeg + (5 * 360) + (360 - safIdx * segDeg - segDeg / 2);
-        setTSpinDeg(landAngle);
-        setTimeout(() => {
-          setTSpinAnimating(false);
-          setTSpinEligible(false);
-          setTSpinResult({ isWinner: Boolean(data.isWinner), rewardLabel: data.rewardLabel, rewardType: data.rewardType, couponCode: data.couponCode, expiresAt: data.expiresAt });
-          setTSpinBusy(false);
-        }, 4200);
-      } catch { setTSpinError('Connection error. Please try again.'); setTSpinAnimating(false); setTSpinBusy(false); }
-    };
-
-    const toRad = (d: number) => (d * Math.PI) / 180;
-    const WHL_COLORS = ['#7c3aed','#a855f7','#6d28d9','#8b5cf6','#4f46e5','#9333ea','#c026d3','#7c3aed'];
-
     return (
       <div style={{ minHeight: '100vh', background: '#faf8f3', fontFamily: 'Poppins,sans-serif', paddingBottom: '2rem' }}>
         {/* Payment received header */}
@@ -1559,103 +1496,18 @@ function TablePageInner() {
             </div>
           )}
 
-          {/* ── Spin & Win (independent of rating) ── */}
-          {tSpinEligible && !tSpinResult && (
+          {/* ── Spin & Win — email prompt ── */}
+          {tSpinInviteSent && (
             <div style={{ marginBottom: '1.25rem', padding: '1.25rem', background: 'linear-gradient(135deg,#faf5ff,#fefce8)', border: '2px solid #d8b4fe', borderRadius: 16, textAlign: 'center' }}>
-              <h3 style={{ fontWeight: 900, color: '#6b21a8', fontSize: '1.05rem', margin: '0 0 0.25rem' }}>🎡 You have unlocked Spin &amp; Win!</h3>
-              <p style={{ fontSize: '0.8rem', color: '#64748b', margin: '0 0 1rem' }}>Your order qualifies for a reward. Spin to find out what you won!</p>
-
-              {/* Phone input if not provided at session start */}
-              {!tab.phone && (
-                <div style={{ marginBottom: '1rem', textAlign: 'left' }}>
-                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: '#6b21a8', display: 'block', marginBottom: '0.3rem' }}>📱 Enter your phone number to spin</label>
-                  <input type="tel" inputMode="tel" value={tSpinPhone} onChange={e => setTSpinPhone(e.target.value)}
-                    placeholder="+91 98765 43210"
-                    style={{ width: '100%', boxSizing: 'border-box', padding: '0.65rem 0.75rem', border: '2px solid #d8b4fe', borderRadius: 10, fontFamily: 'Poppins,sans-serif', fontSize: '0.9rem', outline: 'none' }} />
-                </div>
-              )}
-
-              {/* SVG Spin Wheel */}
-              {tSpinWheelRewards.length > 0 && (() => {
-                const segs   = tSpinWheelRewards;
-                const total  = segs.length;
-                const cx = 120; const cy = 120; const r = 110;
-                const segDeg = 360 / total;
-                return (
-                  <div style={{ position: 'relative', display: 'inline-block', marginBottom: '1rem' }}>
-                    <div style={{ position: 'absolute', top: -8, left: '50%', transform: 'translateX(-50%)', zIndex: 2, width: 0, height: 0, borderLeft: '10px solid transparent', borderRight: '10px solid transparent', borderTop: '20px solid #6b21a8' }} />
-                    <svg width={240} height={240} viewBox="0 0 240 240"
-                      style={{ borderRadius: '50%', boxShadow: '0 8px 32px rgba(124,58,237,0.3)', transform: `rotate(${tSpinDeg}deg)`, transition: tSpinAnimating ? 'transform 4s cubic-bezier(0.17,0.67,0.12,0.99)' : 'none', display: 'block' }}>
-                      {segs.map((seg, idx) => {
-                        const startDeg = idx * segDeg - 90; const endDeg = startDeg + segDeg;
-                        const x1 = cx + r * Math.cos(toRad(startDeg)); const y1 = cy + r * Math.sin(toRad(startDeg));
-                        const x2 = cx + r * Math.cos(toRad(endDeg));   const y2 = cy + r * Math.sin(toRad(endDeg));
-                        const path = `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${segDeg > 180 ? 1 : 0} 1 ${x2} ${y2} Z`;
-                        const color = WHL_COLORS[idx % WHL_COLORS.length];
-                        const midDeg = startDeg + segDeg / 2;
-                        const textR = r * 0.62;
-                        const label = seg.label.length > 10 ? seg.label.slice(0, 9) + '…' : seg.label;
-                        return (
-                          <g key={seg.id}>
-                            <path d={path} fill={color} stroke="white" strokeWidth={1.5} />
-                            <text x={cx + textR * Math.cos(toRad(midDeg))} y={cy + textR * Math.sin(toRad(midDeg))}
-                              textAnchor="middle" dominantBaseline="middle"
-                              transform={`rotate(${midDeg + 90},${cx + textR * Math.cos(toRad(midDeg))},${cy + textR * Math.sin(toRad(midDeg))})`}
-                              fill="white" fontSize={total > 6 ? 8 : 10} fontWeight="bold" fontFamily="Poppins,sans-serif"
-                              style={{ pointerEvents: 'none', userSelect: 'none' }}>
-                              {label}
-                            </text>
-                          </g>
-                        );
-                      })}
-                      <circle cx={cx} cy={cy} r={16} fill="white" stroke="#7c3aed" strokeWidth={3} />
-                      <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fontSize={14}>🎡</text>
-                    </svg>
-                  </div>
-                );
-              })()}
-
-              <button onClick={() => void handleTabSpin()} disabled={tSpinBusy || tSpinAnimating}
-                style={{ padding: '0.75rem 2rem', borderRadius: 9999, color: 'white', fontWeight: 800, fontSize: '1rem', border: 'none', cursor: tSpinAnimating ? 'wait' : 'pointer', background: tSpinAnimating ? '#c4b5fd' : 'linear-gradient(135deg,#7c3aed,#a855f7)', boxShadow: tSpinAnimating ? 'none' : '0 4px 16px rgba(124,58,237,0.4)', fontFamily: 'Poppins,sans-serif', transition: 'all 0.2s', display: 'block', margin: '0 auto' }}>
-                {tSpinAnimating ? '🎡 Spinning…' : '🎡 SPIN NOW'}
-              </button>
-              {tSpinError && <p style={{ fontSize: '0.78rem', color: '#dc2626', marginTop: '0.5rem' }}>{tSpinError}</p>}
+              <div style={{ fontSize: '2rem', marginBottom: '0.4rem' }}>🎡</div>
+              <h3 style={{ fontWeight: 900, color: '#6b21a8', fontSize: '1.05rem', margin: '0 0 0.4rem' }}>You&apos;ve unlocked Spin &amp; Win!</h3>
+              <p style={{ fontSize: '0.85rem', color: '#64748b', margin: 0, lineHeight: 1.5 }}>
+                Check your email for your personal spin link.<br/>
+                <span style={{ fontSize: '0.78rem', color: '#a78bfa' }}>Each visit gives you one spin — yours is waiting in your inbox.</span>
+              </p>
             </div>
           )}
 
-          {tSpinResult && (
-            <div style={{ marginBottom: '1.25rem', padding: '1.25rem', borderRadius: 16, textAlign: 'center', border: tSpinResult.isWinner ? '2px solid #86efac' : '1px solid #e5e7eb', background: tSpinResult.isWinner ? 'linear-gradient(135deg,#fefce8,#f0fdf4)' : '#f9fafb' }}>
-              {tSpinResult.isWinner ? (
-                <>
-                  <div style={{ fontSize: '2.5rem', marginBottom: '0.4rem' }}>🎉</div>
-                  <h3 style={{ fontWeight: 900, color: '#166534', fontSize: '1.05rem', margin: '0 0 0.3rem' }}>You won!</h3>
-                  <p style={{ fontWeight: 800, color: '#15803d', fontSize: '1.1rem', margin: '0 0 1rem' }}>{tSpinResult.rewardLabel}</p>
-                  {tSpinResult.couponCode && (
-                    <div style={{ background: 'white', border: '2px dashed #86efac', borderRadius: 12, padding: '1rem', display: 'inline-block', marginBottom: '0.75rem' }}>
-                      <p style={{ fontSize: '0.7rem', color: '#94a3b8', margin: '0 0 0.3rem' }}>Your reward coupon</p>
-                      <p style={{ fontFamily: 'monospace', fontSize: '1.5rem', fontWeight: 900, color: '#166534', margin: '0 0 0.4rem', letterSpacing: '0.15em' }}>{tSpinResult.couponCode}</p>
-                      <button onClick={() => navigator.clipboard?.writeText(tSpinResult.couponCode ?? '')}
-                        style={{ padding: '0.3rem 0.75rem', borderRadius: 20, background: '#f0fdf4', border: '1px solid #86efac', color: '#16a34a', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', fontFamily: 'Poppins,sans-serif', marginBottom: '0.3rem' }}>
-                        📋 Copy Code
-                      </button>
-                      {tSpinResult.expiresAt && (
-                        <p style={{ fontSize: '0.7rem', color: '#94a3b8', margin: 0 }}>
-                          Valid until {new Date(tSpinResult.expiresAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
-                        </p>
-                      )}
-                    </div>
-                  )}
-                  <p style={{ fontSize: '0.75rem', color: '#64748b', margin: 0 }}>Use this coupon on your next order!</p>
-                </>
-              ) : (
-                <>
-                  <div style={{ fontSize: '2.5rem', marginBottom: '0.4rem' }}>😅</div>
-                  <h3 style={{ fontWeight: 800, color: '#374151', fontSize: '1rem', margin: '0 0 0.3rem' }}>{tSpinResult.rewardLabel ?? 'Better luck next time!'}</h3>
-                  <p style={{ fontSize: '0.8rem', color: '#94a3b8', margin: 0 }}>Every order is a new chance to win.</p>
-                </>
-              )}
-            </div>
-          )}
 
           <div style={{ textAlign: 'center', fontSize: '0.72rem', color: '#9ca3af', marginTop: '1rem' }}>
             Scan QR again to start a new order
