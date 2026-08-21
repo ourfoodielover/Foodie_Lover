@@ -278,11 +278,29 @@ async function printViaUSB(buffer) {
 }
 
 // ── API helpers ────────────────────────────────────────────────────────────────
+
+/** Describe a non-JSON or error response without ever logging PRINT_AGENT_KEY. */
+async function describeResponse(method, path, res) {
+  const ct   = res.headers.get('content-type') ?? '(no content-type)';
+  const body = await res.text();
+  const isHtml = ct.includes('text/html') || body.trimStart().startsWith('<');
+  if (isHtml) {
+    return `${method} ${path} -> HTTP ${res.status} | content-type: ${ct} | `
+      + `response is HTML, not JSON. Check APP_BASE_URL ("${APP_BASE_URL}") — `
+      + `the server may be returning an error page or auth redirect instead of the API.`;
+  }
+  return `${method} ${path} -> HTTP ${res.status} | content-type: ${ct} | ${body.slice(0, 200)}`;
+}
+
 async function apiGet(path) {
   const res = await fetch(`${APP_BASE_URL}${path}`, {
     headers: { 'x-print-agent-key': PRINT_AGENT_KEY ?? '' },
   });
-  if (!res.ok) throw new Error(`GET ${path} -> ${res.status} ${await res.text()}`);
+  const ct = res.headers.get('content-type') ?? '';
+  if (!res.ok) throw new Error(await describeResponse('GET', path, res));
+  if (!ct.includes('application/json')) {
+    throw new Error(await describeResponse('GET', path, res));
+  }
   return res.json();
 }
 
@@ -292,7 +310,11 @@ async function apiPatch(path, body) {
     headers: { 'Content-Type': 'application/json', 'x-print-agent-key': PRINT_AGENT_KEY ?? '' },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`PATCH ${path} -> ${res.status} ${await res.text()}`);
+  const ct = res.headers.get('content-type') ?? '';
+  if (!res.ok) throw new Error(await describeResponse('PATCH', path, res));
+  if (!ct.includes('application/json')) {
+    throw new Error(await describeResponse('PATCH', path, res));
+  }
   return res.json();
 }
 
