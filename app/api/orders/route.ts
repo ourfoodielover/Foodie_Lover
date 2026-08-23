@@ -115,7 +115,7 @@ export async function POST(req: NextRequest) {
     if (body.tabId && body.type === 'dine-in') {
       const { data: existingRow } = await sb
         .from('orders')
-        .select('id, subtotal, total, order_number')
+        .select('id, subtotal, total, order_number, notes')
         .eq('tab_id',          String(body.tabId))
         .eq('restaurant_id',   rid)
         .eq('status',          'awaiting_waiter')
@@ -142,9 +142,17 @@ export async function POST(req: NextRequest) {
         // Recalculate order totals
         const newSubtotal = Number(existing.subtotal) + Number(body.subtotal);
         const newTotal    = Number(existing.total)    + Number(body.total);
+        // Merge notes rather than overwrite — a waiter adding items to an
+        // order the customer already annotated (or vice versa) must not
+        // silently discard the earlier instruction.
+        const existingNotes = (existing.notes as string | null) ?? '';
+        const mergedNotes = body.notes
+          ? (existingNotes ? `${existingNotes} | ${body.notes}` : String(body.notes))
+          : existingNotes || undefined;
         await sb.from('orders').update({
           subtotal:   newSubtotal,
           total:      newTotal,
+          ...(mergedNotes !== undefined ? { notes: mergedNotes } : {}),
           updated_at: new Date().toISOString(),
         }).eq('id', String(existing.id));
 
@@ -225,6 +233,9 @@ export async function POST(req: NextRequest) {
       tracking_token:   trackingToken,
       delivery_address: body.deliveryAddress ?? null,
       source:           body.source ?? 'in-store',
+      notes:                 body.notes               ?? null,
+      created_by_staff_id:   body.createdByStaffId    ?? null,
+      created_by_staff_name: body.createdByStaffName  ?? null,
       updated_at:       new Date().toISOString(),
     });
     if (orderErr) throw orderErr;

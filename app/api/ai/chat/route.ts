@@ -14,6 +14,7 @@ import {
   HarmCategory,
   HarmBlockThreshold,
 } from '@google/generative-ai';
+import { resolveRestaurantName } from '@/lib/config-server';
 
 export const dynamic     = 'force-dynamic';
 export const maxDuration = 30;
@@ -69,9 +70,7 @@ interface AssistantResponse {
 
 // ─── System prompt ────────────────────────────────────────────────────────────
 
-function buildSystemPrompt(menu: MenuItem[], cart: CartItem[]): string {
-  const restaurantName = process.env.RESTAURANT_NAME ?? 'Foodie Lover';
-
+function buildSystemPrompt(menu: MenuItem[], cart: CartItem[], restaurantName: string): string {
   const menuLines = menu
     .filter(m => m.available !== false)
     .map(m => {
@@ -235,10 +234,11 @@ export async function POST(req: NextRequest) {
 
   // ── Build Gemini client ───────────────────────────────────────────────────
   const genAI = new GoogleGenerativeAI(apiKey);
+  const restaurantName = (await resolveRestaurantName()).value;
 
   const model = genAI.getGenerativeModel({
     model: 'gemini-2.5-flash',
-    systemInstruction: buildSystemPrompt(menu, cart),
+    systemInstruction: buildSystemPrompt(menu, cart, restaurantName),
     generationConfig: {
       temperature:     0.4,
       maxOutputTokens: 2048,  // 800 was too low for multi-item recommendations

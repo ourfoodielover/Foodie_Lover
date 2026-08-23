@@ -546,6 +546,7 @@ function TablePageInner() {
         subtotal,
         total: subtotal,
         source: 'table-qr',
+        notes: specialNote.trim() || undefined,
       });
       setCart({});
       setSpecialNote('');

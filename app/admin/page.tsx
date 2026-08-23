@@ -66,6 +66,7 @@ const btn   = (bg='#E65C00',c='white') => ({ background:bg, color:c, border:'non
 const emptyItem = ():Partial<MenuItem> => ({ category:'Non Veg Biryani', name:'', desc:'', price:0, img:'', badge:'', available:true, variants:[] });
 
 const AnalyticsCharts = lazy(() => import('@/components/AnalyticsCharts'));
+const AdminFinance    = lazy(() => import('@/components/AdminFinance'));
 
 export default function AdminPage() {
   const [orders,      setOrders]      = useState<Order[]>([]);
@@ -81,7 +82,7 @@ export default function AdminPage() {
   const [authChecked, setAuthChecked]   = useState(false);
 
   // ── Navigation ──
-  type Section = 'overview'|'orders'|'sales'|'menu'|'offers'|'tables'|'fraud'|'staff'|'email'|'feedback'|'spin'|'rewards_audit'|'kitchen';
+  type Section = 'overview'|'orders'|'sales'|'finance'|'menu'|'offers'|'tables'|'fraud'|'staff'|'email'|'feedback'|'spin'|'rewards_audit'|'kitchen';
   const [section, setSection] = useState<Section>('overview');
 
   // ── Tabs / filters ──
@@ -181,6 +182,11 @@ export default function AdminPage() {
   const [managerPinMsg, setManagerPinMsg] = useState('');
   const [editPinId,  setEditPinId]  = useState('');
   const [editPinVal, setEditPinVal] = useState('');
+  // ── Configuration diagnostics (ENV vs Admin vs Default) ──────────────────
+  interface ConfigDiagEntry { label: string; value: string; source: 'env'|'admin'|'default'; envVar?: string; adminKey?: string; adminValueShadowed?: string | null }
+  interface SecretDiagEntry { label: string; envVar: string; configured: boolean }
+  const [configDiag,    setConfigDiag]    = useState<{ settings: ConfigDiagEntry[]; secrets: SecretDiagEntry[] } | null>(null);
+  const [configDiagErr, setConfigDiagErr] = useState('');
 
   // ── Delivery accounts state ──
   const [deliveryAccounts,  setDeliveryAccounts]  = useState<StaffMember[]>([]);
@@ -431,6 +437,22 @@ export default function AdminPage() {
       })
       .catch(e => console.error('[admin] failed to load kitchen mode:', e));
   }, [router]);
+
+  // ── Configuration diagnostics — refetched every time the Staff/Settings tab
+  // is opened (cheap read-only query) so an Admin who just changed something
+  // in Vercel or the dashboard always sees the current effective value/source
+  // without needing to reload the whole page.
+  useEffect(() => {
+    if (section !== 'staff') return;
+    setConfigDiagErr('');
+    fetch('/api/admin/config-diagnostics')
+      .then(r => r.json())
+      .then((d: { settings?: ConfigDiagEntry[]; secrets?: SecretDiagEntry[]; error?: string }) => {
+        if (d.error) { setConfigDiagErr(d.error); return; }
+        setConfigDiag({ settings: d.settings ?? [], secrets: d.secrets ?? [] });
+      })
+      .catch(e => setConfigDiagErr(e instanceof Error ? e.message : 'Failed to load configuration diagnostics'));
+  }, [section]);
 
   useEffect(() => {
     if (!authChecked) return;
@@ -1333,6 +1355,7 @@ export default function AdminPage() {
         <NavBtn id="overview" label="📋 Overview"         />
         <NavBtn id="orders"   label="🧾 Orders"           />
         <NavBtn id="sales"    label="📊 Sales Report"     />
+        <NavBtn id="finance"  label="💰 Finance"          />
         <NavBtn id="menu"     label="🍽️ Menu Management" />
         <NavBtn id="offers"   label="🎁 Offers"           />
         <NavBtn id="tables"   label="🪑 Tables"           />
@@ -1726,6 +1749,52 @@ export default function AdminPage() {
             </div>
           </div>
 
+          {/* ── Order Source Breakdown ──────────────────────────────────────────
+              Shows how orders actually reached the kitchen — self-service QR,
+              waiter-assisted, staff-entered counter/pickup, or online — so the
+              owner can see real QR adoption. Computed client-side from the
+              same periodOrders already loaded for this report; orders.source
+              is metadata only and never affects any total above (see
+              docs/staff-ordering-implementation-report.md §13/§14). */}
+          <div style={card()}>
+            <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:'0.98rem',fontWeight:700,marginBottom:'0.75rem',color:'#1A0800'}}>📊 {salesTab==='today'?"Today's":salesTab==='week'?"This Week's":salesTab==='month'?"This Month's":'Custom Period'} Orders by Source</h3>
+            {!periodOrders.length
+              ? <div style={{color:'#999',fontSize:'0.85rem'}}>No data for this period</div>
+              : (() => {
+                  const SOURCE_LABELS: Record<string,{label:string;color:string}> = {
+                    'table-qr': { label: '📱 QR Self-Order (Dine-in)', color: '#16a34a' },
+                    'online':   { label: '🌐 Online',                  color: '#2563eb' },
+                    'waiter':   { label: '🛎️ Waiter-Assisted',         color: '#7c3aed' },
+                    'counter':  { label: '🧾 Counter / Pickup Staff',  color: '#f59e0b' },
+                    'in-store': { label: '🏪 Other / Legacy',          color: '#6b7280' },
+                  };
+                  const counts: Record<string, number> = {};
+                  periodOrders.forEach(o => {
+                    const key = o.source && SOURCE_LABELS[o.source] ? o.source : 'in-store';
+                    counts[key] = (counts[key] || 0) + 1;
+                  });
+                  const total = periodOrders.length;
+                  return (
+                    <div style={{display:'flex',flexDirection:'column',gap:'0.5rem'}}>
+                      {Object.entries(counts).sort((a,b)=>b[1]-a[1]).map(([key,n]) => {
+                        const meta = SOURCE_LABELS[key] ?? SOURCE_LABELS['in-store'];
+                        const pct = total > 0 ? Math.round((n/total)*100) : 0;
+                        return (
+                          <div key={key} style={{display:'flex',alignItems:'center',gap:'0.6rem'}}>
+                            <div style={{width:170,fontSize:'0.8rem',fontWeight:700,color:'#1A0800',flexShrink:0}}>{meta.label}</div>
+                            <div style={{flex:1,background:'#f3f0ea',borderRadius:6,height:18,overflow:'hidden'}}>
+                              <div style={{width:`${pct}%`,background:meta.color,height:'100%',borderRadius:6,transition:'width .3s'}} />
+                            </div>
+                            <div style={{width:90,fontSize:'0.78rem',color:'#666',textAlign:'right',flexShrink:0}}>{n} · {pct}%</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()
+            }
+          </div>
+
           {/* Breakdown table */}
           <div style={card()}>
             <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:'0.98rem',fontWeight:700,marginBottom:'0.75rem',color:'#1A0800'}}>
@@ -1778,6 +1847,13 @@ export default function AdminPage() {
             </div>
           )}
         </>}
+
+        {/* ═══════════ FINANCE / CASH FLOW ═══════════ */}
+        {section==='finance' && (
+          <Suspense fallback={<div style={{padding:'2rem',textAlign:'center',color:'#94a3b8'}}>Loading Finance…</div>}>
+            <AdminFinance adminName={authSession?.name || 'Admin'} />
+          </Suspense>
+        )}
 
         {/* ═══════════ MENU ═══════════ */}
         {section==='menu' && <>
@@ -2282,6 +2358,62 @@ export default function AdminPage() {
 
         {/* ═══════════ STAFF ═══════════ */}
         {section==='staff' && <>
+
+          {/* ── Configuration Diagnostics ── */}
+          <div style={card('#0d9488')}>
+            <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:'1rem',fontWeight:700,marginBottom:'0.2rem',color:'#1A0800'}}>⚙️ Configuration</h3>
+            <p style={{fontSize:'0.78rem',color:'#888',marginBottom:'0.85rem'}}>
+              Where each setting's active value is currently coming from. Environment Variable always wins when configured — change it in Vercel and redeploy to take effect.
+            </p>
+            {configDiagErr && <div style={{fontSize:'0.78rem',color:'#ef4444',marginBottom:'0.6rem'}}>❌ {configDiagErr}</div>}
+            {!configDiag && !configDiagErr && <div style={{fontSize:'0.8rem',color:'#999'}}>Loading…</div>}
+            {configDiag && (
+              <>
+                <div style={{display:'grid',gap:'0.6rem'}}>
+                  {configDiag.settings.map(s => {
+                    const sourceLabel = s.source==='env' ? 'Environment' : s.source==='admin' ? 'Admin' : 'Default';
+                    const sourceColor = s.source==='env' ? '#7c3aed' : s.source==='admin' ? '#16a34a' : '#888';
+                    return (
+                      <div key={s.label} style={{border:'1px solid #eee',borderRadius:10,padding:'0.65rem 0.85rem'}}>
+                        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:'0.4rem'}}>
+                          <div style={{fontWeight:700,fontSize:'0.85rem',color:'#1A0800'}}>{s.label}</div>
+                          <span style={{background:sourceColor+'20',color:sourceColor,fontWeight:800,fontSize:'0.65rem',padding:'0.15rem 0.5rem',borderRadius:20,textTransform:'uppercase',letterSpacing:'0.03em'}}>Source: {sourceLabel}</span>
+                        </div>
+                        <div style={{fontSize:'0.82rem',color:'#333',marginTop:'0.25rem'}}>Effective: <strong>{s.value}</strong></div>
+                        {s.source === 'env' && (
+                          <div style={{fontSize:'0.72rem',color:'#7c3aed',marginTop:'0.3rem',fontWeight:600}}>
+                            🔒 Controlled by Environment Variable <code style={{background:'#f5f0ff',padding:'0.05rem 0.35rem',borderRadius:4}}>{s.envVar}</code>
+                            {s.adminValueShadowed != null && s.adminValueShadowed !== '' && (
+                              <> — Admin value on file (<em>not active</em>): &ldquo;{s.adminValueShadowed}&rdquo;. Environment override active.</>
+                            )}
+                          </div>
+                        )}
+                        {s.source !== 'env' && s.envVar && (
+                          <div style={{fontSize:'0.68rem',color:'#aaa',marginTop:'0.25rem'}}>
+                            Can be overridden by setting <code style={{background:'#f5f5f5',padding:'0.05rem 0.35rem',borderRadius:4}}>{s.envVar}</code> (requires redeploy).
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{fontSize:'0.72rem',fontWeight:700,color:'#888',textTransform:'uppercase',letterSpacing:'0.04em',margin:'1rem 0 0.5rem'}}>Secrets (values never shown)</div>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))',gap:'0.5rem'}}>
+                  {configDiag.secrets.map(sec => (
+                    <div key={sec.envVar} style={{border:'1px solid #eee',borderRadius:8,padding:'0.5rem 0.7rem',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                      <div>
+                        <div style={{fontSize:'0.78rem',fontWeight:700,color:'#1A0800'}}>{sec.label}</div>
+                        <code style={{fontSize:'0.65rem',color:'#999'}}>{sec.envVar}</code>
+                      </div>
+                      <span style={{fontSize:'0.7rem',fontWeight:800,color: sec.configured ? '#16a34a' : '#dc2626'}}>
+                        {sec.configured ? '✅ Configured' : '❌ Not Set'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
 
           {/* ── Admin PIN Change ── */}
           <div style={card('#E65C00')}>

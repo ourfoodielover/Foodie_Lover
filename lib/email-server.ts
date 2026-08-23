@@ -8,6 +8,7 @@
 
 import { getServerClient, newId, generateSpinToken } from '@/lib/supabase-server';
 import { sendEmail } from '@/lib/email';
+import { resolveRestaurantName } from '@/lib/config-server';
 
 // ─── Email deduplication log ──────────────────────────────────────────────────
 /**
@@ -50,7 +51,13 @@ const RETRY_DELAY_MS = [0, 60_000, 5 * 60_000] as const; // ms per retry slot
 const MAX_RETRIES    = 3;
 
 // ─── Brand name + app base URL ────────────────────────────────────────────────
-const RESTAURANT_NAME = process.env.RESTAURANT_NAME ?? 'Foodie Lover';
+// Restaurant name is resolved per-send via resolveRestaurantName() (ENV
+// RESTAURANT_NAME > Admin restaurant_settings.restaurant_name > 'Foodie Lover')
+// so an Admin-panel name change reaches the next email sent — no module-level
+// constant, no redeploy required. See lib/config-server.ts. Each build*Html()
+// helper below takes a `restaurantName` parameter and aliases it to the local
+// name `RESTAURANT_NAME` as its first line, so every existing template string
+// below is unchanged.
 
 // NEXT_PUBLIC_APP_URL must be set to your canonical production domain in Vercel.
 // Example: https://www.ourfoodielover.com
@@ -114,7 +121,8 @@ function trackingButtonHtml(orderId: string, token: string, label: string, color
 
 // ─── Build HTML receipt ───────────────────────────────────────────────────────
 
-function buildReceiptHtml(order: Record<string, unknown>, items: Record<string, unknown>[]): string {
+function buildReceiptHtml(order: Record<string, unknown>, items: Record<string, unknown>[], restaurantName: string): string {
+  const RESTAURANT_NAME = restaurantName;
   const orderId   = (order.id as string) || '';
   const orderNum  = (order.order_number as number) ?? String(orderId).slice(-6);
   const custName  = (order.customer_name  as string) || 'Valued Customer';
@@ -292,8 +300,10 @@ async function dispatchViaResend(
 function buildTabReceiptHtml(
   tab:    Record<string, unknown>,
   orders: { order: Record<string, unknown>; items: Record<string, unknown>[] }[],
-  emailOverride?: string,
+  emailOverride: string | undefined,
+  restaurantName: string,
 ): string {
+  const RESTAURANT_NAME = restaurantName;
   const custName   = (tab.customer_name  as string) || 'Valued Customer';
   const custEmail  = emailOverride || (tab.customer_email as string) || '';
   const payment    = ((tab.payment_method as string) || 'Cash').toUpperCase();
@@ -574,7 +584,8 @@ export async function sendReceiptEmail(
 
     // 4. Build email
     const items: Record<string, unknown>[] = (raw.order_items as Record<string, unknown>[]) ?? [];
-    const html     = buildReceiptHtml(raw as Record<string, unknown>, items);
+    const RESTAURANT_NAME = (await resolveRestaurantName()).value;
+    const html     = buildReceiptHtml(raw as Record<string, unknown>, items, RESTAURANT_NAME);
     const orderNum = (raw.order_number as number) ?? String(raw.id).slice(-6);
     const subject  = `Your ${RESTAURANT_NAME} Receipt — Order #${orderNum}`;
 
@@ -673,7 +684,8 @@ export async function sendTabReceiptEmail(
       order: o as Record<string, unknown>,
       items: (o.order_items as Record<string, unknown>[]) ?? [],
     }));
-    const html       = buildTabReceiptHtml(tab as Record<string, unknown>, ordersForHtml, emailOverride);
+    const RESTAURANT_NAME = (await resolveRestaurantName()).value;
+    const html       = buildTabReceiptHtml(tab as Record<string, unknown>, ordersForHtml, emailOverride, RESTAURANT_NAME);
     // Use table name if present, else humanise the raw table_id (tbl_01 → Table 1)
     const rawTableId = (tab.table_id as string) || '';
     const tablePart  =
@@ -832,7 +844,8 @@ export async function processEmailQueue(): Promise<{
 
 // ─── HTML builders ─────────────────────────────────────────────────────────
 
-function buildConfirmationHtml(order: Record<string, unknown>, items: Record<string, unknown>[]): string {
+function buildConfirmationHtml(order: Record<string, unknown>, items: Record<string, unknown>[], restaurantName: string): string {
+  const RESTAURANT_NAME = restaurantName;
   const orderId       = (order.id as string) || '';
   const orderNum      = (order.order_number as number) ?? String(orderId).slice(-6);
   const custName      = (order.customer_name as string) || 'Valued Customer';
@@ -899,7 +912,8 @@ function buildConfirmationHtml(order: Record<string, unknown>, items: Record<str
 </html>`;
 }
 
-function buildOrderReadyHtml(order: Record<string, unknown>): string {
+function buildOrderReadyHtml(order: Record<string, unknown>, restaurantName: string): string {
+  const RESTAURANT_NAME = restaurantName;
   const orderId       = (order.id as string) || '';
   const orderNum      = (order.order_number as number) ?? String(orderId).slice(-6);
   const custName      = (order.customer_name as string) || 'Valued Customer';
@@ -978,7 +992,7 @@ export async function sendOrderConfirmationEmail(orderId: string): Promise<void>
 
     const orderNum = (raw.order_number as number) ?? String(raw.id).slice(-6);
     const items    = (raw.order_items as Record<string, unknown>[]) ?? [];
-    const html     = buildConfirmationHtml(raw as Record<string, unknown>, items);
+    const html     = buildConfirmationHtml(raw as Record<string, unknown>, items, (await resolveRestaurantName()).value);
     const subject  = `Order Confirmed — #${orderNum} 🍽️`;
 
     console.info(`${TAG} Sending confirmation to ${email}`);
@@ -1035,10 +1049,11 @@ export async function sendOrderReadyEmail(orderId: string): Promise<void> {
     const orderNum  = (raw.order_number as number) ?? String(raw.id).slice(-6);
     const typeRaw   = (raw.type as string) || 'pickup';
     const isDelivery = typeRaw === 'delivery';
+    const RESTAURANT_NAME = (await resolveRestaurantName()).value;
     const subject   = isDelivery
       ? `Your ${RESTAURANT_NAME} Order #${orderNum} is On Its Way! 🛵`
       : `Your ${RESTAURANT_NAME} Order #${orderNum} is Ready! 🏪`;
-    const html      = buildOrderReadyHtml(raw as Record<string, unknown>);
+    const html      = buildOrderReadyHtml(raw as Record<string, unknown>, RESTAURANT_NAME);
 
     console.info(`${TAG} Sending ready notification to ${email}`);
     const result = await sendEmail({ to: email, subject, html });
@@ -1092,6 +1107,7 @@ export async function sendOutForDeliveryEmail(orderId: string): Promise<void> {
     const orderNum      = (raw.order_number as number) ?? String(raw.id).slice(-6);
     const custName      = (raw.customer_name as string) || 'there';
     const trackingToken = (raw.tracking_token as string) || '';
+    const RESTAURANT_NAME = (await resolveRestaurantName()).value;
 
     const html = `<!DOCTYPE html>
 <html>
@@ -1199,6 +1215,8 @@ export async function sendRewardEmail(args: RewardEmailArgs): Promise<void> {
       ? `<tr><td style="color:#555;padding:4px 0;font-size:13px;">Maximum Discount</td><td style="font-weight:600;padding:4px 0;font-size:13px;text-align:right;">₹${maxDiscount}</td></tr>`
       : '';
 
+    const RESTAURANT_NAME = (await resolveRestaurantName()).value;
+
     const html = `<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/></head>
@@ -1257,8 +1275,10 @@ function buildSpinInviteHtml(args: {
   customerName: string;
   orderTotal?:  number;
   orderType?:   string;
+  restaurantName: string;
 }): string {
-  const { spinUrl, customerName, orderTotal, orderType } = args;
+  const { spinUrl, customerName, orderTotal, orderType, restaurantName } = args;
+  const RESTAURANT_NAME = restaurantName;
   const typeLabel =
     orderType === 'delivery' ? 'delivery order' :
     orderType === 'pickup'   ? 'pickup order'   :
@@ -1364,12 +1384,14 @@ export async function sendSpinInviteEmail(args: {
       ? `orderId=${encodeURIComponent(orderId)}`
       : `tabId=${encodeURIComponent(tabId!)}`;
     const spinUrl = `${APP_BASE_URL}/spin?${entityParam}&token=${encodeURIComponent(spinToken)}`;
+    const RESTAURANT_NAME = (await resolveRestaurantName()).value;
 
     const html    = buildSpinInviteHtml({
       spinUrl,
       customerName: customerName || 'Valued Customer',
       orderTotal,
       orderType,
+      restaurantName: RESTAURANT_NAME,
     });
     const subject = `🎡 You've unlocked Spin & Win at ${RESTAURANT_NAME}!`;
 

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/supabase-server';
+import { parseNumber } from '@/lib/config-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,6 +25,11 @@ export async function GET(req: NextRequest) {
   if (!config?.enabled) {
     return NextResponse.json({ eligible: false, reason: 'Spin & Win is not currently active' });
   }
+
+  // Numeric guard: an invalid/corrupted min_order_amount must never silently
+  // resolve to NaN (which would make every `total < NaN` comparison false and
+  // let every order qualify) — fall back to 0 (no minimum) and log a warning.
+  const minOrderAmount = parseNumber(String(config.min_order_amount ?? ''), 'spin_config.min_order_amount') ?? 0;
 
   // ── TAB-BASED SPIN (dine-in) ────────────────────────────────────────────
   if (tabId) {
@@ -57,8 +63,8 @@ export async function GET(req: NextRequest) {
     }
 
     // Check amount
-    if (Number(tab.total ?? 0) < Number(config.min_order_amount)) {
-      return NextResponse.json({ eligible: false, reason: `Minimum qualifying amount is ₹${config.min_order_amount}` });
+    if (Number(tab.total ?? 0) < minOrderAmount) {
+      return NextResponse.json({ eligible: false, reason: `Minimum qualifying amount is ₹${minOrderAmount}` });
     }
 
     // Check email
@@ -118,8 +124,8 @@ export async function GET(req: NextRequest) {
   }
 
   // Check amount
-  if (Number(order.total ?? 0) < Number(config.min_order_amount)) {
-    return NextResponse.json({ eligible: false, reason: `Minimum qualifying amount is ₹${config.min_order_amount}` });
+  if (Number(order.total ?? 0) < minOrderAmount) {
+    return NextResponse.json({ eligible: false, reason: `Minimum qualifying amount is ₹${minOrderAmount}` });
   }
 
   if (config.require_email && !order.customer_email) {

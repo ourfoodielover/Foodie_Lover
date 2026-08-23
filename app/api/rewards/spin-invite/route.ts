@@ -27,6 +27,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, generateSpinToken } from '@/lib/supabase-server';
 import { sendSpinInviteEmail } from '@/lib/email-server';
+import { resolveRestaurantName, parseNumber } from '@/lib/config-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -42,9 +43,10 @@ function buildResultSummaryHtml(args: {
   minNextOrder?: number;
   maxDiscount?:  number;
   spinUrl:       string;
+  restaurantName: string;
 }): string {
-  const RESTAURANT_NAME = process.env.RESTAURANT_NAME ?? 'Foodie Lover';
-  const { customerName, isWinner, rewardLabel, rewardType, couponCode, expiresAt, minNextOrder, maxDiscount, spinUrl } = args;
+  const { customerName, isWinner, rewardLabel, rewardType, couponCode, expiresAt, minNextOrder, maxDiscount, spinUrl, restaurantName } = args;
+  const RESTAURANT_NAME = restaurantName;
 
   const expiryFormatted = expiresAt
     ? new Date(expiresAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
@@ -118,7 +120,7 @@ export async function POST(req: NextRequest) {
 
     const sb  = getServerClient();
     const rid = process.env.NEXT_PUBLIC_RESTAURANT_ID ?? 'rest_default';
-    const RESTAURANT_NAME = process.env.RESTAURANT_NAME ?? 'Foodie Lover';
+    const RESTAURANT_NAME = (await resolveRestaurantName(rid)).value;
     const APP_BASE_URL = (process.env.NEXT_PUBLIC_APP_URL ?? '').replace(/\/$/, '');
 
     // ── 1. Load spin config ─────────────────────────────────────────────────
@@ -225,10 +227,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ sent: false, reason: 'Order/tab is not yet completed or closed' }, { status: 400 });
     }
 
-    if (entityTotal < Number(config.min_order_amount)) {
+    // Numeric guard: an invalid/corrupted min_order_amount must never silently
+    // resolve to NaN (which would make `entityTotal < NaN` always false and let
+    // every order qualify) — fall back to 0 (no minimum) and log a warning.
+    const minOrderAmount = parseNumber(String(config.min_order_amount ?? ''), 'spin_config.min_order_amount') ?? 0;
+    if (entityTotal < minOrderAmount) {
       return NextResponse.json({
         sent: false,
-        reason: `Total ₹${entityTotal.toFixed(0)} is below the minimum qualifying amount of ₹${config.min_order_amount}`,
+        reason: `Total ₹${entityTotal.toFixed(0)} is below the minimum qualifying amount of ₹${minOrderAmount}`,
       }, { status: 400 });
     }
 
@@ -288,6 +294,7 @@ export async function POST(req: NextRequest) {
         minNextOrder: coupon?.min_next_order as number | undefined,
         maxDiscount:  coupon?.max_discount as number | undefined,
         spinUrl,
+        restaurantName: RESTAURANT_NAME,
       });
       const subject = `Your Spin & Win result at ${RESTAURANT_NAME}`;
 

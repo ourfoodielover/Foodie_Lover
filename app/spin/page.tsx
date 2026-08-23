@@ -20,8 +20,14 @@
 import { useState, useEffect, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 
-const RESTAURANT_NAME =
-  typeof process !== 'undefined' ? (process.env.NEXT_PUBLIC_RESTAURANT_NAME ?? 'Foodie Lover') : 'Foodie Lover';
+// Restaurant name is resolved server-side (ENV RESTAURANT_NAME > Admin
+// restaurant_settings.restaurant_name > 'Foodie Lover') and fetched from
+// /api/admin/restaurant-config below — NOT read from a NEXT_PUBLIC_* env var.
+// A NEXT_PUBLIC_RESTAURANT_NAME value would be baked into the client bundle at
+// build time and could never reflect an Admin-panel change without a redeploy;
+// fetching the already-resolved value keeps this page in sync with the same
+// priority rule every other consumer uses. See lib/config-server.ts.
+const DEFAULT_RESTAURANT_NAME = 'Foodie Lover';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -70,11 +76,25 @@ function SpinPageInner() {
   const [reason,      setReason]     = useState<string>('');
   const [spinResult,  setSpinResult] = useState<SpinResult | null>(null);
   const [customerName, setCustomerName] = useState<string>('');
+  const [restaurantName, setRestaurantName] = useState<string>(DEFAULT_RESTAURANT_NAME);
 
   // Wheel state
   const [wheelRewards, setWheelRewards] = useState<WheelReward[]>([]);
   const [spinDeg,      setSpinDeg]      = useState(0);
   const [animating,    setAnimating]    = useState(false);
+
+  // ── On mount: resolve the effective restaurant name (ENV > Admin > default) ──
+  // Independent of the spin-verify flow below so a slow/failed fetch here never
+  // blocks spin eligibility from loading — worst case this page just keeps
+  // showing the safe 'Foodie Lover' default a moment longer.
+  useEffect(() => {
+    fetch('/api/admin/restaurant-config')
+      .then(r => r.json())
+      .then((d: { restaurant_name?: string }) => {
+        if (d.restaurant_name) setRestaurantName(d.restaurant_name);
+      })
+      .catch(() => { /* keep default */ });
+  }, []);
 
   // ── On mount: verify token + load wheel rewards ───────────────────────────
   useEffect(() => {
@@ -244,7 +264,7 @@ function SpinPageInner() {
           <div style={header}>
             <div style={{ fontSize: 48, marginBottom: 8 }}>🎡</div>
             <h1 style={{ margin: 0, fontSize: 24, fontWeight: 900, color: 'white' }}>Spin &amp; Win</h1>
-            <p style={{ margin: '6px 0 0', fontSize: 13, color: 'rgba(255,255,255,0.85)' }}>{RESTAURANT_NAME}</p>
+            <p style={{ margin: '6px 0 0', fontSize: 13, color: 'rgba(255,255,255,0.85)' }}>{restaurantName}</p>
           </div>
           <div style={{ ...body, textAlign: 'center', padding: '48px 24px' }}>
             <div style={{ fontSize: 36, marginBottom: 12 }}>⏳</div>
@@ -263,12 +283,12 @@ function SpinPageInner() {
           <div style={{ ...header, background: '#1e293b' }}>
             <div style={{ fontSize: 48, marginBottom: 8 }}>🔗</div>
             <h1 style={{ margin: 0, fontSize: 22, fontWeight: 900, color: 'white' }}>Link Problem</h1>
-            <p style={{ margin: '6px 0 0', fontSize: 13, color: 'rgba(255,255,255,0.75)' }}>{RESTAURANT_NAME}</p>
+            <p style={{ margin: '6px 0 0', fontSize: 13, color: 'rgba(255,255,255,0.75)' }}>{restaurantName}</p>
           </div>
           <div style={{ ...body, textAlign: 'center' }}>
             <p style={{ fontSize: 15, color: '#374151', marginBottom: 8 }}>{reason}</p>
             <p style={{ fontSize: 13, color: '#94a3b8' }}>
-              If you believe this is an error, please contact {RESTAURANT_NAME} for assistance.
+              If you believe this is an error, please contact {restaurantName} for assistance.
             </p>
           </div>
         </div>
@@ -284,12 +304,12 @@ function SpinPageInner() {
           <div style={header}>
             <div style={{ fontSize: 48, marginBottom: 8 }}>🎡</div>
             <h1 style={{ margin: 0, fontSize: 22, fontWeight: 900, color: 'white' }}>Spin &amp; Win</h1>
-            <p style={{ margin: '6px 0 0', fontSize: 13, color: 'rgba(255,255,255,0.85)' }}>{RESTAURANT_NAME}</p>
+            <p style={{ margin: '6px 0 0', fontSize: 13, color: 'rgba(255,255,255,0.85)' }}>{restaurantName}</p>
           </div>
           <div style={{ ...body, textAlign: 'center' }}>
             <div style={{ fontSize: 36, marginBottom: 12 }}>ℹ️</div>
             <p style={{ fontSize: 15, color: '#374151', marginBottom: 8 }}>{reason}</p>
-            <p style={{ fontSize: 13, color: '#94a3b8' }}>Thank you for visiting {RESTAURANT_NAME}!</p>
+            <p style={{ fontSize: 13, color: '#94a3b8' }}>Thank you for visiting {restaurantName}!</p>
           </div>
         </div>
       </div>
@@ -310,7 +330,7 @@ function SpinPageInner() {
             <h1 style={{ margin: 0, fontSize: 22, fontWeight: 900, color: 'white' }}>
               {spinResult.isWinner ? 'You Already Won!' : 'Spin Already Used'}
             </h1>
-            <p style={{ margin: '6px 0 0', fontSize: 13, color: 'rgba(255,255,255,0.85)' }}>{RESTAURANT_NAME}</p>
+            <p style={{ margin: '6px 0 0', fontSize: 13, color: 'rgba(255,255,255,0.85)' }}>{restaurantName}</p>
           </div>
           <div style={body}>
             {customerName && (
@@ -377,7 +397,7 @@ function SpinPageInner() {
             )}
 
             <div style={{ background: '#f5f3ff', borderRadius: 10, padding: '12px 14px', fontSize: 12, color: '#6b7280', border: '1px solid #ede9fe' }}>
-              Each qualifying order gives you <strong>one spin</strong>. Thank you for visiting {RESTAURANT_NAME}!
+              Each qualifying order gives you <strong>one spin</strong>. Thank you for visiting {restaurantName}!
             </div>
           </div>
         </div>
@@ -404,7 +424,7 @@ function SpinPageInner() {
           <h1 style={{ margin: 0, fontSize: 24, fontWeight: 900, color: 'white', letterSpacing: -0.5 }}>
             {showResult ? (spinResult?.isWinner ? 'You Won! 🎉' : 'Better Luck Next Time') : 'Spin & Win!'}
           </h1>
-          <p style={{ margin: '6px 0 0', fontSize: 13, color: 'rgba(255,255,255,0.85)' }}>{RESTAURANT_NAME}</p>
+          <p style={{ margin: '6px 0 0', fontSize: 13, color: 'rgba(255,255,255,0.85)' }}>{restaurantName}</p>
         </div>
 
         {/* Body */}
@@ -575,7 +595,7 @@ function SpinPageInner() {
                     </p>
                   )}
                   <p style={{ fontSize: 13, color: '#64748b', margin: '12px 0 0' }}>
-                    Use this coupon on your next order at {RESTAURANT_NAME}!
+                    Use this coupon on your next order at {restaurantName}!
                   </p>
                 </>
               ) : (
@@ -603,7 +623,7 @@ function SpinPageInner() {
 
         {/* Footer */}
         <div style={{ textAlign: 'center', padding: '16px', fontSize: 11, color: '#9ca3af' }}>
-          Thank you for choosing <strong style={{ color: '#7c3aed' }}>{RESTAURANT_NAME}</strong>! 🙏
+          Thank you for choosing <strong style={{ color: '#7c3aed' }}>{restaurantName}</strong>! 🙏
         </div>
       </div>
     </div>

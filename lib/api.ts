@@ -49,7 +49,10 @@ export interface Order {
   deliveredAt?:    string;   // ISO timestamp set when order is delivered
   cancelReason?:   string;
   kitchenRoute?:   string;   // 'not_set' | 'printer' | 'kitchen_display'
-  source?:         string;
+  source?:         string;   // 'table-qr' | 'online' | 'waiter' | 'counter' | 'in-store'
+  notes?:          string;   // order-level special instructions (e.g. "Less spicy, no onions")
+  createdByStaffId?:   string;  // staff.id of the waiter/counter staff who submitted this order (undefined for customer-originated orders)
+  createdByStaffName?: string;  // denormalised display name for the above
   phone?:          string;
   issueCount?:     number;    // increments each time customer reports "not received"
   timestamp:       string;
@@ -285,6 +288,9 @@ export async function createOrder(data: {
   trackingToken?:  string;
   deliveryAddress?:string;
   source?:         string;
+  notes?:              string;
+  createdByStaffId?:   string;
+  createdByStaffName?: string;
 }): Promise<Order> {
   return apiFetch<Order>('/api/orders', {
     method: 'POST',
@@ -382,6 +388,24 @@ export async function switchToKitchenDisplay(
     method: 'PATCH',
     body:   JSON.stringify({ action: 'switch_to_kitchen', by }),
   });
+}
+
+/**
+ * getKitchenRoutingMode — the restaurant-wide default for how a confirmed
+ * order reaches the kitchen: 'printer' (KOT ticket), 'kitchen_display'
+ * (Kitchen Display board), or 'ask' (waiter chooses per order). Wraps the
+ * same GET /api/admin/restaurant-config endpoint the main Waiter queue
+ * already polls inline — exposed here as a reusable typed function for the
+ * Take Order flow so a staff-submitted order can route itself the same way
+ * a manually-confirmed order would.
+ */
+export async function getKitchenRoutingMode(): Promise<'ask' | 'printer' | 'kitchen_display'> {
+  try {
+    const d = await apiFetch<{ kitchen_mode?: string }>('/api/admin/restaurant-config');
+    return d.kitchen_mode === 'printer' || d.kitchen_mode === 'kitchen_display' ? d.kitchen_mode : 'ask';
+  } catch {
+    return 'ask'; // safest fallback — lets the waiter choose explicitly rather than guessing
+  }
 }
 
 export async function applyDiscount(
@@ -501,6 +525,12 @@ export async function getTabs(status?: string, since?: string): Promise<Customer
 
 export async function createTab(data: {
   tableId?: string; customerName: string; partySize?: number; pin?: string; email?: string; phone?: string;
+  // Set when a waiter opens this tab on the customer's behalf (Staff-Assisted
+  // Ordering / Take Order). Server already accepted these two fields since
+  // the original schema (customer_tabs.waiter_id / waiter_name) — this client
+  // wrapper simply didn't expose them until now. Omitted entirely for a
+  // customer-created (QR) tab, exactly as before.
+  waiterId?: string; waiterName?: string;
 }): Promise<CustomerTab> {
   return apiFetch<CustomerTab>('/api/tabs', {
     method: 'POST',
@@ -1242,4 +1272,241 @@ export async function escalateIssue(issueId: string, by: string): Promise<OrderI
     method: 'PATCH',
     body:   JSON.stringify({ status: 'escalated', resolvedBy: by, restaurantId: rid() }),
   });
+}
+
+// ─── Finance / Cash Flow (Admin-only) ────────────────────────────────────────
+// All /api/finance/** routes require the admin PIN on every request (sent as
+// the x-admin-pin header for GETs, or in the JSON body for mutations) —
+// unlike most of this app's existing routes, Finance enforces real
+// server-side authorization (see lib/finance-server.ts on the server side).
+// The PIN is supplied by the caller (AdminFinance component keeps it only in
+// React state for the lifetime of the Finance view — never in localStorage)
+// and is never cached inside this module.
+
+async function financeFetch<T>(path: string, pin: string, options: RequestInit = {}): Promise<T> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', 'x-admin-pin': pin };
+  return apiFetch<T>(path, { ...options, headers: { ...headers, ...(options.headers as Record<string, string> | undefined) } });
+}
+
+/** Cheap call used purely to verify a PIN before unlocking the Finance UI. */
+export async function verifyFinancePin(pin: string): Promise<boolean> {
+  try {
+    await financeFetch<unknown>(`/api/finance/accounts?restaurantId=${rid()}`, pin);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export interface FinanceAccount {
+  id: string; name: string; type: 'cash'|'bank'|'digital'|'other';
+  openingBalance: number; paymentMethodKeywords: string[];
+  isDefault: boolean; isActive: boolean; sortOrder: number;
+}
+export interface FinanceCategory {
+  id: string; name: string; kind: 'income'|'expense'; color?: string; archived: boolean;
+}
+export interface FinanceTransaction {
+  id: string; type: 'income'|'expense'|'transfer'|'adjustment';
+  accountId: string; transferToAccountId?: string; categoryId?: string;
+  amount: number; description: string; occurredAt: string;
+  source: 'manual'|'vendor_payment'|'salary_payment'|'reconciliation'; sourceId?: string;
+  createdBy?: string; createdAt: string; updatedAt: string;
+  isVoided: boolean; voidedAt?: string; voidedBy?: string; voidedReason?: string;
+}
+export interface SystemSaleRow {
+  sourceType: 'dine-in-tab'|'order'; sourceId: string; occurredAt: string;
+  gross: number; discount: number; net: number; paymentMethod: string | null;
+  orderType?: string; customerName?: string;
+}
+export interface SystemSalesResponse {
+  summary: { count: number; gross: number; discount: number; net: number };
+  byType:  Record<string, { count: number; net: number }>;
+  byAccount: { accountId: string; name: string; net: number }[];
+  rows: SystemSaleRow[];
+  truncated: boolean;
+}
+export interface FinanceSummary {
+  from: string; to: string;
+  systemSales: { count: number; gross: number; discount: number; net: number };
+  managerExpenses: { count: number; total: number; byCategory: { category: string; total: number }[] };
+  ledger: { income: number; expense: number; vendorPaid: number; salaryPaid: number };
+  netCashFlow: number;
+}
+export interface Vendor {
+  id: string; name: string; contactName?: string; phone?: string; email?: string;
+  notes?: string; isActive: boolean; createdAt: string;
+}
+export interface VendorPurchase {
+  id: string; vendorId: string; description: string; amount: number;
+  amountPaid: number; amountDue: number; purchaseDate: string;
+  status: 'unpaid'|'partially_paid'|'paid'; createdBy?: string; createdAt: string; isVoided: boolean;
+}
+export interface VendorPayment {
+  id: string; vendorPurchaseId: string; vendorId: string; accountId: string;
+  amount: number; paidAt: string; note?: string; createdBy?: string; isVoided: boolean;
+}
+export interface SalaryConfig {
+  id: string; staffId: string; salaryType: 'monthly'|'daily'|'hourly';
+  amount: number; effectiveFrom: string; isActive: boolean; createdAt: string;
+}
+export interface SalaryPayment {
+  id: string; staffId: string; salaryConfigId?: string; accountId: string;
+  periodLabel: string; amount: number; paidAt: string; note?: string; isVoided: boolean;
+}
+export interface DailyClosing {
+  id: string; businessDate: string; snapshot: FinanceSummary; isClosed: boolean;
+  closedBy?: string; closedAt: string; reopenedBy?: string; reopenedAt?: string;
+  notes?: string; live?: FinanceSummary;
+}
+export interface FinanceAuditEntry {
+  id: string; entityType: string; entityId: string; action: string;
+  changedBy?: string; changedAt: string; before?: unknown; after?: unknown; note?: string;
+}
+
+// Accounts
+export async function listFinanceAccounts(pin: string, includeInactive = false): Promise<FinanceAccount[]> {
+  return financeFetch(`/api/finance/accounts?restaurantId=${rid()}${includeInactive ? '&includeInactive=1' : ''}`, pin);
+}
+export async function createFinanceAccount(pin: string, data: Partial<FinanceAccount> & { name: string; type: string }): Promise<{ id: string }> {
+  return financeFetch('/api/finance/accounts', pin, { method: 'POST', body: JSON.stringify({ ...data, restaurantId: rid(), pin }) });
+}
+export async function updateFinanceAccount(pin: string, id: string, data: Partial<FinanceAccount>): Promise<void> {
+  await financeFetch(`/api/finance/accounts/${id}`, pin, { method: 'PATCH', body: JSON.stringify({ ...data, restaurantId: rid(), pin }) });
+}
+
+// Categories
+export async function listFinanceCategories(pin: string, kind?: 'income'|'expense'): Promise<FinanceCategory[]> {
+  return financeFetch(`/api/finance/categories?restaurantId=${rid()}${kind ? `&kind=${kind}` : ''}`, pin);
+}
+export async function createFinanceCategory(pin: string, data: { name: string; kind: 'income'|'expense'; color?: string }): Promise<{ id: string }> {
+  return financeFetch('/api/finance/categories', pin, { method: 'POST', body: JSON.stringify({ ...data, restaurantId: rid(), pin }) });
+}
+
+// Transactions
+export async function listFinanceTransactions(pin: string, filters?: {
+  from?: string; to?: string; type?: string; accountId?: string; categoryId?: string; includeVoided?: boolean; limit?: number;
+}): Promise<FinanceTransaction[]> {
+  const params = new URLSearchParams({ restaurantId: rid() });
+  if (filters?.from) params.set('from', filters.from);
+  if (filters?.to) params.set('to', filters.to);
+  if (filters?.type) params.set('type', filters.type);
+  if (filters?.accountId) params.set('accountId', filters.accountId);
+  if (filters?.categoryId) params.set('categoryId', filters.categoryId);
+  if (filters?.includeVoided) params.set('includeVoided', '1');
+  if (filters?.limit) params.set('limit', String(filters.limit));
+  return financeFetch(`/api/finance/transactions?${params}`, pin);
+}
+export async function createFinanceTransaction(pin: string, data: {
+  type: 'income'|'expense'|'transfer'|'adjustment'; accountId: string; transferToAccountId?: string;
+  categoryId?: string; amount: number; description?: string; occurredAt?: string; by?: string;
+}): Promise<{ id: string }> {
+  return financeFetch('/api/finance/transactions', pin, { method: 'POST', body: JSON.stringify({ ...data, restaurantId: rid(), pin }) });
+}
+export async function updateFinanceTransaction(pin: string, id: string, data: {
+  amount?: number; description?: string; categoryId?: string; accountId?: string; occurredAt?: string; by?: string;
+}): Promise<void> {
+  await financeFetch(`/api/finance/transactions/${id}`, pin, { method: 'PATCH', body: JSON.stringify({ ...data, restaurantId: rid(), pin }) });
+}
+export async function voidFinanceTransaction(pin: string, id: string, by: string, reason?: string): Promise<void> {
+  const params = new URLSearchParams({ restaurantId: rid(), by });
+  if (reason) params.set('reason', reason);
+  await financeFetch(`/api/finance/transactions/${id}?${params}`, pin, { method: 'DELETE' });
+}
+
+// System sales (live, read-only)
+export async function getSystemSales(pin: string, from: string, to: string): Promise<SystemSalesResponse> {
+  return financeFetch(`/api/finance/system-sales?restaurantId=${rid()}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, pin);
+}
+
+// Finance overview summary (live)
+export async function getFinanceSummary(pin: string, from: string, to: string): Promise<FinanceSummary> {
+  return financeFetch(`/api/finance/summary?restaurantId=${rid()}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, pin);
+}
+
+// Vendors
+export async function listVendors(pin: string, includeInactive = false): Promise<Vendor[]> {
+  return financeFetch(`/api/finance/vendors?restaurantId=${rid()}${includeInactive ? '&includeInactive=1' : ''}`, pin);
+}
+export async function createVendor(pin: string, data: { name: string; contactName?: string; phone?: string; email?: string; notes?: string }): Promise<{ id: string }> {
+  return financeFetch('/api/finance/vendors', pin, { method: 'POST', body: JSON.stringify({ ...data, restaurantId: rid(), pin }) });
+}
+export async function updateVendor(pin: string, id: string, data: Partial<Vendor>): Promise<void> {
+  await financeFetch(`/api/finance/vendors/${id}`, pin, { method: 'PATCH', body: JSON.stringify({ ...data, restaurantId: rid(), pin }) });
+}
+
+// Vendor purchases (payables)
+export async function listVendorPurchases(pin: string, filters?: { vendorId?: string; status?: string }): Promise<VendorPurchase[]> {
+  const params = new URLSearchParams({ restaurantId: rid() });
+  if (filters?.vendorId) params.set('vendorId', filters.vendorId);
+  if (filters?.status) params.set('status', filters.status);
+  return financeFetch(`/api/finance/vendor-purchases?${params}`, pin);
+}
+export async function createVendorPurchase(pin: string, data: { vendorId: string; description: string; amount: number; purchaseDate?: string; by?: string }): Promise<{ id: string }> {
+  return financeFetch('/api/finance/vendor-purchases', pin, { method: 'POST', body: JSON.stringify({ ...data, restaurantId: rid(), pin }) });
+}
+export async function voidVendorPurchase(pin: string, id: string, by: string, reason?: string): Promise<void> {
+  await financeFetch(`/api/finance/vendor-purchases/${id}`, pin, { method: 'PATCH', body: JSON.stringify({ action: 'void', by, reason, restaurantId: rid(), pin }) });
+}
+
+// Vendor payments
+export async function listVendorPayments(pin: string, filters?: { vendorPurchaseId?: string; vendorId?: string }): Promise<VendorPayment[]> {
+  const params = new URLSearchParams({ restaurantId: rid() });
+  if (filters?.vendorPurchaseId) params.set('vendorPurchaseId', filters.vendorPurchaseId);
+  if (filters?.vendorId) params.set('vendorId', filters.vendorId);
+  return financeFetch(`/api/finance/vendor-payments?${params}`, pin);
+}
+export async function createVendorPayment(pin: string, data: { vendorPurchaseId: string; accountId: string; amount: number; paidAt?: string; note?: string; by?: string }): Promise<{ id: string; purchaseStatus: string; amountPaid: number }> {
+  return financeFetch('/api/finance/vendor-payments', pin, { method: 'POST', body: JSON.stringify({ ...data, restaurantId: rid(), pin }) });
+}
+export async function voidVendorPayment(pin: string, id: string, by: string, reason?: string): Promise<void> {
+  const params = new URLSearchParams({ restaurantId: rid(), by });
+  if (reason) params.set('reason', reason);
+  await financeFetch(`/api/finance/vendor-payments/${id}?${params}`, pin, { method: 'DELETE' });
+}
+
+// Salary config + payments
+export async function listSalaryConfig(pin: string, staffId?: string): Promise<SalaryConfig[]> {
+  const params = new URLSearchParams({ restaurantId: rid() });
+  if (staffId) params.set('staffId', staffId);
+  return financeFetch(`/api/finance/salary-config?${params}`, pin);
+}
+export async function setSalaryConfig(pin: string, data: { staffId: string; salaryType: 'monthly'|'daily'|'hourly'; amount: number; effectiveFrom?: string; by?: string }): Promise<{ id: string }> {
+  return financeFetch('/api/finance/salary-config', pin, { method: 'POST', body: JSON.stringify({ ...data, restaurantId: rid(), pin }) });
+}
+export async function listSalaryPayments(pin: string, staffId?: string): Promise<SalaryPayment[]> {
+  const params = new URLSearchParams({ restaurantId: rid() });
+  if (staffId) params.set('staffId', staffId);
+  return financeFetch(`/api/finance/salary-payments?${params}`, pin);
+}
+export async function createSalaryPayment(pin: string, data: { staffId: string; salaryConfigId?: string; accountId: string; periodLabel: string; amount: number; paidAt?: string; note?: string; by?: string }): Promise<{ id: string }> {
+  return financeFetch('/api/finance/salary-payments', pin, { method: 'POST', body: JSON.stringify({ ...data, restaurantId: rid(), pin }) });
+}
+export async function voidSalaryPayment(pin: string, id: string, by: string, reason?: string): Promise<void> {
+  const params = new URLSearchParams({ restaurantId: rid(), by });
+  if (reason) params.set('reason', reason);
+  await financeFetch(`/api/finance/salary-payments/${id}?${params}`, pin, { method: 'DELETE' });
+}
+
+// Daily closings
+export async function getDailyClosing(pin: string, date: string): Promise<DailyClosing | null> {
+  return financeFetch(`/api/finance/closings?restaurantId=${rid()}&date=${date}`, pin);
+}
+export async function listDailyClosings(pin: string, limit = 30): Promise<DailyClosing[]> {
+  return financeFetch(`/api/finance/closings?restaurantId=${rid()}&limit=${limit}`, pin);
+}
+export async function closeDay(pin: string, date: string, by: string, notes?: string): Promise<{ id: string; reClosed: boolean }> {
+  return financeFetch('/api/finance/closings', pin, { method: 'POST', body: JSON.stringify({ date, by, notes, restaurantId: rid(), pin }) });
+}
+export async function reopenDay(pin: string, date: string, by: string, reason?: string): Promise<void> {
+  await financeFetch('/api/finance/closings/reopen', pin, { method: 'POST', body: JSON.stringify({ date, by, reason, restaurantId: rid(), pin }) });
+}
+
+// Audit log
+export async function getFinanceAuditLog(pin: string, filters?: { entityType?: string; entityId?: string; limit?: number }): Promise<FinanceAuditEntry[]> {
+  const params = new URLSearchParams({ restaurantId: rid() });
+  if (filters?.entityType) params.set('entityType', filters.entityType);
+  if (filters?.entityId) params.set('entityId', filters.entityId);
+  if (filters?.limit) params.set('limit', String(filters.limit));
+  return financeFetch(`/api/finance/audit-log?${params}`, pin);
 }

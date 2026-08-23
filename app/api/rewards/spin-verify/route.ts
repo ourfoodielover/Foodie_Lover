@@ -23,6 +23,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/supabase-server';
+import { parseNumber } from '@/lib/config-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -73,6 +74,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ valid: true, eligible: false, reason: 'Spin & Win is not currently active' });
   }
 
+  // Numeric guard: an invalid/corrupted min_order_amount must never silently
+  // resolve to NaN (which would make every `total < NaN` comparison false and
+  // let every order qualify) — fall back to 0 (no minimum) and log a warning.
+  const minOrderAmount = parseNumber(String(config.min_order_amount ?? ''), 'spin_config.min_order_amount') ?? 0;
+
   // ── ORDER path ──────────────────────────────────────────────────────────────
   if (orderId) {
     const { data: order } = await sb
@@ -94,10 +100,10 @@ export async function GET(req: NextRequest) {
 
     // Amount check
     const total = Number(order.total) || 0;
-    if (total < Number(config.min_order_amount)) {
+    if (total < minOrderAmount) {
       return NextResponse.json({
         valid: true, eligible: false,
-        reason: `Order total ₹${total.toFixed(0)} is below the minimum of ₹${config.min_order_amount}`,
+        reason: `Order total ₹${total.toFixed(0)} is below the minimum of ₹${minOrderAmount}`,
       });
     }
 
@@ -162,10 +168,10 @@ export async function GET(req: NextRequest) {
 
     // Amount check
     const total = Number(tab.total) || 0;
-    if (total < Number(config.min_order_amount)) {
+    if (total < minOrderAmount) {
       return NextResponse.json({
         valid: true, eligible: false,
-        reason: `Tab total ₹${total.toFixed(0)} is below the minimum of ₹${config.min_order_amount}`,
+        reason: `Tab total ₹${total.toFixed(0)} is below the minimum of ₹${minOrderAmount}`,
       });
     }
 

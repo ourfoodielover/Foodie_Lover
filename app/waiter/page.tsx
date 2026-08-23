@@ -1,7 +1,7 @@
 'use client';
 
 export const dynamic = 'force-dynamic';
-import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
+import { useState, useEffect, useCallback, useRef, Suspense, lazy } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   getOrders, updateOrderStatus, getTabs, getTables, closeShift,
@@ -15,6 +15,13 @@ import { useRealtime } from '@/lib/realtime-client';
 import { getSession, clearSession, AuthSession } from '@/lib/auth';
 import { formatTableName } from '@/lib/format';
 import { fmtTime } from '@/lib/date';
+
+// ── Staff-Assisted Ordering: "Take Order" experience ────────────────────────
+// Lazy-loaded so it never affects the waiter dashboard's initial bundle/load
+// time. Opened as a full-screen overlay (see takeOrderOpen below) — it does
+// NOT navigate away from this page, so the live order board keeps polling
+// underneath it.
+const WaiterTakeOrder = lazy(() => import('@/components/WaiterTakeOrder'));
 
 const STATUS_FLOW: Record<string, string> = {
   awaiting_waiter: 'pending',
@@ -83,6 +90,8 @@ function WaiterPageInner() {
   const [currentShiftId, setCurrentShiftId] = useState<string | null>(null);
   // Kitchen routing mode: loaded from admin config
   const [kitchenRoutingMode, setKitchenRoutingMode] = useState<'ask' | 'printer' | 'kitchen_display'>('ask');
+  // ── Staff-Assisted Ordering: "Take Order" full-screen overlay toggle ──────
+  const [takeOrderOpen, setTakeOrderOpen] = useState(false);
 
   // Track order IDs we've already alerted about so we don't re-alert on re-renders
   const seenOrderIds = useRef<Set<string>>(new Set());
@@ -585,6 +594,24 @@ function WaiterPageInner() {
             </button>
           </div>
         </div>
+      </div>
+
+      {/* ── ➕ TAKE ORDER — staff-assisted ordering for customers who can't/won't scan the table QR.
+          Deliberately large, high-contrast, and placed at the very top so it is impossible to miss
+          for low-tech staff. Opens WaiterTakeOrder as a full-screen overlay; does not navigate away. */}
+      <div style={{ padding: '0.85rem 1.25rem 0.2rem' }}>
+        <button
+          onClick={() => setTakeOrderOpen(true)}
+          style={{
+            width: '100%', background: 'linear-gradient(135deg,#E65C00,#c94c00)', color: 'white',
+            border: 'none', borderRadius: 14, padding: '1rem', fontFamily: 'Poppins,sans-serif',
+            fontWeight: 900, fontSize: '1.05rem', cursor: 'pointer', display: 'flex',
+            alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
+            boxShadow: '0 4px 14px rgba(230,92,0,0.35)',
+          }}
+        >
+          <span style={{ fontSize: '1.3rem' }}>➕</span> TAKE ORDER
+        </button>
       </div>
 
       {/* Error banner */}
@@ -1153,6 +1180,20 @@ function WaiterPageInner() {
             )}
           </div>
         </div>
+      )}
+
+      {/* ── Staff-Assisted "Take Order" full-screen overlay ── */}
+      {takeOrderOpen && session && (
+        <Suspense fallback={
+          <div style={{ position: 'fixed', inset: 0, background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300, fontFamily: 'Poppins,sans-serif', color: '#888' }}>
+            Loading…
+          </div>
+        }>
+          <WaiterTakeOrder
+            session={session}
+            onClose={() => { setTakeOrderOpen(false); void refresh(); }}
+          />
+        </Suspense>
       )}
     </div>
   );

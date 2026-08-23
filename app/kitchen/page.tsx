@@ -588,6 +588,16 @@ export default function KitchenPage() {
                   })}
                 </div>
 
+                {/* Special instructions — order-level note (e.g. "Less spicy, no onions").
+                    Same data the KOT printer already renders as "Note: …" — see
+                    migration_020_staff_ordering.sql / orders.notes. */}
+                {order.notes && (
+                  <div style={{ background: '#3f2d00', border: '1px solid #F9A826', borderRadius: 8, padding: '0.45rem 0.65rem', marginBottom: '0.6rem' }}>
+                    <div style={{ fontSize: '0.65rem', fontWeight: 800, color: '#F9A826', textTransform: 'uppercase', marginBottom: '0.1rem' }}>📝 Note</div>
+                    <div style={{ fontSize: '0.78rem', color: '#fde68a' }}>{order.notes}</div>
+                  </div>
+                )}
+
                 {/* Action buttons */}
                 <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.4rem' }}>
                   {nextAction && (

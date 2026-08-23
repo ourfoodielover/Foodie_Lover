@@ -553,7 +553,10 @@ function buildKotPayload(
         name: i.name,
         qty:  i.qty,
       })),
-    notes:     undefined,
+    // Order-level special instructions (e.g. "Less spicy, no onions") — see
+    // migration_020_staff_ordering.sql. Previously always undefined here even
+    // though the print agent already renders payload.notes when present.
+    notes:     (order.notes as string | null) ?? undefined,
     createdAt: new Date().toISOString(),
   };
 }

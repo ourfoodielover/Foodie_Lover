@@ -1,0 +1,72 @@
+-- ============================================================
+-- Migration 020 — Staff-Assisted Ordering / Waiter Take Order
+-- Foodie Lover POS
+--
+-- Run in Supabase SQL editor:
+--   https://supabase.com/dashboard/project/<project>/sql/new
+--
+-- SAFE TO RE-RUN: every statement uses IF NOT EXISTS.
+--
+-- WHAT THIS MIGRATION DOES
+-- -------------------------------------------------------------
+-- Adds the small set of columns needed so a waiter or counter staff
+-- member can place an order on a customer's behalf (dine-in add-to-tab,
+-- new dine-in guest, or pickup/counter order) while it flows through the
+-- EXACT SAME orders/order_items/order_events/print_jobs/customer_tabs
+-- pipeline every other order already uses.
+--
+-- Deliberately NOT added (existing columns/architecture already cover it):
+--   • order "source" values — orders.source already exists (migration
+--     from the original schema). We only start writing two new values
+--     into it ('waiter', 'counter') alongside the existing 'table-qr',
+--     'online', and default 'in-store'. No schema change needed for this.
+--   • per-tab waiter attribution — customer_tabs.waiter_id / waiter_name
+--     already exist (original schema) and POST /api/tabs already accepts
+--     them. We simply start passing them from the new Take Order UI.
+--   • table occupancy — POST /api/tabs already marks the table 'occupied'
+--     and PATCH /api/tabs/[id] already releases it when the last open tab
+--     on that table closes. No change needed — reused as-is.
+--
+-- Added here:
+--   1. orders.notes                 — order-level special instructions.
+--      This also FIXES a pre-existing dormant bug: app/table/page.tsx has
+--      always had a "Special Instructions" textarea (specialNote state)
+--      that was captured in the UI but never sent to the API or persisted
+--      anywhere — see docs/staff-ordering-implementation-report.md §12.
+--      The print agent (print-agent/index.js) already renders
+--      `payload.notes` on the ticket if present, so once this column
+--      exists and is wired through, notes reach the KOT with zero print
+--      agent changes.
+--   2. orders.created_by_staff_id   — accountability: which authenticated
+--      staff member (waiter/counter) submitted this order. NULL for
+--      customer-originated orders (QR, online) — never required.
+--   3. orders.created_by_staff_name — denormalised display name so the
+--      admin/manager UI never needs an extra join to show "Created by:".
+--
+-- Existing orders are completely unaffected — all three columns are
+-- nullable with no default, so every historical row simply reads NULL /
+-- undefined for them, exactly like any other optional column added in
+-- migrations 010/017/etc.
+-- ============================================================
+
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS notes                  TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_by_staff_id    TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_by_staff_name  TEXT;
+
+-- ── Index for the Admin "order source" breakdown (Sales Report) ────────────
+-- Cheap to add, makes `WHERE restaurant_id = ? AND source = ?`-style
+-- aggregation queries fast if the breakdown is ever moved server-side.
+CREATE INDEX IF NOT EXISTS idx_orders_source ON orders(restaurant_id, source);
+
+-- ============================================================
+-- Verification (run after applying):
+-- ============================================================
+-- SELECT column_name, data_type FROM information_schema.columns
+-- WHERE table_name = 'orders' AND column_name IN
+--   ('notes', 'created_by_staff_id', 'created_by_staff_name');
+--
+-- SELECT id, source, created_by_staff_name, notes FROM orders
+-- ORDER BY created_at DESC LIMIT 5;
+-- ============================================================
+-- END OF MIGRATION 020
+-- ============================================================

@@ -33,14 +33,28 @@ export async function GET() {
 
     // ── 3. Seed default restaurant settings (PINs, tax rate, etc.) ───────────
     // Non-secret settings: insert once, never overwrite (ignoreDuplicates: true).
+    // Key names here are the CANONICAL names — must match migration_008.sql's
+    // seed list exactly. They previously diverged (this route seeded
+    // 'allow_delivery'/'allow_pickup' while migration_008 seeded
+    // 'delivery_enabled'/'pickup_enabled' — the same concept under two
+    // different keys, so both existed simultaneously and neither was ever
+    // read by any consumer). Fixed as part of the configuration audit — see
+    // docs/configuration-report.md. A restaurant_settings row is per-key
+    // primary-keyed and ON CONFLICT DO NOTHING, so this change only affects
+    // NEW rows going forward; it does not retroactively touch any
+    // already-seeded 'allow_delivery'/'allow_pickup' rows on an existing
+    // database (those are harmless, unconsumed leftovers — see the report's
+    // optional cleanup note).
     const nonSecretSettings = [
       { key: 'tax_rate',             value: '5'    },
       { key: 'service_charge',       value: '0'    },
       { key: 'currency',             value: 'INR'  },
+      { key: 'currency_symbol',      value: '₹'    },
       { key: 'restaurant_name',      value: 'Foodie Lover' },
       { key: 'allow_table_ordering', value: 'true' },
-      { key: 'allow_pickup',         value: 'true' },
-      { key: 'allow_delivery',       value: 'true' },
+      { key: 'pickup_enabled',       value: 'true' },
+      { key: 'delivery_enabled',     value: 'true' },
+      { key: 'online_ordering',      value: 'false' },
       { key: 'waiter_call_cooldown', value: '120'  },
       { key: 'receipt_email_from',   value: ''     },
     ];
