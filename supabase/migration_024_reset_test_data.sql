@@ -149,6 +149,19 @@ BEGIN
     FROM spin_results
     WHERE order_id IN (SELECT id FROM orders WHERE restaurant_id = p_restaurant_id)
        OR tab_id   IN (SELECT id FROM customer_tabs WHERE restaurant_id = p_restaurant_id);
+  -- NOTE: also matches reserved_order_id/redeemed_order_id, not just
+  -- spin_id/source_order_id/source_tab_id — a coupon is typically ISSUED
+  -- from one order (source_order_id) and later RESERVED/REDEEMED on a
+  -- DIFFERENT, later order (reserved_order_id/redeemed_order_id is the
+  -- normal case, not an edge case). Both of those columns FK to orders(id)
+  -- with no confirmed-applied ON DELETE clause (migration_016 sets SET NULL,
+  -- but per this project's standing rule that migration's live-application
+  -- status can't be assumed) — so a coupon reserved/redeemed against an
+  -- order that isn't otherwise matched here would leave a dangling
+  -- restaurant_id-scoped order reference, undercounting the preview and
+  -- causing execute_test_data_reset's DELETE FROM orders to fail with an FK
+  -- violation. Matching all four columns keeps preview and execute correct
+  -- regardless of whether migration_016 has been applied.
   SELECT COUNT(*) INTO c_reward_coupons
     FROM reward_coupons
     WHERE spin_id IN (
@@ -156,8 +169,10 @@ BEGIN
             WHERE order_id IN (SELECT id FROM orders WHERE restaurant_id = p_restaurant_id)
                OR tab_id   IN (SELECT id FROM customer_tabs WHERE restaurant_id = p_restaurant_id)
           )
-       OR source_order_id IN (SELECT id FROM orders WHERE restaurant_id = p_restaurant_id)
-       OR source_tab_id   IN (SELECT id FROM customer_tabs WHERE restaurant_id = p_restaurant_id);
+       OR source_order_id   IN (SELECT id FROM orders WHERE restaurant_id = p_restaurant_id)
+       OR source_tab_id     IN (SELECT id FROM customer_tabs WHERE restaurant_id = p_restaurant_id)
+       OR reserved_order_id IN (SELECT id FROM orders WHERE restaurant_id = p_restaurant_id)
+       OR redeemed_order_id IN (SELECT id FROM orders WHERE restaurant_id = p_restaurant_id);
 
   SELECT COUNT(*) INTO c_order_issues     FROM order_issues     WHERE restaurant_id = p_restaurant_id;
   SELECT COUNT(*) INTO c_print_jobs       FROM print_jobs       WHERE restaurant_id = p_restaurant_id;
@@ -262,14 +277,36 @@ BEGIN
 
   -- ── Delete children before parents, in FK-safe order ─────────────────────
 
+  -- Break the circular FK between reward_coupons and orders/customer_tabs
+  -- BEFORE deleting reward_coupons: orders.coupon_id and customer_tabs.
+  -- coupon_id both FK to reward_coupons(id) with the Postgres default (no
+  -- ON DELETE clause = blocks the delete, same as RESTRICT) — migration_016
+  -- only changes reward_coupons' own outbound FKs *to* orders, it never
+  -- touches these two inbound ones. A redeemed dine-in coupon sets exactly
+  -- this column (app/api/tabs/[id]/route.ts's tabCloseUpdate.coupon_id, and
+  -- app/api/orders/[id]/route.ts reads orders.coupon_id back on cancel/pay)
+  -- — a live, regularly-exercised path, not a theoretical one. Nulling both
+  -- here is safe: every order/tab for this restaurant is deleted later in
+  -- this same function regardless.
+  UPDATE orders SET coupon_id = NULL
+    WHERE restaurant_id = p_restaurant_id AND coupon_id IS NOT NULL;
+  UPDATE customer_tabs SET coupon_id = NULL
+    WHERE restaurant_id = p_restaurant_id AND coupon_id IS NOT NULL;
+
+  -- Same four-column match as preview_test_data_reset's c_reward_coupons
+  -- above (reserved_order_id/redeemed_order_id included — see that comment)
+  -- — otherwise DELETE FROM orders below can fail on a coupon reserved or
+  -- redeemed against an order that this WHERE clause didn't catch.
   DELETE FROM reward_coupons
     WHERE spin_id IN (
             SELECT id FROM spin_results
             WHERE order_id IN (SELECT id FROM orders WHERE restaurant_id = p_restaurant_id)
                OR tab_id   IN (SELECT id FROM customer_tabs WHERE restaurant_id = p_restaurant_id)
           )
-       OR source_order_id IN (SELECT id FROM orders WHERE restaurant_id = p_restaurant_id)
-       OR source_tab_id   IN (SELECT id FROM customer_tabs WHERE restaurant_id = p_restaurant_id);
+       OR source_order_id   IN (SELECT id FROM orders WHERE restaurant_id = p_restaurant_id)
+       OR source_tab_id     IN (SELECT id FROM customer_tabs WHERE restaurant_id = p_restaurant_id)
+       OR reserved_order_id IN (SELECT id FROM orders WHERE restaurant_id = p_restaurant_id)
+       OR redeemed_order_id IN (SELECT id FROM orders WHERE restaurant_id = p_restaurant_id);
 
   DELETE FROM spin_results
     WHERE order_id IN (SELECT id FROM orders WHERE restaurant_id = p_restaurant_id)
@@ -310,7 +347,18 @@ BEGIN
 
   -- Tables are CONFIGURATION (preserved as rows) — only their transient
   -- occupancy state is reset, not the rows themselves.
-  UPDATE tables SET status = 'available', updated_at = NOW() WHERE restaurant_id = p_restaurant_id;
+  --
+  -- NOTE: `tables` has no `updated_at` column in the live schema. schema.sql's
+  -- base CREATE TABLE never defines one, and while migration_008.sql contains
+  -- `ALTER TABLE tables ADD COLUMN IF NOT EXISTS updated_at ...`, nothing in
+  -- the application ever reads or writes tables.updated_at (verified directly
+  -- against app/api/tables/**), and that specific ALTER was confirmed NOT
+  -- applied on the live database (the exact error this reset hit: column
+  -- "updated_at" of relation "tables" does not exist). Per the standing rule
+  -- not to add a column just to satisfy this function, `status` — the one
+  -- column the app actually uses to control table availability — is the only
+  -- field reset here.
+  UPDATE tables SET status = 'available' WHERE restaurant_id = p_restaurant_id;
 
   -- ── Insert the durable audit record LAST, after everything above ─────────
   -- (a distinct table from finance_audit_log specifically so a *future*

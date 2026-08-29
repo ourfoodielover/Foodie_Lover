@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/supabase-server';
 import { requireRole } from '@/lib/session-server';
-import { verifyAdminPin, recomputeClosedTabTotal } from '@/lib/finance-server';
+import { verifyAdminPin, recomputeClosedTabTotal, errMsg } from '@/lib/finance-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -119,6 +119,9 @@ export async function POST(req: NextRequest) {
       message: `All orders cleared successfully.${revenueNote}${skippedNote}`,
     });
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    // errMsg() (not String(err)) — a thrown Supabase PostgrestError is a
+    // plain object, and String() on a plain object renders "[object
+    // Object]" instead of the actual database error message.
+    return NextResponse.json({ error: errMsg(err) }, { status: 500 });
   }
 }

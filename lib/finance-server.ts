@@ -479,10 +479,18 @@ export async function recomputeClosedTabTotal(
     newCouponDiscount = Math.round(oldCouponDiscount * scale * 100) / 100;
   }
 
+  // NOTE: customer_tabs has no `updated_at` column anywhere in this schema's
+  // history (verified directly against schema.sql and every migration file —
+  // unlike `orders`/`print_jobs`/etc., it was never added). A previous
+  // version of this update tried to set one anyway, which made Postgres
+  // raise "column \"updated_at\" of relation \"customer_tabs\" does not
+  // exist" — thrown here as the raw PostgrestError object, which is why the
+  // callers above (Clear All Orders / delete-selective) rendered it as
+  // "[object Object]" instead of a real message. Fixed by only writing
+  // columns that actually exist.
   const { error } = await sb.from('customer_tabs')
     .update({
       total: newTotal, discount: newDiscount, coupon_discount: newCouponDiscount,
-      updated_at: new Date().toISOString(),
     })
     .eq('id', tabId);
   if (error) throw error;

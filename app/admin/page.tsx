@@ -68,6 +68,23 @@ const inp   = { width:'100%', padding:'0.6rem 0.75rem', border:'2px solid #e5e7e
 const btn   = (bg='#E65C00',c='white') => ({ background:bg, color:c, border:'none', padding:'0.55rem 1.1rem', borderRadius:8, fontWeight:700 as const, cursor:'pointer' as const, fontFamily:'Poppins,sans-serif', fontSize:'0.84rem' });
 const emptyItem = ():Partial<MenuItem> => ({ category:'Non Veg Biryani', name:'', desc:'', price:0, img:'', badge:'', available:true, variants:[] });
 
+// Safely turns an API response's `error` field into displayable text —
+// never renders "[object Object]". Most routes already return a string
+// (lib/finance-server.ts's errMsg() ensures that server-side for the routes
+// that had this bug), but this is a client-side backstop for the few
+// admin/page.tsx call sites that parse fetch() responses by hand instead of
+// going through lib/api.ts's apiFetch() (which already does this).
+function apiErrText(err: unknown, fallback: string): string {
+  if (typeof err === 'string' && err.trim()) return err;
+  if (err && typeof err === 'object') {
+    const obj = err as Record<string, unknown>;
+    if (typeof obj.message === 'string' && obj.message.trim()) return obj.message;
+    if (typeof obj.error === 'string' && obj.error.trim()) return obj.error;
+    if (obj.error && typeof obj.error === 'object') return apiErrText(obj.error, fallback);
+  }
+  return fallback;
+}
+
 const AnalyticsCharts = lazy(() => import('@/components/AnalyticsCharts'));
 const AdminFinance    = lazy(() => import('@/components/AdminFinance'));
 
@@ -943,7 +960,7 @@ export default function AdminPage() {
       });
       const result = await res.json() as { ok?: boolean; error?: string; message?: string };
       if (!result.ok) {
-        setClearMsg(`❌ ${result.error ?? 'Failed to clear orders'}`);
+        setClearMsg(`❌ ${apiErrText(result.error, 'Failed to clear orders')}`);
       } else {
         setClearMsg(`✅ ${result.message ?? 'All orders cleared successfully!'}`);
         setClearPin('');
@@ -1067,7 +1084,7 @@ export default function AdminPage() {
       });
       const result = await res.json() as { ok?: boolean; deleted?: number; message?: string; error?: string };
       if (!result.ok) {
-        setDelMsg(`❌ ${result.error ?? 'Failed'}`);
+        setDelMsg(`❌ ${apiErrText(result.error, 'Failed to delete orders')}`);
       } else {
         setDelMsg(`✅ ${result.message}`);
         setDelOrderId(''); setDelDate(''); setDelDateFrom(''); setDelDateTo('');
