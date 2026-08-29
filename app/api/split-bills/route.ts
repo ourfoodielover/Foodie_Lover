@@ -2,6 +2,7 @@
 // POST /api/split-bills               — create a new split bill
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId } from '@/lib/supabase-server';
+import { requireRole } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,6 +35,8 @@ function rowToSplit(r: Record<string, unknown>) {
 
 // ── GET ───────────────────────────────────────────────────────────────────────
 export async function GET(req: NextRequest) {
+  const auth = requireRole(req, ['manager', 'admin']);
+  if (!auth.ok) return auth.response;
   try {
     const sb    = getServerClient();
     const url   = new URL(req.url);
@@ -59,6 +62,8 @@ export async function GET(req: NextRequest) {
 
 // ── POST ──────────────────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
+  const auth = requireRole(req, ['manager', 'admin']);
+  if (!auth.ok) return auth.response;
   try {
     const sb   = getServerClient();
     const body = await req.json() as Record<string, unknown>;

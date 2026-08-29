@@ -2,11 +2,14 @@
 // DELETE /api/tables/[id]  — delete table (blocked if active sessions exist)
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/supabase-server';
+import { requireRole } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 type Ctx = { params: Promise<{ id: string }> };
 
-export async function DELETE(_req: NextRequest, ctx: Ctx) {
+export async function DELETE(req: NextRequest, ctx: Ctx) {
+  const auth = requireRole(req, ['admin']);
+  if (!auth.ok) return auth.response;
   try {
     const { id } = await ctx.params;
     const sb = getServerClient();
@@ -40,6 +43,8 @@ export async function DELETE(_req: NextRequest, ctx: Ctx) {
 }
 
 export async function PATCH(req: NextRequest, ctx: Ctx) {
+  const auth = requireRole(req, ['admin', 'manager']);
+  if (!auth.ok) return auth.response;
   try {
     const { id } = await ctx.params;
     const sb   = getServerClient();

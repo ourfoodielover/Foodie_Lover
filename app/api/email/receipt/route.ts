@@ -4,10 +4,13 @@
 // called directly from /api/orders/[id] and /api/tabs/[id].
 import { NextRequest, NextResponse } from 'next/server';
 import { sendReceiptEmail, sendTabReceiptEmail } from '@/lib/email-server';
+import { requireRole } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
+  const auth = requireRole(req, ['admin', 'manager']);
+  if (!auth.ok) return auth.response;
   try {
     const body = await req.json();
 

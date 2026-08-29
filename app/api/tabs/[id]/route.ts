@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId, broadcast } from '@/lib/supabase-server';
 import { enqueueReceiptEmail, sendReceiptEmail, sendTabReceiptEmail, triggerSpinInviteForTab } from '@/lib/email-server';
+import { requireRole } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 type Ctx = { params: Promise<{ id: string }> };
@@ -35,6 +36,37 @@ function rowToTab(row: Record<string, unknown>) {
   };
 }
 
+// GET /api/tabs/[id] — fetch a single tab by id.
+//
+// Remediation (master-prompt finding: "GET /api/tabs (restaurant-wide
+// PII/PIN exposure with no scoping)", AUTH-4): the collection endpoint
+// GET /api/tabs previously had zero auth and returned EVERY tab at the
+// restaurant — every other table's customer name, phone, email, and
+// session-join PIN — to anyone, including the customer's own unauthenticated
+// table-portal browser (app/table/page.tsx used to fetch the whole list and
+// filter to its own tabId client-side). That collection endpoint is now
+// staff-only. This single-tab endpoint gives the customer portal (and any
+// other caller who already knows a specific tab id) exactly the one row it
+// actually needs — no staff session required, matching the customer-safe
+// PATCH branch below, which already treats "knows this tab's id" as
+// sufficient proof for the customer-only fields on this same tab.
+export async function GET(req: NextRequest, ctx: Ctx) {
+  try {
+    const { id } = await ctx.params;
+    const sb = getServerClient();
+    const { data, error } = await sb.from('customer_tabs').select('*').eq('id', id).maybeSingle();
+    if (error) {
+      console.error('[GET /api/tabs/[id]] error:', error.message);
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    if (!data) return NextResponse.json({ error: 'Tab not found' }, { status: 404 });
+    return NextResponse.json(rowToTab(data as Record<string, unknown>));
+  } catch (err) {
+    console.error('[GET /api/tabs/[id]] unexpected error:', err);
+    return NextResponse.json({ error: errMsg(err) }, { status: 500 });
+  }
+}
+
 export async function PATCH(req: NextRequest, ctx: Ctx) {
   try {
     const { id } = await ctx.params;
@@ -45,6 +77,11 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     const isClose = body.close === true || body.action === 'close';
 
     if (isClose) {
+      // Tab close is a staff-only (manager/admin) action — the only observed
+      // callers are closeTab() in app/manager/page.tsx and forceCloseTab() in
+      // app/admin/page.tsx. No customer or waiter caller exists.
+      const closeAuth = requireRole(req, ['manager', 'admin']);
+      if (!closeAuth.ok) return closeAuth.response;
       // ── Guard: block close if any orders have unresolved "not received" issues ──
       // body.force=true is an admin-only override to clear stale/ghost sessions.
       // Normal staff cannot bypass this — only the admin console sends force=true.
@@ -70,7 +107,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       // Recalculate total from orders (sum of all non-cancelled order totals)
       const { data: tabOrders } = await sb
         .from('orders')
-        .select('total, status')
+        .select('id, total, status')
         .eq('tab_id', id)
         .not('status', 'in', '("cancelled","void")');
       const rawTotal = (tabOrders ?? []).reduce((s, o) => s + Number(o.total), 0);
@@ -80,30 +117,81 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       const discountReason = body.discountReason ?? null;
 
       // ── Redeem any coupon that was reserved against this tab ───────────────
-      // If a reward coupon was applied (status='reserved', reserved_tab_id=id),
-      // mark it as 'redeemed' and record the discount_given amount.
+      //
+      // Remediation (audit finding C4): this block previously queried
+      // `.select('id, code, discount_value, reward_type')` and
+      // `.eq('reserved_tab_id', id)` — none of `code`, `discount_value`, or
+      // `reserved_tab_id` exist as columns on `reward_coupons` (the real
+      // columns are `coupon_code`, `reward_value`/`reward_type`+`max_discount`,
+      // and `reserved_order_id`). The query therefore threw on every single
+      // dine-in tab close, was swallowed by the surrounding try/catch, and no
+      // dine-in reward coupon was ever actually redeemed — its discount was
+      // silently never subtracted from the bill, even though the Table
+      // portal's UI showed the coupon as applied.
+      //
+      // Root cause: the dine-in reserve call (app/table/page.tsx) POSTs
+      // { orderId: tabId } to /api/rewards/reserve-coupon, which writes that
+      // value into `reserved_order_id` (there is no separate "reserved against
+      // a tab" column in the schema — a tab-level reservation is represented
+      // by putting the tab's id in the same order-id column). This lookup now
+      // matches that: it queries `reserved_order_id = <tabId>` using the real
+      // column names, and computes the discount with the exact same
+      // percent/fixed/free_item formula GET /api/rewards/validate-coupon uses
+      // (including the max_discount cap), rather than reading a nonexistent
+      // pre-computed value.
       let couponDiscount = 0;
       let couponCode: string | null = null;
       let couponId: string | null = null;
       try {
         const { data: reservedCoupon } = await sb
           .from('reward_coupons')
-          .select('id, code, discount_value, reward_type')
+          .select('id, coupon_code, reward_type, reward_value, max_discount')
           .eq('status', 'reserved')
-          .eq('reserved_tab_id', id)
+          .eq('reserved_order_id', id)
           .maybeSingle();
         if (reservedCoupon) {
-          couponId       = reservedCoupon.id as string;
-          couponCode     = reservedCoupon.code as string;
-          couponDiscount = Number(reservedCoupon.discount_value) || 0;
-          await sb.from('reward_coupons').update({
-            status:        'redeemed',
-            redeemed_at:   new Date().toISOString(),
-            discount_given: couponDiscount,
-          }).eq('id', couponId);
+          couponId   = reservedCoupon.id as string;
+          couponCode = reservedCoupon.coupon_code as string;
+
+          const rewardType  = reservedCoupon.reward_type as string;
+          const rewardValue = Number(reservedCoupon.reward_value) || 0;
+          const maxDiscount = reservedCoupon.max_discount != null ? Number(reservedCoupon.max_discount) : null;
+
+          if (rewardType === 'percent') {
+            const raw = Math.round(rawTotal * rewardValue / 100);
+            couponDiscount = maxDiscount != null ? Math.min(raw, maxDiscount) : raw;
+          } else if (rewardType === 'fixed') {
+            couponDiscount = Math.min(rewardValue, rawTotal);
+          } else {
+            couponDiscount = 0; // free_item and any other type: no bill-total discount here
+          }
+
+          // Best-effort attribution for the redeemed_order_id FK/audit trail —
+          // a dine-in coupon is reserved against the whole tab, not one order,
+          // so this is informational only (used by validate-coupon's "already
+          // redeemed on Order #..." message), not load-bearing for redemption logic.
+          const attributedOrderId = (tabOrders ?? [])[0]?.id as string | undefined;
+
+          const { error: redeemErr } = await sb.from('reward_coupons').update({
+            status:            'redeemed',
+            redeemed_at:       new Date().toISOString(),
+            discount_given:    couponDiscount,
+            redeemed_order_id: attributedOrderId ?? null,
+          }).eq('id', couponId).eq('status', 'reserved'); // guard against double-redemption races
+
+          if (redeemErr) {
+            console.error('[tabs/close] coupon redemption update failed:', redeemErr.message);
+            // Do not deduct a discount we failed to actually record as redeemed.
+            couponDiscount = 0;
+            couponCode     = null;
+            couponId       = null;
+          }
         }
       } catch (couponErr) {
-        console.warn('[tabs/close] coupon redemption error (non-fatal):', couponErr);
+        console.error('[tabs/close] coupon redemption error (non-fatal — bill closes without the discount):', couponErr);
+        couponDiscount = 0;
+        couponCode     = null;
+        couponId       = null;
       }
 
       const finalTotal = Math.max(0, rawTotal - discount - couponDiscount);
@@ -261,6 +349,31 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
 
     } else {
       // Generic update — supports discount, waiterName, status changes, total
+      //
+      // Remediation (audit finding — critical): this branch had NO auth check
+      // of any kind despite being able to set an arbitrary `discount` on any
+      // tab. It's shared by two genuinely different callers on the SAME
+      // field set, so it can't be gated as one block:
+      //   - The customer's own table page (app/table/page.tsx) PATCHes
+      //     { coupon_id, coupon_code, coupon_discount } to apply a validated
+      //     coupon, and { status: 'awaiting_payment' } to request the bill.
+      //     Both must stay public — no staff session exists at that point.
+      //   - app/manager/page.tsx's applyTabDiscount()/updateTab() PATCHes
+      //     discount/waiterName/paymentMethod/total/customerName/partySize,
+      //     or any other status value — these are staff-only.
+      // So: if the body contains ONLY the customer-safe keys, allow through;
+      // if it contains any staff-only key, require a waiter/manager/admin
+      // session.
+      const CUSTOMER_SAFE_KEYS = new Set(['coupon_id', 'coupon_code', 'coupon_discount', 'restaurantId', 'close', 'action']);
+      const bodyKeys = Object.keys(body as Record<string, unknown>);
+      const isCustomerSafeStatusOnly =
+        bodyKeys.every(k => CUSTOMER_SAFE_KEYS.has(k) || k === 'status') &&
+        (body.status === undefined || body.status === 'awaiting_payment');
+      if (!isCustomerSafeStatusOnly) {
+        const genericAuth = requireRole(req, ['waiter', 'manager', 'admin']);
+        if (!genericAuth.ok) return genericAuth.response;
+      }
+
       const updates: Record<string, unknown> = {};
       if (body.total           !== undefined) updates.total           = body.total;
       if (body.waiterName      !== undefined) updates.waiter_name     = body.waiterName;

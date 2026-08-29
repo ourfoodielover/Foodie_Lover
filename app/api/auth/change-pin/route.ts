@@ -5,10 +5,17 @@
 // Returns: { ok: true } on success, { ok: false, error: string } on failure
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/supabase-server';
+import { requireRole } from '@/lib/session-server';
+import { verifyPin, hashPin } from '@/lib/pin-hash';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
+  // Defense-in-depth on top of the existing currentPin verification below —
+  // every caller reaches this from the already-authenticated admin settings
+  // screen, never from the pre-auth login/forgot-PIN flow.
+  const auth = requireRole(req, ['admin']);
+  if (!auth.ok) return auth.response;
   try {
     const body = await req.json() as { currentPin?: string; newPin?: string };
     const { currentPin, newPin } = body;
@@ -40,14 +47,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (currentPin.trim() !== storedPin) {
+    if (!verifyPin(currentPin.trim(), storedPin)) {
       return NextResponse.json({ ok: false, error: 'Current PIN is incorrect' }, { status: 401 });
     }
 
-    // Current PIN verified — update to new PIN
+    // Current PIN verified — update to new PIN, always stored hashed (C3).
     const { error: updateErr } = await sb
       .from('restaurant_settings')
-      .update({ value: newPin.trim(), updated_at: new Date().toISOString() })
+      .update({ value: hashPin(newPin.trim()), updated_at: new Date().toISOString() })
       .eq('restaurant_id', rid)
       .eq('key', 'admin_pin');
 

@@ -24,6 +24,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId } from '@/lib/supabase-server';
+import { requireRole } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 const RID = process.env.NEXT_PUBLIC_RESTAURANT_ID ?? 'rest_default';
@@ -114,6 +115,8 @@ function validateAndParse(
 }
 
 export async function POST(req: NextRequest) {
+  const auth = requireRole(req, ['admin']);
+  if (!auth.ok) return auth.response;
   const body = await req.json() as { rows: CsvRow[]; confirm: boolean };
   const { rows, confirm } = body;
 

@@ -5,6 +5,7 @@
 // Returns: { ok: true } on success, { ok: false, error: string } on failure
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/supabase-server';
+import { hashPin } from '@/lib/pin-hash';
 
 export const dynamic = 'force-dynamic';
 
@@ -44,10 +45,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'Incorrect answer' }, { status: 401 });
     }
 
-    // Answer is correct — update the admin PIN
+    // Answer is correct — update the admin PIN, always stored hashed (C3).
     const { error: updateErr } = await sb
       .from('restaurant_settings')
-      .update({ value: newPin.trim(), updated_at: new Date().toISOString() })
+      .update({ value: hashPin(newPin.trim()), updated_at: new Date().toISOString() })
       .eq('restaurant_id', rid)
       .eq('key', 'admin_pin');
 

@@ -2,10 +2,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/supabase-server';
 import { requireAdminPin, errMsg, restaurantId } from '@/lib/finance-server';
+import { requireRole } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
+  const roleAuth = requireRole(req, ['admin']);
+  if (!roleAuth.ok) return roleAuth.response;
   const auth = await requireAdminPin(req);
   if (!auth.ok) return auth.response;
   try {

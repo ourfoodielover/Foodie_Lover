@@ -5,6 +5,7 @@
 // DELETE /api/waiter-calls?id=           — hard-delete a call (legacy / admin use)
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId, broadcast } from '@/lib/supabase-server';
+import { requireRole, requireAnyStaff } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,6 +34,11 @@ export async function GET(req: NextRequest) {
       const row = data as Record<string, unknown> | null;
       return NextResponse.json(row ? { calledAt: row.called_at } : null);
     } else {
+      // By restaurant (no tabId): this is the staff-only bulk listing used by
+      // the waiter portal, not the customer's own cooldown check above —
+      // requires an authenticated staff session.
+      const auth = requireAnyStaff(req);
+      if (!auth.ok) return auth.response;
       // By restaurant: return only UNACKNOWLEDGED calls from the last 2 hours.
       // The waiter portal shows these as pending alerts; acknowledged calls are dismissed.
       const since = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
@@ -120,6 +126,8 @@ export async function POST(req: NextRequest) {
 // Acknowledges a waiter call — sets acknowledged=true, records who and when.
 // Preferred over DELETE because it preserves the audit trail in waiter_calls.
 export async function PATCH(req: NextRequest) {
+  const auth = requireRole(req, ['waiter', 'manager', 'admin']);
+  if (!auth.ok) return auth.response;
   try {
     const sb  = getServerClient();
     const url = new URL(req.url);
@@ -156,6 +164,8 @@ export async function PATCH(req: NextRequest) {
 // Hard-deletes a waiter call record. Kept for backward-compatibility but PATCH
 // is preferred because it preserves audit history.
 export async function DELETE(req: NextRequest) {
+  const auth = requireRole(req, ['admin']);
+  if (!auth.ok) return auth.response;
   try {
     const sb  = getServerClient();
     const url = new URL(req.url);

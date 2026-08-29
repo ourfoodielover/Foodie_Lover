@@ -1,11 +1,14 @@
 // PATCH /api/shifts/[id] — close shift
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/supabase-server';
+import { requireAnyStaff } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 type Ctx = { params: Promise<{ id: string }> };
 
 export async function PATCH(req: NextRequest, ctx: Ctx) {
+  const auth = requireAnyStaff(req);
+  if (!auth.ok) return auth.response;
   try {
     const { id } = await ctx.params;
     const sb   = getServerClient();

@@ -9,11 +9,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/supabase-server';
 import { requireAdminPin, errMsg, restaurantId, logFinanceAudit } from '@/lib/finance-server';
+import { requireRole } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 type Ctx = { params: Promise<{ id: string }> };
 
 export async function PATCH(req: NextRequest, ctx: Ctx) {
+  const roleAuth = requireRole(req, ['admin']);
+  if (!roleAuth.ok) return roleAuth.response;
   const auth = await requireAdminPin(req);
   if (!auth.ok) return auth.response;
   try {
@@ -60,6 +63,8 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
 }
 
 export async function DELETE(req: NextRequest, ctx: Ctx) {
+  const roleAuth = requireRole(req, ['admin']);
+  if (!roleAuth.ok) return roleAuth.response;
   const auth = await requireAdminPin(req);
   if (!auth.ok) return auth.response;
   try {

@@ -4,6 +4,8 @@
 // Returns: { ok: true } on success, { ok: false, error: string } on failure
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/supabase-server';
+import { issueSession } from '@/lib/session-server';
+import { verifyPin, isHashedPin, hashPin } from '@/lib/pin-hash';
 
 export const dynamic = 'force-dynamic';
 
@@ -59,11 +61,28 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (pin.trim() !== storedPin) {
+    if (!verifyPin(pin.trim(), storedPin)) {
       return NextResponse.json({ ok: false, error: 'Incorrect PIN' }, { status: 401 });
     }
 
-    return NextResponse.json({ ok: true });
+    // Remediation (C3): transparently upgrade a legacy plaintext PIN to a
+    // salted hash now that we know it's correct. No-op once already hashed.
+    if (!isHashedPin(storedPin)) {
+      const sb  = getServerClient();
+      const rid = process.env.NEXT_PUBLIC_RESTAURANT_ID ?? 'rest_default';
+      await sb.from('restaurant_settings')
+        .update({ value: hashPin(pin.trim()), updated_at: new Date().toISOString() })
+        .eq('restaurant_id', rid)
+        .eq('key', PIN_SETTING_KEY[role as Role]);
+    }
+
+    // Remediation (C1): a correct PIN now also issues a real, server-verifiable
+    // session cookie — previously the client fabricated its own localStorage
+    // session with nothing behind it that the server could later check.
+    const rid = process.env.NEXT_PUBLIC_RESTAURANT_ID ?? 'rest_default';
+    const res = NextResponse.json({ ok: true });
+    issueSession(res, role as Role, rid);
+    return res;
   } catch (err) {
     console.error('[POST /api/auth/verify-pin]', err);
     return NextResponse.json({ ok: false, error: 'Server error' }, { status: 500 });

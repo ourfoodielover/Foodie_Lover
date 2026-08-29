@@ -1,10 +1,11 @@
 // GET  /api/orders   — list orders
 // POST /api/orders   — create order
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerClient, newId, nextOrderNum, rowToOrder, broadcast } from '@/lib/supabase-server';
+import { getServerClient, newId, newSecureId, nextOrderNum, rowToOrder, broadcast } from '@/lib/supabase-server';
 // sendOrderConfirmationEmail is triggered from PATCH /api/orders/[id] after waiter confirmation
 // (not on order creation — orders start in awaiting_waiter and may be rejected)
 import type {} from '@/lib/email-server';
+import { requireAnyStaff } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,6 +19,16 @@ export async function GET(req: NextRequest) {
     const type   = url.searchParams.get('type');
     // tabId filter: customer QR page fetches only its own tab's orders
     const tabId  = url.searchParams.get('tabId');
+
+    // Unscoped listing (no tabId) returns every customer's name/phone/address
+    // restaurant-wide — that's the staff bulk-listing case (waiter/kitchen/
+    // manager/admin/delivery portals) and requires an authenticated staff
+    // session. A tabId-scoped request is the customer's own table page
+    // asking only about its own tab's orders and stays public.
+    if (!tabId) {
+      const auth = requireAnyStaff(req);
+      if (!auth.ok) return auth.response;
+    }
 
     // ── Pagination: max 200 rows, default 150 ─────────────────────────────────
     // Without a LIMIT this becomes a full table scan in production.
@@ -108,6 +119,28 @@ export async function POST(req: NextRequest) {
     if (body.type === 'delivery' && !body.deliveryAddress) {
       return NextResponse.json({ error: 'deliveryAddress is required for delivery orders' }, { status: 400 });
     }
+
+    // ── Idempotency check (remediation of audit finding C5) ────────────────────
+    // If the client supplied an idempotencyKey and an order with that key
+    // already exists, this is a retry/offline-replay of a submission that
+    // already succeeded (the client just never saw the response) — return the
+    // existing order rather than creating a duplicate. This is the actual
+    // server-side check lib/sync-engine.ts's own comment previously claimed to
+    // perform but never did; the client now sends the same key on every
+    // attempt of the same logical order (see app/online/page.tsx), including
+    // any later offline-queue replay of the identical payload.
+    if (body.idempotencyKey) {
+      const { data: dupe } = await sb
+        .from('orders')
+        .select('*, order_items(*), order_events(*)')
+        .eq('restaurant_id', rid)
+        .eq('idempotency_key', String(body.idempotencyKey))
+        .maybeSingle();
+      if (dupe) {
+        return NextResponse.json(rowToOrder(dupe, dupe.order_items ?? [], dupe.order_events ?? []), { status: 200 });
+      }
+    }
+
     // ── Append to existing awaiting_waiter order (same open tab) ─────────────
     // If the tab is still open and the last order hasn't been accepted by the
     // waiter yet, add items to that order instead of creating a new one.
@@ -181,7 +214,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const id    = newId('ORD');
+    // Remediation (C6): cryptographically random rather than Date.now()+Math.random()
+    // — this id and the tracking token below are both effectively bearer secrets
+    // once GET /api/orders/[id] requires the token for unauthenticated access.
+    const id    = newSecureId('ORD');
     const num   = await nextOrderNum(sb, rid);
     // ── Waiter-confirmation workflow ──────────────────────────────────────────
     // ALL new orders (dine-in, pickup, delivery, online) now start in
@@ -192,7 +228,7 @@ export async function POST(req: NextRequest) {
     // dine-in-only behavior, so existing dine-in flows are unaffected.
     const status = 'awaiting_waiter';
     const trackingToken = body.trackingToken
-      ?? (body.source === 'online' ? newId('TRK') : null);
+      ?? (body.source === 'online' ? newSecureId('TRK') : null);
 
     // ── Resolve table_id safely ─────────────────────────────────────────────
     // The orders table has table_id REFERENCES tables(id). If body.tableId is a
@@ -237,6 +273,7 @@ export async function POST(req: NextRequest) {
       created_by_staff_id:   body.createdByStaffId    ?? null,
       created_by_staff_name: body.createdByStaffName  ?? null,
       updated_at:       new Date().toISOString(),
+      idempotency_key:  body.idempotencyKey ?? null,
     });
     if (orderErr) throw orderErr;
 

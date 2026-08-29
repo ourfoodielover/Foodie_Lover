@@ -24,8 +24,8 @@ export default function DeliveryLoginPage() {
     setLoading(true);
     setError('');
     try {
-      const staff = await lookupStaffByUsername(username.trim(), 'delivery');
-      if (!staff || !staff.active || staff.pin !== pin.trim()) {
+      const staff = await lookupStaffByUsername(username.trim(), 'delivery', pin.trim());
+      if (!staff) {
         setError('Invalid username or PIN. Ask admin to create / check your account.');
         return;
       }

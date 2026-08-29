@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId } from '@/lib/supabase-server';
 import { requireAdminPin, errMsg, restaurantId, logFinanceAudit } from '@/lib/finance-server';
+import { requireRole } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,6 +23,8 @@ function rowToAccount(r: Record<string, unknown>) {
 }
 
 export async function GET(req: NextRequest) {
+  const roleAuth = requireRole(req, ['admin']);
+  if (!roleAuth.ok) return roleAuth.response;
   const auth = await requireAdminPin(req);
   if (!auth.ok) return auth.response;
   try {
@@ -42,6 +45,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const roleAuth = requireRole(req, ['admin']);
+  if (!roleAuth.ok) return roleAuth.response;
   const auth = await requireAdminPin(req);
   if (!auth.ok) return auth.response;
   try {

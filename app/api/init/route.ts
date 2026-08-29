@@ -1,11 +1,14 @@
 // GET /api/init — verify Supabase connection, seed defaults if missing
 // Safe to call repeatedly — all inserts use ON CONFLICT DO NOTHING / upsert.
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId } from '@/lib/supabase-server';
+import { requireRole } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const auth = requireRole(req, ['admin']);
+  if (!auth.ok) return auth.response;
   try {
     const sb  = getServerClient();
     const rid = process.env.NEXT_PUBLIC_RESTAURANT_ID ?? 'rest_default';

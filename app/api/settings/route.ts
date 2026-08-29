@@ -2,6 +2,7 @@
 // PATCH /api/settings                 — upsert one or many key/value pairs
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/supabase-server';
+import { requireRole } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -58,7 +59,18 @@ export async function GET(req: NextRequest) {
 
 // ── PATCH ─────────────────────────────────────────────────────────────────────
 // Body: { restaurantId?, updates: { [key]: value } }
+//
+// Remediation (audit finding — critical): this handler used to have NO auth
+// check at all and applied `updates` verbatim, so any unauthenticated caller
+// could PATCH admin_pin/kitchen_pin/manager_pin/security_answer directly and
+// take over the whole PIN system, bypassing /api/auth/change-pin's
+// current-PIN verification entirely. Fixed by (a) requiring an admin
+// session, and (b) hard-rejecting any SECRET_KEYS key from `updates` — PIN
+// changes must always go through /api/auth/change-pin, never this
+// general-purpose settings endpoint.
 export async function PATCH(req: NextRequest) {
+  const auth = requireRole(req, ['admin']);
+  if (!auth.ok) return auth.response;
   try {
     const sb   = getServerClient();
     const body = await req.json() as Record<string, unknown>;
@@ -67,6 +79,13 @@ export async function PATCH(req: NextRequest) {
 
     if (!updates || typeof updates !== 'object' || Object.keys(updates).length === 0) {
       return NextResponse.json({ error: 'updates object is required' }, { status: 400 });
+    }
+    const blockedKeys = Object.keys(updates).filter(k => SECRET_KEYS.has(k));
+    if (blockedKeys.length > 0) {
+      return NextResponse.json(
+        { error: `PIN/security fields cannot be changed here — use /api/auth/change-pin. Blocked keys: ${blockedKeys.join(', ')}` },
+        { status: 403 },
+      );
     }
 
     // Upsert each key individually

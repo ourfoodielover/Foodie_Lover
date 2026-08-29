@@ -13,8 +13,10 @@
  * IST = UTC+05:30  →  IST midnight = 18:30 UTC previous day
  */
 
-import { NextResponse }   from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/supabase-server';
+import { requireRole } from '@/lib/session-server';
+import { verifyAdminPin, recomputeClosedTabTotal } from '@/lib/finance-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,22 +30,6 @@ function istToUtc(dateStr: string, timeStr = '00:00'): string {
   return new Date(istMs - IST_OFFSET_MS).toISOString();
 }
 
-async function verifyAdminPin(pin: string): Promise<boolean> {
-  try {
-    const sb  = getServerClient();
-    const rid = process.env.NEXT_PUBLIC_RESTAURANT_ID ?? 'rest_default';
-    const { data } = await sb
-      .from('restaurant_settings')
-      .select('value')
-      .eq('restaurant_id', rid)
-      .eq('key', 'admin_pin')
-      .maybeSingle();
-    return !!data && data.value === pin;
-  } catch {
-    return false;
-  }
-}
-
 interface Body {
   pin:       string;
   mode:      'id' | 'date' | 'range';
@@ -55,7 +41,9 @@ interface Body {
   timeTo?:   string;
 }
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
+  const auth = requireRole(req, ['admin']);
+  if (!auth.ok) return auth.response;
   try {
     const body = await req.json() as Body;
     const { pin, mode } = body;
@@ -121,6 +109,19 @@ export async function POST(req: Request) {
     if (orderIds.length === 0)
       return NextResponse.json({ ok: true, deleted: 0, message: 'No matching orders found.' });
 
+    // ── Find which closed tabs these orders belong to (BEFORE deleting) ────────
+    // See lib/finance-server.ts recomputeClosedTabTotal() for why: admin-
+    // initiated order deletion also reverses the corresponding closed-tab
+    // Finance revenue, by explicit admin decision (this deployment is still
+    // being seeded with dummy/test data).
+    const { data: affectedOrderRows, error: affectedErr } = await sb
+      .from('orders')
+      .select('tab_id')
+      .in('id', orderIds)
+      .not('tab_id', 'is', null);
+    if (affectedErr) return NextResponse.json({ error: `Tab lookup: ${affectedErr.message}` }, { status: 500 });
+    const affectedTabIds = Array.from(new Set((affectedOrderRows ?? []).map(r => r.tab_id as string)));
+
     // ── Full FK dependency map ────────────────────────────────────────────────
     // spin_results.order_id          → orders(id)  ON DELETE CASCADE
     // reward_coupons.spin_id         → spin_results(id)  RESTRICT  ← blocks cascade
@@ -176,10 +177,31 @@ export async function POST(req: Request) {
     const { error: ordErr } = await sb.from('orders').delete().in('id', orderIds);
     if (ordErr) return NextResponse.json({ error: `Orders: ${ordErr.message}` }, { status: 500 });
 
+    // Step 6 — reverse recognized revenue on any closed tab these orders belonged to
+    // (auditable — each adjustment writes a finance_audit_log row; tabs with an
+    // existing split bill are skipped rather than silently made inconsistent —
+    // see recomputeClosedTabTotal() in lib/finance-server.ts)
+    const revenueAdjustments: { tabId: string; oldTotal: number; newTotal: number; discountCapped: boolean }[] = [];
+    const skippedTabs: { tabId: string; reason: string }[] = [];
+    for (const tabId of affectedTabIds) {
+      const adj = await recomputeClosedTabTotal(sb, tabId, 'Admin (order deletion)');
+      if (adj && 'skipped' in adj) skippedTabs.push(adj);
+      else if (adj) revenueAdjustments.push(adj);
+    }
+
+    const revenueNote = revenueAdjustments.length > 0
+      ? ` Finance revenue adjusted on ${revenueAdjustments.length} closed table${revenueAdjustments.length !== 1 ? 's' : ''} (₹${revenueAdjustments.reduce((s, a) => s + a.oldTotal, 0).toFixed(2)} → ₹${revenueAdjustments.reduce((s, a) => s + a.newTotal, 0).toFixed(2)}).`
+      : '';
+    const skippedNote = skippedTabs.length > 0
+      ? ` ⚠️ ${skippedTabs.length} closed table${skippedTabs.length !== 1 ? 's' : ''} skipped (split bill exists) — review manually.`
+      : '';
+
     return NextResponse.json({
       ok:      true,
       deleted: orderIds.length,
-      message: `${orderIds.length} order${orderIds.length !== 1 ? 's' : ''} deleted successfully.`,
+      revenueAdjustments,
+      skippedTabs,
+      message: `${orderIds.length} order${orderIds.length !== 1 ? 's' : ''} deleted successfully.${revenueNote}${skippedNote}`,
     });
 
   } catch (err) {
@@ -190,7 +212,9 @@ export async function POST(req: Request) {
 /**
  * GET /api/orders/delete-selective — preview count (no PIN needed)
  */
-export async function GET(req: Request) {
+export async function GET(req: NextRequest) {
+  const auth = requireRole(req, ['admin']);
+  if (!auth.ok) return auth.response;
   try {
     const { searchParams } = new URL(req.url);
     const mode     = searchParams.get('mode');
@@ -201,7 +225,11 @@ export async function GET(req: Request) {
     const timeTo   = searchParams.get('timeTo')   ?? '23:59';
 
     const sb = getServerClient();
-    let query = sb.from('orders').select('id', { count: 'exact', head: true });
+    // Fetch id/tab_id/status/total (not just a head count) so the preview can
+    // also warn about Finance impact — see recomputeClosedTabTotal() in
+    // lib/finance-server.ts for why deleting these orders can reduce a
+    // closed tab's recorded revenue.
+    let query = sb.from('orders').select('id, tab_id, status, total');
 
     if (mode === 'date' && date) {
       const from   = istToUtc(date, '00:00');
@@ -225,9 +253,31 @@ export async function GET(req: Request) {
       return NextResponse.json({ count: null });
     }
 
-    const { count, error } = await query;
+    const { data: rows, error } = await query;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    return NextResponse.json({ count: count ?? 0 });
+    const orderRows = rows ?? [];
+    const tabIds = Array.from(new Set(orderRows.map(r => r.tab_id as string | null).filter((v): v is string => !!v)));
+
+    let closedTabsAffected = 0;
+    let estimatedRevenueImpact = 0;
+    if (tabIds.length > 0) {
+      const { data: closedTabs } = await sb
+        .from('customer_tabs')
+        .select('id')
+        .in('id', tabIds)
+        .eq('status', 'closed');
+      const closedTabIdSet = new Set((closedTabs ?? []).map(t => t.id as string));
+      closedTabsAffected = closedTabIdSet.size;
+      estimatedRevenueImpact = orderRows
+        .filter(r => r.tab_id && closedTabIdSet.has(r.tab_id as string) && !['cancelled', 'void'].includes(r.status as string))
+        .reduce((s, r) => s + (Number(r.total) || 0), 0);
+    }
+
+    return NextResponse.json({
+      count: orderRows.length,
+      closedTabsAffected,
+      estimatedRevenueImpact: Math.round(estimatedRevenueImpact * 100) / 100,
+    });
 
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });

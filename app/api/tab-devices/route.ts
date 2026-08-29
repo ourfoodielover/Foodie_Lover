@@ -16,6 +16,20 @@ export async function GET(req: NextRequest) {
     const url = new URL(req.url);
     const tabId    = url.searchParams.get('tabId');
     const deviceId = url.searchParams.get('deviceId');
+    const rid      = url.searchParams.get('restaurantId') ?? process.env.NEXT_PUBLIC_RESTAURANT_ID ?? 'rest_default';
+
+    // This route is intentionally unauthenticated (customers on a shared tab
+    // need it to see who else has joined), so tabId/deviceId act as bearer
+    // capabilities — same pattern as tab id elsewhere in this app. Without
+    // one of them there is nothing scoping the query, so it used to fall
+    // through to an unfiltered `select *` — a full cross-restaurant PII dump
+    // of every customer name / device id / table id ever recorded. Reject
+    // that case outright instead of ever running it, and always scope by
+    // restaurant_id too (previously accepted from callers but silently
+    // ignored).
+    if (!tabId && !deviceId) {
+      return NextResponse.json({ error: 'tabId or deviceId required' }, { status: 400 });
+    }
 
     // Build query with explicit filter chaining — avoid re-assignment type issues
     let data: Record<string, unknown>[] = [];
@@ -23,21 +37,17 @@ export async function GET(req: NextRequest) {
 
     if (tabId && deviceId) {
       const res = await sb.from('tab_devices').select('*')
-        .eq('tab_id', tabId).eq('device_id', deviceId).order('joined_at', { ascending: true });
+        .eq('restaurant_id', rid).eq('tab_id', tabId).eq('device_id', deviceId).order('joined_at', { ascending: true });
       data = (res.data ?? []) as Record<string, unknown>[];
       fetchError = res.error;
     } else if (tabId) {
       const res = await sb.from('tab_devices').select('*')
-        .eq('tab_id', tabId).order('joined_at', { ascending: true });
-      data = (res.data ?? []) as Record<string, unknown>[];
-      fetchError = res.error;
-    } else if (deviceId) {
-      const res = await sb.from('tab_devices').select('*')
-        .eq('device_id', deviceId).order('joined_at', { ascending: true });
+        .eq('restaurant_id', rid).eq('tab_id', tabId).order('joined_at', { ascending: true });
       data = (res.data ?? []) as Record<string, unknown>[];
       fetchError = res.error;
     } else {
-      const res = await sb.from('tab_devices').select('*').order('joined_at', { ascending: true });
+      const res = await sb.from('tab_devices').select('*')
+        .eq('restaurant_id', rid).eq('device_id', deviceId as string).order('joined_at', { ascending: true });
       data = (res.data ?? []) as Record<string, unknown>[];
       fetchError = res.error;
     }

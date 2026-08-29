@@ -1,14 +1,21 @@
 // DELETE /api/finance/vendor-payments/[id]  — void a payment (reverses the
 // parent purchase's amount_paid/status and voids the linked ledger entry
 // together, so all three stay consistent).
+//
+// Remediation (master-prompt finding #12): delegates the void sequence to
+// the atomic void_vendor_payment() Postgres function (migration_023_finance_
+// atomicity.sql) instead of three sequential, non-transactional writes.
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/supabase-server';
 import { requireAdminPin, errMsg, restaurantId, logFinanceAudit } from '@/lib/finance-server';
+import { requireRole } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 type Ctx = { params: Promise<{ id: string }> };
 
 export async function DELETE(req: NextRequest, ctx: Ctx) {
+  const roleAuth = requireRole(req, ['admin']);
+  if (!roleAuth.ok) return roleAuth.response;
   const auth = await requireAdminPin(req);
   if (!auth.ok) return auth.response;
   try {
@@ -19,30 +26,23 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
     const by     = url.searchParams.get('by') ?? 'Admin';
     const reason = url.searchParams.get('reason') ?? undefined;
 
-    const { data: payment } = await sb.from('vendor_payments').select('*').eq('id', id).maybeSingle();
-    if (!payment) return NextResponse.json({ error: 'Payment not found' }, { status: 404 });
-    if (payment.is_voided) return NextResponse.json({ error: 'Payment already voided' }, { status: 409 });
+    const { data: rpcData, error: rpcErr } = await sb.rpc('void_vendor_payment', {
+      p_payment_id: id,
+      p_by: by,
+      p_reason: reason ?? null,
+    });
+    if (rpcErr) throw rpcErr;
 
-    const { data: purchase } = await sb.from('vendor_purchases').select('*').eq('id', payment.vendor_purchase_id).maybeSingle();
-
-    const { error: voidErr } = await sb.from('vendor_payments').update({ is_voided: true }).eq('id', id);
-    if (voidErr) throw voidErr;
-
-    if (purchase) {
-      const newAmountPaid = Math.max(0, Math.round((Number(purchase.amount_paid) - Number(payment.amount)) * 100) / 100);
-      const newStatus = newAmountPaid <= 0.01 ? 'unpaid' : newAmountPaid >= Number(purchase.amount) - 0.01 ? 'paid' : 'partially_paid';
-      await sb.from('vendor_purchases').update({
-        amount_paid: newAmountPaid, status: newStatus, updated_at: new Date().toISOString(),
-      }).eq('id', purchase.id);
+    const result = rpcData as { ok: boolean; error?: string; voidedPaymentBefore?: Record<string, unknown> };
+    if (!result.ok) {
+      if (result.error === 'not_found') return NextResponse.json({ error: 'Payment not found' }, { status: 404 });
+      if (result.error === 'already_voided') return NextResponse.json({ error: 'Payment already voided' }, { status: 409 });
+      throw new Error(`void_vendor_payment RPC failed: ${result.error ?? 'unknown'}`);
     }
-
-    await sb.from('finance_transactions').update({
-      is_voided: true, voided_at: new Date().toISOString(), voided_by: by, voided_reason: reason ?? 'Vendor payment voided',
-    }).eq('source', 'vendor_payment').eq('source_id', id);
 
     await logFinanceAudit(sb, {
       restaurantId: rid, entityType: 'vendor_payment', entityId: id, action: 'void',
-      changedBy: by, before: payment, note: reason,
+      changedBy: by, before: result.voidedPaymentBefore, note: reason,
     });
 
     return NextResponse.json({ ok: true });

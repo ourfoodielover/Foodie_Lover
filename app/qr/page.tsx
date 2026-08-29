@@ -25,6 +25,10 @@ export default function QRPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [size,     setSize]     = useState<200 | 250 | 300>(200);
   const [showGrid, setShowGrid] = useState(true);
+  // Tracks which table's QR image failed to load (qrserver.com unreachable) so
+  // we can show a text fallback instead of silently printing a broken-image
+  // icon — audit finding L1.
+  const [qrLoadFailed, setQrLoadFailed] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     setBaseUrl(window.location.origin);
@@ -273,14 +277,33 @@ export default function QRPage() {
                   </div>
 
                   {/* QR Code */}
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={qrUrl(url, size)}
-                    alt={`QR code for Table ${table.name}`}
-                    width={showGrid ? 160 : 130}
-                    height={showGrid ? 160 : 130}
-                    style={{ borderRadius: 8, border: '2px solid #f5ede4', order: showGrid ? 1 : 0, flexShrink: 0 }}
-                  />
+                  {qrLoadFailed.has(table.id) ? (
+                    <div
+                      style={{
+                        width: showGrid ? 160 : 130, height: showGrid ? 160 : 130,
+                        borderRadius: 8, border: '2px dashed #d97706', flexShrink: 0,
+                        order: showGrid ? 1 : 0, display: 'flex', flexDirection: 'column',
+                        alignItems: 'center', justifyContent: 'center', textAlign: 'center',
+                        padding: '0.5rem', gap: '0.25rem', background: '#fff8ec',
+                      }}
+                    >
+                      <div style={{ fontSize: '1.2rem' }}>⚠️</div>
+                      <div style={{ fontSize: '0.6rem', color: '#92400e', lineHeight: 1.3 }}>
+                        QR image unavailable — qrserver.com unreachable. Table link still works:
+                      </div>
+                      <div style={{ fontSize: '0.55rem', color: '#92400e', fontFamily: 'monospace', wordBreak: 'break-all' }}>{url}</div>
+                    </div>
+                  ) : (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={qrUrl(url, size)}
+                      alt={`QR code for Table ${table.name}`}
+                      width={showGrid ? 160 : 130}
+                      height={showGrid ? 160 : 130}
+                      style={{ borderRadius: 8, border: '2px solid #f5ede4', order: showGrid ? 1 : 0, flexShrink: 0 }}
+                      onError={() => setQrLoadFailed(prev => new Set(prev).add(table.id))}
+                    />
+                  )}
 
                   {/* URL caption (grid only) */}
                   {showGrid && (

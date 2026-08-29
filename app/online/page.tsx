@@ -521,6 +521,15 @@ export default function OnlineOrderPage() {
         menuItemId: c.itemId,
       }));
 
+      // Remediation (audit finding C5): generated once, up front, and included
+      // directly IN the order payload (not just as a side-channel argument to
+      // safeApiCall) so the exact same key travels with this logical order
+      // submission through every attempt — the first direct call AND any later
+      // offline-queue replay of the identical payload. POST /api/orders now
+      // checks this key server-side and returns the existing order instead of
+      // creating a second one if it has already succeeded once.
+      const idempotencyKey = `order_${form.phone}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
       const orderData = {
         type:            form.type,
         customerName:    form.name.trim(),
@@ -529,6 +538,7 @@ export default function OnlineOrderPage() {
         items,
         subtotal:        cartTotal,
         total:           finalTotal,
+        idempotencyKey,
         ...(appliedCoupon
           ? {
               discount:        appliedCoupon.discountAmount,
@@ -545,7 +555,6 @@ export default function OnlineOrderPage() {
         source:          'online',
       };
 
-      const idempotencyKey = `order_${form.phone}_${Date.now()}`;
       const result = await safeApiCall('create_order', () => createOrder(orderData), orderData, idempotencyKey);
 
       if (result.queued) {
@@ -569,7 +578,10 @@ export default function OnlineOrderPage() {
           fetch('/api/rewards/reserve-coupon', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ couponId: appliedCoupon.couponId, orderId: savedOrder.id }),
+            body: JSON.stringify({
+              couponId: appliedCoupon.couponId, orderId: savedOrder.id,
+              email: couponEmail, phone: couponPhone,
+            }),
           }).catch(console.error);
         }
         setCart([]);

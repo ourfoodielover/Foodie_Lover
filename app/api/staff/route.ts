@@ -1,7 +1,15 @@
 // GET  /api/staff
 // POST /api/staff
+//
+// Remediation (audit finding C1): staff account listing/creation is an Admin
+// Dashboard-only feature (app/admin/page.tsx's listStaff/addStaff), so both
+// methods now require an authenticated Admin session. This does not affect
+// Waiter/Delivery login, which goes through /api/auth/staff-login and never
+// calls this route.
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId } from '@/lib/supabase-server';
+import { requireRole } from '@/lib/session-server';
+import { hashPin } from '@/lib/pin-hash';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,6 +20,8 @@ function errMsg(err: unknown): string {
 }
 
 export async function GET(req: NextRequest) {
+  const auth = requireRole(req, ['admin']);
+  if (!auth.ok) return auth.response;
   try {
     const sb   = getServerClient();
     const url  = new URL(req.url);
@@ -38,6 +48,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = requireRole(req, ['admin']);
+  if (!auth.ok) return auth.response;
   // Guard: parse JSON body first with a clear 400 if body is malformed
   let body: Record<string, unknown>;
   try {
@@ -84,7 +96,7 @@ export async function POST(req: NextRequest) {
       restaurant_id: rid,
       name,
       username,
-      pin,
+      pin: hashPin(pin), // C3: never store a new PIN in plaintext
       role,
       active: true,
     });

@@ -238,7 +238,9 @@ export default function KitchenPage() {
       }
       if (newIds.length > 0 && seenOrderIds.current.size > newIds.length) {
         // Only alert after first load (seenIds already had some)
-        playOrderAlert();
+        // Respect the mute toggle — previously this beep ignored it while the
+        // spoken announcement below correctly checked it (audit finding L2).
+        if (!kitchenMutedRef.current) playOrderAlert();
         // TTS — only announce IDs not in sessionStorage (avoids refresh replay)
         const toAnnounce = newIds.filter(id => !announcedIds.current.has(id));
         if (toAnnounce.length > 0) {
@@ -327,15 +329,15 @@ export default function KitchenPage() {
     } catch (e) { console.error(e); }
   }
 
-  async function advanceItem(orderId: string, itemIndex: number) {
+  async function advanceItem(orderId: string, itemId: string) {
     const order = orders.find(o => o.id === orderId);
     if (!order) return;
-    const item = order.items?.[itemIndex];
+    const item = order.items?.find(it => it.id === itemId);
     if (!item) return;
     const cur   = item.itemStatus || 'queued';
     const next  = cur === 'queued' ? 'preparing' : 'prepared';
     try {
-      await updateItemStatus(orderId, itemIndex, next);
+      await updateItemStatus(orderId, itemId, next);
       await refresh();
     } catch (e) { console.error(e); }
   }
@@ -563,9 +565,10 @@ export default function KitchenPage() {
                 {/* Items */}
                 <div style={{ borderTop: '1px solid #2a2a2a', paddingTop: '0.5rem', marginBottom: '0.6rem' }}>
                   {(order.items || []).map((item, i) => {
-                    const iStatus  = item.itemStatus || 'queued';
+                    const iStatus = item.itemStatus || 'queued';
+                    const itemId  = item.id; // stable id — may be absent on legacy/malformed rows
                     return (
-                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                      <div key={item.id ?? i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flex: 1 }}>
                           <span style={{ fontWeight: 700, fontSize: '0.82rem', color: '#ccc' }}>{item.name}</span>
                           <span style={{ color: '#F9A826', fontWeight: 800, fontSize: '0.75rem' }}>×{item.qty}</span>
@@ -573,11 +576,11 @@ export default function KitchenPage() {
                         <div style={{ display: 'flex', gap: '0.3rem', alignItems: 'center' }}>
                           {iStatus === 'queued' && (<>
                             <span style={{ fontSize: '0.62rem', padding: '0.1rem 0.4rem', borderRadius: 6, background: '#66666640', color: '#999' }}>Queued</span>
-                            <button onClick={() => advanceItem(order.id, i)} style={{ ...btn('#3b82f6'), fontSize: '0.62rem', padding: '0.2rem 0.5rem', borderRadius: 6 }}>▶</button>
+                            {itemId && <button onClick={() => advanceItem(order.id, itemId)} style={{ ...btn('#3b82f6'), fontSize: '0.62rem', padding: '0.2rem 0.5rem', borderRadius: 6 }}>▶</button>}
                           </>)}
                           {iStatus === 'preparing' && (<>
                             <span style={{ fontSize: '0.62rem', padding: '0.1rem 0.4rem', borderRadius: 6, background: '#3b82f640', color: '#60a5fa' }}>Cooking</span>
-                            <button onClick={() => advanceItem(order.id, i)} style={{ ...btn('#10b981'), fontSize: '0.62rem', padding: '0.2rem 0.5rem', borderRadius: 6 }}>✅</button>
+                            {itemId && <button onClick={() => advanceItem(order.id, itemId)} style={{ ...btn('#10b981'), fontSize: '0.62rem', padding: '0.2rem 0.5rem', borderRadius: 6 }}>✅</button>}
                           </>)}
                           {iStatus === 'prepared' && (
                             <span style={{ fontSize: '0.62rem', padding: '0.1rem 0.4rem', borderRadius: 6, background: '#8b5cf640', color: '#a78bfa' }}>Ready</span>

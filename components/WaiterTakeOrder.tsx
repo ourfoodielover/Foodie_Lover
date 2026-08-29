@@ -560,7 +560,7 @@ export default function WaiterTakeOrder({ session, onClose }: Props) {
         {step === 'newGuestForm' && (
           <div style={{ padding: '1.25rem', maxWidth: 480, margin: '0 auto' }}>
             <div style={{ background: '#eff6ff', border: '1.5px solid #bfdbfe', borderRadius: 12, padding: '0.75rem 1rem', fontSize: '0.78rem', color: '#1e40af', marginBottom: '1.1rem' }}>
-              💡 Everything below is optional. If the customer doesn't want to give their name, just tap Continue — we'll call them
+              💡 Everything below is optional. If the customer doesn&apos;t want to give their name, just tap Continue — we&apos;ll call them
               {' '}<b>Guest {tableTabs.length + 1}</b>.
             </div>
             <label style={fieldLabel}>Customer Name (optional)</label>

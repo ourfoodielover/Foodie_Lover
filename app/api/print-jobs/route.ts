@@ -11,10 +11,15 @@ export const dynamic = 'force-dynamic';
 
 function checkAuth(req: NextRequest): boolean {
   const expected = process.env.PRINT_AGENT_KEY;
+  // Remediation: this used to fall OPEN ("allow") whenever PRINT_AGENT_KEY
+  // was unset — exactly the state a fresh deploy is in until someone
+  // remembers to set it. This endpoint returns print-job payloads (customer
+  // name, table, items) with no other auth layer, so failing open handed
+  // that out to anyone. It now fails CLOSED: with no key configured, every
+  // request is rejected until PRINT_AGENT_KEY is set.
   if (!expected) {
-    // If no key is configured, allow (dev convenience) but log a warning.
-    console.warn('[GET /api/print-jobs] PRINT_AGENT_KEY is not set — endpoint is unauthenticated');
-    return true;
+    console.warn('[GET /api/print-jobs] PRINT_AGENT_KEY is not set — denying all requests (fail closed)');
+    return false;
   }
   return req.headers.get('x-print-agent-key') === expected;
 }

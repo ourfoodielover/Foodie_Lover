@@ -13,9 +13,10 @@ type Ctx = { params: Promise<{ id: string }> };
 
 function checkAuth(req: NextRequest): boolean {
   const expected = process.env.PRINT_AGENT_KEY;
+  // Fail closed when unset — see the matching comment in GET /api/print-jobs.
   if (!expected) {
-    console.warn('[PATCH /api/print-jobs/[id]] PRINT_AGENT_KEY is not set — endpoint is unauthenticated');
-    return true;
+    console.warn('[PATCH /api/print-jobs/[id]] PRINT_AGENT_KEY is not set — denying all requests (fail closed)');
+    return false;
   }
   return req.headers.get('x-print-agent-key') === expected;
 }

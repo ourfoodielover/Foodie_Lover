@@ -4,6 +4,7 @@
 // DELETE /api/offers  { id }          — remove a rule by id
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/supabase-server';
+import { requireRole } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -68,6 +69,8 @@ export async function GET() {
 
 // ── POST ──────────────────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
+  const auth = requireRole(req, ['admin']);
+  if (!auth.ok) return auth.response;
   try {
     const sb   = getServerClient();
     const body = await req.json() as { rule?: OfferRule };
@@ -84,6 +87,8 @@ export async function POST(req: NextRequest) {
 
 // ── PATCH ─────────────────────────────────────────────────────────────────────
 export async function PATCH(req: NextRequest) {
+  const auth = requireRole(req, ['admin']);
+  if (!auth.ok) return auth.response;
   try {
     const sb   = getServerClient();
     const body = await req.json() as { id?: string; updates?: Partial<OfferRule> };
@@ -102,6 +107,8 @@ export async function PATCH(req: NextRequest) {
 
 // ── DELETE ────────────────────────────────────────────────────────────────────
 export async function DELETE(req: NextRequest) {
+  const auth = requireRole(req, ['admin']);
+  if (!auth.ok) return auth.response;
   try {
     const sb   = getServerClient();
     const body = await req.json() as { id?: string };

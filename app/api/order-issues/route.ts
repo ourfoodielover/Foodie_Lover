@@ -8,6 +8,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId, broadcast } from '@/lib/supabase-server';
+import { requireRole, requireAnyStaff } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -56,12 +57,19 @@ export async function GET(req: NextRequest) {
       .order('created_at', { ascending: false });
 
     if (orderId) {
+      // Scoped to one order — this is the customer's own dispute-state check
+      // (app/table/page.tsx, app/track/page.tsx). Stays public.
       query = query.eq('order_id', orderId);
-    } else if (status === 'active') {
-      // active = open + reserving + escalated (anything unresolved)
-      query = query.in('status', ['open', 'reserving', 'escalated']);
-    } else if (status !== 'all') {
-      query = query.eq('status', status);
+    } else {
+      // No orderId — this is the staff-only restaurant-wide issue list.
+      const auth = requireAnyStaff(req);
+      if (!auth.ok) return auth.response;
+      if (status === 'active') {
+        // active = open + reserving + escalated (anything unresolved)
+        query = query.in('status', ['open', 'reserving', 'escalated']);
+      } else if (status !== 'all') {
+        query = query.eq('status', status);
+      }
     }
 
     const { data, error } = await query.limit(200);
@@ -210,6 +218,21 @@ export async function PATCH(req: NextRequest) {
     const rid  = (body.restaurantId as string | undefined) ?? 'rest_default';
 
     if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 });
+
+    // Auth is branched on the requested transition — this handler serves both
+    // staff actions and a customer-facing "confirm receipt" button on the
+    // same status field, so it cannot be gated as a single block:
+    //   reserving  → staff started a re-serve (waiter/delivery/manager/admin)
+    //   escalated  → manual manager escalation (manager/admin)
+    //   resolved   → stays public: app/table/page.tsx's customer "I received
+    //                it" confirmation posts this with no session available.
+    if (body.status === 'reserving') {
+      const auth = requireRole(req, ['waiter', 'delivery', 'manager', 'admin']);
+      if (!auth.ok) return auth.response;
+    } else if (body.status === 'escalated') {
+      const auth = requireRole(req, ['manager', 'admin']);
+      if (!auth.ok) return auth.response;
+    }
 
     const updates: Record<string, unknown> = {
       updated_at: new Date().toISOString(),

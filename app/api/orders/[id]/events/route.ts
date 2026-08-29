@@ -2,15 +2,34 @@
 // POST /api/orders/[id]/events  — append a new event (e.g. CustomerConfirmed, FoodDisputed)
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId, broadcast } from '@/lib/supabase-server';
+import { getSession } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 type Ctx = { params: Promise<{ id: string }> };
 
 // ── GET ────────────────────────────────────────────────────────────────────────
-export async function GET(_req: NextRequest, ctx: Ctx) {
+// Same staff-session-OR-tracking_token proof used by GET /api/orders/[id] —
+// this returns an order's full event timeline so it needs the same guard.
+export async function GET(req: NextRequest, ctx: Ctx) {
   try {
     const { id } = await ctx.params;
     const sb = getServerClient();
+    const staffSession = getSession(req);
+    if (!staffSession) {
+      const providedToken = new URL(req.url).searchParams.get('token');
+      const { data: orderRow } = await sb
+        .from('orders')
+        .select('tracking_token')
+        .eq('id', id)
+        .maybeSingle();
+      const actualToken = (orderRow as Record<string, unknown> | null)?.tracking_token as string | null;
+      if (!actualToken || !providedToken || providedToken !== actualToken) {
+        return NextResponse.json(
+          { error: 'Not authorized to view this order. A valid tracking token or staff login is required.' },
+          { status: 403 },
+        );
+      }
+    }
     const { data, error } = await sb
       .from('order_events')
       .select('*')

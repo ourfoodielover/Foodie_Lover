@@ -12,10 +12,13 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { sendEmail } from '@/lib/email';
+import { requireRole } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
+  const auth = requireRole(req, ['admin']);
+  if (!auth.ok) return auth.response;
   const to = new URL(req.url).searchParams.get('to');
 
   if (!to || !to.includes('@')) {

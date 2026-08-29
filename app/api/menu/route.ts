@@ -2,6 +2,7 @@
 // POST /api/menu — create menu item
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId } from '@/lib/supabase-server';
+import { requireRole } from '@/lib/session-server';
 
 // Menu changes infrequently — allow CDN / browser to cache for 60 seconds.
 // This dramatically reduces Supabase round-trips when multiple clients (table
@@ -47,6 +48,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = requireRole(req, ['admin', 'manager']);
+  if (!auth.ok) return auth.response;
   try {
     const sb   = getServerClient();
     const body = await req.json() as Record<string, unknown>;

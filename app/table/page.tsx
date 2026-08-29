@@ -8,7 +8,7 @@ import {
   getMenu           as getMenuApi,
   createOrder       as createOrderApi,
   getTables         as getTablesApi,
-  getTabs           as getTabsApi,
+  getTab            as getTabApi,
   createTab         as createTabApi,
   updateTab         as updateTabApi,
   getOrders         as getOrdersApi,
@@ -284,8 +284,8 @@ function TablePageInner() {
         const deviceRecord = await getDeviceTabRecord(did);
         if (deviceRecord) {
           if (sameTable(deviceRecord.tableId, tableId)) {
-            const tabs   = await getTabsApi();
-            const apiTab = tabs.find(t => t.id === deviceRecord.tabId && t.status !== 'closed');
+            const fetchedTab = await getTabApi(deviceRecord.tabId);
+            const apiTab = fetchedTab && fetchedTab.status !== 'closed' ? fetchedTab : null;
             if (apiTab) {
               setTabId(apiTab.id);
               setCustomerName(deviceRecord.customerName);
@@ -337,13 +337,12 @@ function TablePageInner() {
   const refresh = useCallback(async () => {
     if (!tabId) return;
     try {
-      const [tabs, myOrders] = await Promise.all([
-        getTabsApi(),
+      const [apiTab, myOrders] = await Promise.all([
+        getTabApi(tabId),
         // Fetch ALL tab orders (not just active) so we always have an orderId for feedback
         // even after tab closes and orders reach terminal statuses.
         getOrdersApi({ tabId, limit: 50 }),
       ]);
-      const apiTab = tabs.find(t => t.id === tabId);
       if (apiTab) setTab(toTabUI(apiTab));  // PIN comes from apiTab.pin (Supabase)
       setOrders(myOrders);
       // Track first order seen — needed for feedback submission when tab is closed
@@ -478,8 +477,8 @@ function TablePageInner() {
       const restoredName  = result.customerName ?? name;
 
       // Fetch fresh tab data
-      const tabs   = await getTabsApi();
-      const apiTab = tabs.find(t => t.id === restoredTabId && t.status !== 'closed');
+      const fetchedTab = await getTabApi(restoredTabId);
+      const apiTab = fetchedTab && fetchedTab.status !== 'closed' ? fetchedTab : null;
       if (!apiTab) {
         setResumePinError('This session has already been closed. Please start a new one.');
         setResumeBusy(false);
@@ -634,7 +633,10 @@ function TablePageInner() {
         await fetch('/api/rewards/reserve-coupon', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ couponId: dineAppliedCoupon.couponId, orderId: tabId }),
+          body: JSON.stringify({
+            couponId: dineAppliedCoupon.couponId, orderId: tabId,
+            email: dineCouponEmail, phone: dineCouponPhone,
+          }),
         });
         await updateTabApi(tabId, {
           coupon_id: dineAppliedCoupon.couponId,

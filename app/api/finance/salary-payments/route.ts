@@ -4,9 +4,16 @@
 // Each payment posts exactly one linked finance_transactions row
 // (source='salary_payment') automatically — Admin does not separately create
 // a matching expense for the same salary payment.
+//
+// Remediation (master-prompt finding #12): POST delegates the insert-payment
+// + insert-ledger-row sequence to the atomic create_salary_payment()
+// Postgres function (migration_023_finance_atomicity.sql), which accepts an
+// optional idempotency key so a retried request after a network timeout
+// returns the original result instead of creating a duplicate payment.
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId } from '@/lib/supabase-server';
 import { requireAdminPin, errMsg, restaurantId, logFinanceAudit } from '@/lib/finance-server';
+import { requireRole } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,6 +32,8 @@ function rowToPayment(r: Record<string, unknown>) {
 }
 
 export async function GET(req: NextRequest) {
+  const roleAuth = requireRole(req, ['admin']);
+  if (!roleAuth.ok) return roleAuth.response;
   const auth = await requireAdminPin(req);
   if (!auth.ok) return auth.response;
   try {
@@ -45,6 +54,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const roleAuth = requireRole(req, ['admin']);
+  if (!roleAuth.ok) return roleAuth.response;
   const auth = await requireAdminPin(req);
   if (!auth.ok) return auth.response;
   try {
@@ -67,34 +78,44 @@ export async function POST(req: NextRequest) {
     const roundedAmt = Math.round(amount * 100) / 100;
     const paidAt = (body.paidAt as string) ?? new Date().toISOString();
     const createdBy = (body.by as string) ?? 'Admin';
+    const idempotencyKey = (body.idempotencyKey as string) || null;
 
     const id = newId('SALP');
-    const { error: payErr } = await sb.from('salary_payments').insert({
-      id, restaurant_id: rid, staff_id: staffId,
-      salary_config_id: (body.salaryConfigId as string) ?? null,
-      account_id: accountId, period_label: periodLabel, amount: roundedAmt,
-      paid_at: paidAt, note: (body.note as string) ?? null, created_by: createdBy,
-    });
-    if (payErr) throw payErr;
-
     const { data: salaryCat } = await sb.from('finance_categories')
       .select('id').eq('restaurant_id', rid).eq('kind', 'expense').eq('name', 'Staff Salary').maybeSingle();
+    const description = `Salary — ${(staff?.name as string) ?? staffId} (${periodLabel})`;
 
-    const { error: txErr } = await sb.from('finance_transactions').insert({
-      id: newId('FTXN'), restaurant_id: rid, type: 'expense', account_id: accountId,
-      category_id: salaryCat?.id ?? null,
-      amount: roundedAmt,
-      description: `Salary — ${(staff?.name as string) ?? staffId} (${periodLabel})`,
-      occurred_at: paidAt, source: 'salary_payment', source_id: id, created_by: createdBy,
+    const { data: rpcData, error: rpcErr } = await sb.rpc('create_salary_payment', {
+      p_payment_id: id,
+      p_restaurant_id: rid,
+      p_staff_id: staffId,
+      p_salary_config_id: (body.salaryConfigId as string) ?? null,
+      p_account_id: accountId,
+      p_period_label: periodLabel,
+      p_amount: roundedAmt,
+      p_paid_at: paidAt,
+      p_note: (body.note as string) ?? null,
+      p_created_by: createdBy,
+      p_category_id: salaryCat?.id ?? null,
+      p_description: description,
+      p_idempotency_key: idempotencyKey,
     });
-    if (txErr) throw txErr;
+    if (rpcErr) throw rpcErr;
 
-    await logFinanceAudit(sb, {
-      restaurantId: rid, entityType: 'salary_payment', entityId: id, action: 'create',
-      changedBy: createdBy, after: { staffId, periodLabel, amount: roundedAmt },
-    });
+    const result = rpcData as { ok: boolean; error?: string; id?: string; already_exists?: boolean };
+    if (!result.ok) {
+      throw new Error(`create_salary_payment RPC failed: ${result.error ?? 'unknown'}`);
+    }
 
-    return NextResponse.json({ id }, { status: 201 });
+    const resultId = result.id ?? id;
+    if (!result.already_exists) {
+      await logFinanceAudit(sb, {
+        restaurantId: rid, entityType: 'salary_payment', entityId: resultId, action: 'create',
+        changedBy: createdBy, after: { staffId, periodLabel, amount: roundedAmt },
+      });
+    }
+
+    return NextResponse.json({ id: resultId }, { status: 201 });
   } catch (err) {
     console.error('[POST /api/finance/salary-payments]', err);
     return NextResponse.json({ error: errMsg(err) }, { status: 500 });

@@ -10,12 +10,15 @@
 // NEVER returns a secret value — only whether each secret ENV var is
 // configured (true/false). See lib/config-server.ts for the resolver this
 // route is a thin read-only wrapper around.
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getConfigDiagnostics } from '@/lib/config-server';
+import { requireRole } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const auth = requireRole(req, ['admin']);
+  if (!auth.ok) return auth.response;
   try {
     const diagnostics = await getConfigDiagnostics();
     return NextResponse.json(diagnostics);

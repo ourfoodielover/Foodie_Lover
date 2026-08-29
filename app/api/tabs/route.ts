@@ -1,7 +1,19 @@
 // GET  /api/tabs
 // POST /api/tabs
+//
+// Remediation (master-prompt finding: "GET /api/tabs (restaurant-wide
+// PII/PIN exposure with no scoping)", AUTH-4): GET previously had no auth
+// at all and returned every tab at the restaurant — every other table's
+// customer name, phone, email, and session-join PIN — to any caller. The
+// one customer-facing caller (app/table/page.tsx) has been migrated to
+// GET /api/tabs/[id] (added alongside this fix), which returns only the
+// single tab it actually needs; every remaining caller (waiter, manager,
+// admin dashboards) is a staff portal, so GET now requires a staff session.
+// POST (starting a new dine-in session from the QR table portal) stays
+// public by design — it is the one genuinely customer-initiated write here.
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId, broadcast } from '@/lib/supabase-server';
+import { requireAnyStaff } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,6 +50,8 @@ function errMsg(err: unknown): string {
 }
 
 export async function GET(req: NextRequest) {
+  const auth = requireAnyStaff(req);
+  if (!auth.ok) return auth.response;
   try {
     const sb  = getServerClient();
     const url = new URL(req.url);

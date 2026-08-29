@@ -3,13 +3,24 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId, rowToOrder, broadcast } from '@/lib/supabase-server';
 import { enqueueReceiptEmail, sendReceiptEmail, sendOrderReadyEmail, sendOrderConfirmationEmail, sendOutForDeliveryEmail, triggerSpinInviteForOrder } from '@/lib/email-server';
+import { getSession, requireAnyStaff } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 
 type Ctx = { params: Promise<{ id: string }> };
 
 // ── GET ───────────────────────────────────────────────────────────────────────
-export async function GET(_req: NextRequest, ctx: Ctx) {
+//
+// Remediation (audit finding C6): this route used to return the full order —
+// customer name, phone, address, items — to anyone who supplied a valid order
+// id, with no check of any kind. The public Track page's own tracking-token
+// check happened only in the browser, after this data had already been sent.
+// It now requires EITHER an authenticated staff/management session (any
+// role — every portal's order-detail views, Kitchen/Waiter/Manager/Admin,
+// legitimately need full access) OR a `?token=` query param matching the
+// order's own tracking_token (the public, unauthenticated path used by
+// /track). A request with neither is refused before any order data is read.
+export async function GET(req: NextRequest, ctx: Ctx) {
   try {
     const { id } = await ctx.params;
     const sb = getServerClient();
@@ -19,6 +30,19 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
       .eq('id', id)
       .single();
     if (error || !data) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+
+    const staffSession = getSession(req);
+    if (!staffSession) {
+      const providedToken = new URL(req.url).searchParams.get('token');
+      const actualToken   = (data as Record<string, unknown>).tracking_token as string | null;
+      if (!actualToken || !providedToken || providedToken !== actualToken) {
+        return NextResponse.json(
+          { error: 'Not authorized to view this order. A valid tracking token or staff login is required.' },
+          { status: 403 },
+        );
+      }
+    }
+
     return NextResponse.json(rowToOrder(data, data.order_items, data.order_events));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -59,6 +83,26 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     const { id } = await ctx.params;
     const sb   = getServerClient();
     const body = await req.json();
+
+    // ── Auth ──────────────────────────────────────────────────────────────────
+    // This single handler serves every portal (kitchen item-status, waiter
+    // confirm/reject/reprint, manager discount/void/force, delivery
+    // status/payment) AND one customer-facing action: the delivery-tracking
+    // page's "I received it" confirmation (action: 'customer_confirm', body
+    // contains nothing else). That one case has no staff session available
+    // and must stay public; every other shape on this route is staff-only.
+    // The key allowlist (not just checking body.action) prevents a caller
+    // from smuggling a staff-only field like `discount` alongside
+    // action:'customer_confirm' to dodge the auth check.
+    const bodyKeys = Object.keys(body as Record<string, unknown>);
+    const isCustomerConfirmOnly =
+      body.action === 'customer_confirm' &&
+      bodyKeys.every(k => k === 'action' || k === 'restaurantId');
+    if (!isCustomerConfirmOnly) {
+      const auth = requireAnyStaff(req);
+      if (!auth.ok) return auth.response;
+    }
+
     const rid  = body.restaurantId ?? 'rest_default';
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
     // Hoisted so the "ready" and "receipt" email triggers below can read it.

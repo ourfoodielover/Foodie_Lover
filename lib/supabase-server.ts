@@ -22,6 +22,21 @@ export function newId(prefix: string): string {
 }
 
 /**
+ * Cryptographically random id/token generator (remediation of audit finding
+ * C6). Use this instead of newId() anywhere the value is used as a bearer
+ * secret — i.e. anywhere possessing the string alone is what grants access to
+ * something (an order id used with no other check, a tracking token). Plain
+ * primary keys that are never treated as secrets (staff ids, menu item ids,
+ * etc.) do not need this — newId() is fine for those and this function exists
+ * so only the security-sensitive call sites had to change.
+ * 16 random bytes = 128 bits, base64url-encoded (~22 chars), matches the
+ * strength already used by generateSpinToken().
+ */
+export function newSecureId(prefix: string): string {
+  return `${prefix}_${randomBytes(16).toString('base64url')}`;
+}
+
+/**
  * Generates a cryptographically random spin token (48 hex chars = 192 bits).
  * Used as a single-use URL token in Spin & Win email links.
  * Token is tied to a specific order or tab — reusing the same token always

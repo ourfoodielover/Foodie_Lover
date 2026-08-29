@@ -291,6 +291,9 @@ export async function createOrder(data: {
   notes?:              string;
   createdByStaffId?:   string;
   createdByStaffName?: string;
+  // C5 remediation: stable per-submission key so a retry/offline-replay of the
+  // same logical order returns the existing order instead of creating a duplicate.
+  idempotencyKey?:     string;
 }): Promise<Order> {
   return apiFetch<Order>('/api/orders', {
     method: 'POST',
@@ -420,14 +423,24 @@ export async function applyDiscount(
   });
 }
 
+// Remediation: previously took a positional `itemIndex` into order.items[],
+// which the server used to re-fetch items sorted by created_at and update
+// whichever row landed at that position. That's only correct as long as the
+// array order the kitchen page rendered from exactly matches the server's
+// re-fetch order at the moment the PATCH lands — a realtime refresh racing
+// with the click, or any future change to how items are sorted/returned,
+// could silently advance the wrong item's status. order_items.id is a
+// stable identifier that can't drift, so this now sends that directly (the
+// server's `itemId` fast path in PATCH /api/orders/[id] already existed for
+// this — the index path was a fallback only the kitchen page used).
 export async function updateItemStatus(
   orderId:    string,
-  itemIndex:  number,
+  itemId:     string,
   itemStatus: string,
 ): Promise<Order> {
   return apiFetch<Order>(`/api/orders/${orderId}`, {
     method: 'PATCH',
-    body:   JSON.stringify({ itemIndex, itemStatus }),
+    body:   JSON.stringify({ itemId, itemStatus }),
   });
 }
 
@@ -515,12 +528,24 @@ export async function deleteStaffMember(id: string): Promise<void> {
 }
 
 // ─── Customer Tabs ────────────────────────────────────────────────────────────
+// getTabs() returns EVERY tab at the restaurant (including other tables'
+// name/phone/email/PIN) and now requires a staff session server-side — only
+// call it from a staff portal (waiter/manager/admin). Customer-facing code
+// (the table QR portal) that already knows its own tab id must use getTab()
+// instead, which is public and scoped to exactly that one tab.
 export async function getTabs(status?: string, since?: string): Promise<CustomerTab[]> {
   const params = new URLSearchParams({ restaurantId: rid() });
   if (status) params.set('status', status);
   // 'since' limits to tabs created on/after this ISO timestamp — avoids fetching all history
   if (since)  params.set('since', since);
   return apiFetch<CustomerTab[]>(`/api/tabs?${params}`);
+}
+export async function getTab(id: string): Promise<CustomerTab | null> {
+  try {
+    return await apiFetch<CustomerTab>(`/api/tabs/${id}`);
+  } catch {
+    return null;
+  }
 }
 
 export async function createTab(data: {
@@ -769,11 +794,16 @@ export async function markOrderDeliveredWithPayment(
 }
 
 // ─── Track / Verify ───────────────────────────────────────────────────────────
+// Remediation (audit finding C6): this used to fetch the FULL order via
+// getOrder() — no token involved in that request at all — and only compare
+// order.trackingToken !== token in the browser AFTER the server had already
+// sent every field (name, phone, address, items). GET /api/orders/[id] now
+// enforces the token server-side (see app/api/orders/[id]/route.ts), so the
+// token is sent as a query param on the request itself; an invalid/missing
+// token now gets a 403 with no order data in the response body at all.
 export async function verifyTrackingToken(orderId: string, token: string): Promise<Order | null> {
   try {
-    const order = await getOrder(orderId);
-    if (!order || order.trackingToken !== token) return null;
-    return order;
+    return await apiFetch<Order>(`/api/orders/${encodeURIComponent(orderId)}?token=${encodeURIComponent(token)}`);
   } catch { return null; }
 }
 
@@ -1044,6 +1074,36 @@ export interface ExpenseStats {
   byCategory:  { category: string; total: number }[];
 }
 
+/**
+ * getTodayRevenue — authoritative revenue for a date range, computed
+ * server-side by the same engine Finance uses (computeSystemSales), so the
+ * Manager Expenses page's "Today Revenue" / "Net Profit" figures always
+ * agree with Finance's numbers for the same period instead of being
+ * re-derived from a naive client-side orders.status filter.
+ */
+export async function getTodayRevenue(fromISO: string, toISO?: string): Promise<number> {
+  const params = new URLSearchParams({ from: fromISO });
+  if (toISO) params.set('to', toISO);
+  const res = await apiFetch<{ revenue: number }>(`/api/manager/today-revenue?${params.toString()}`);
+  return res.revenue;
+}
+
+/**
+ * getSystemSalesSummary — same authoritative engine as getTodayRevenue(),
+ * but returns the full gross/discount/net/count breakdown instead of just
+ * net revenue. Used anywhere a period's "Net Revenue" / "Gross Revenue" /
+ * "Discounts" headline figures need to match Finance exactly (e.g. Admin's
+ * Sales Report tab), without requiring the Finance admin-PIN — this route
+ * is gated to a manager/admin session only (GET /api/manager/today-revenue).
+ */
+export async function getSystemSalesSummary(
+  fromISO: string, toISO?: string,
+): Promise<{ revenue: number; gross: number; discount: number; orderCount: number }> {
+  const params = new URLSearchParams({ from: fromISO });
+  if (toISO) params.set('to', toISO);
+  return apiFetch(`/api/manager/today-revenue?${params.toString()}`);
+}
+
 export async function listExpenses(since?: string, category?: string): Promise<Expense[]> {
   const params = new URLSearchParams({ restaurantId: rid() });
   if (since)    params.set('since', since);
@@ -1165,24 +1225,28 @@ export async function verifyRolePin(roleKey: string, inputPin: string): Promise<
   return stored !== null && stored === inputPin;
 }
 
+// Remediation (audit finding C3): this used to fetch the full staff record —
+// including the plaintext `pin` column — to the browser and let the caller
+// compare it locally. It now POSTs the entered PIN to a server-side login
+// route (/api/auth/staff-login) that verifies it in the database and never
+// sends the PIN back. Returns the staff record (no `pin` field — it no longer
+// exists on the response) on success, or null on any failure (unknown
+// username, wrong PIN, inactive account) — callers cannot distinguish which,
+// deliberately, to avoid leaking which usernames exist.
 export async function lookupStaffByUsername(
   username: string,
   role: string,
-): Promise<{ id: string; name: string; username: string; pin: string; active: boolean } | null> {
+  pin: string,
+): Promise<{ id: string; name: string; username: string; role: string } | null> {
   try {
-    const list = await apiFetch<StaffMember[]>(
-      `/api/staff?restaurantId=${encodeURIComponent(rid())}&role=${encodeURIComponent(role)}`,
-    );
-    // Find by username (case-insensitive)
-    const match = list.find(
-      s => s.username.toLowerCase() === username.toLowerCase(),
-    );
-    if (!match) return null;
-    // We need the PIN — fetch full record via staff/[id]
-    const full = await apiFetch<StaffMember & { pin?: string }>(
-      `/api/staff/${encodeURIComponent(match.id)}`,
-    );
-    return { id: full.id, name: full.name, username: full.username, pin: full.pin ?? '', active: full.active };
+    const res = await fetch('/api/auth/staff-login', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ username, role, pin, restaurantId: rid() }),
+    });
+    const result = await res.json() as { ok: boolean; staff?: { id: string; name: string; username: string; role: string } };
+    if (!result.ok || !result.staff) return null;
+    return result.staff;
   } catch {
     return null;
   }
@@ -1456,7 +1520,7 @@ export async function listVendorPayments(pin: string, filters?: { vendorPurchase
   if (filters?.vendorId) params.set('vendorId', filters.vendorId);
   return financeFetch(`/api/finance/vendor-payments?${params}`, pin);
 }
-export async function createVendorPayment(pin: string, data: { vendorPurchaseId: string; accountId: string; amount: number; paidAt?: string; note?: string; by?: string }): Promise<{ id: string; purchaseStatus: string; amountPaid: number }> {
+export async function createVendorPayment(pin: string, data: { vendorPurchaseId: string; accountId: string; amount: number; paidAt?: string; note?: string; by?: string; idempotencyKey?: string }): Promise<{ id: string; purchaseStatus: string; amountPaid: number }> {
   return financeFetch('/api/finance/vendor-payments', pin, { method: 'POST', body: JSON.stringify({ ...data, restaurantId: rid(), pin }) });
 }
 export async function voidVendorPayment(pin: string, id: string, by: string, reason?: string): Promise<void> {
@@ -1479,7 +1543,7 @@ export async function listSalaryPayments(pin: string, staffId?: string): Promise
   if (staffId) params.set('staffId', staffId);
   return financeFetch(`/api/finance/salary-payments?${params}`, pin);
 }
-export async function createSalaryPayment(pin: string, data: { staffId: string; salaryConfigId?: string; accountId: string; periodLabel: string; amount: number; paidAt?: string; note?: string; by?: string }): Promise<{ id: string }> {
+export async function createSalaryPayment(pin: string, data: { staffId: string; salaryConfigId?: string; accountId: string; periodLabel: string; amount: number; paidAt?: string; note?: string; by?: string; idempotencyKey?: string }): Promise<{ id: string }> {
   return financeFetch('/api/finance/salary-payments', pin, { method: 'POST', body: JSON.stringify({ ...data, restaurantId: rid(), pin }) });
 }
 export async function voidSalaryPayment(pin: string, id: string, by: string, reason?: string): Promise<void> {
@@ -1509,4 +1573,64 @@ export async function getFinanceAuditLog(pin: string, filters?: { entityType?: s
   if (filters?.entityId) params.set('entityId', filters.entityId);
   if (filters?.limit) params.set('limit', String(filters.limit));
   return financeFetch(`/api/finance/audit-log?${params}`, pin);
+}
+
+// ─── Test Data Reset (Admin Danger Zone — pre-production "start clean") ──────
+// Gated the same way as every other Finance route: a real admin session
+// (server-side, checked by the route) PLUS the Finance admin PIN (sent as
+// x-admin-pin here via financeFetch, same as every call above). See
+// app/api/admin/reset-test-data/route.ts and
+// supabase/migration_024_reset_test_data.sql for the full authorization and
+// atomicity design.
+
+export interface TestDataResetCounts {
+  orders: number; customerTabs: number; orderItems: number; orderEvents: number;
+  orderIssues: number; orderFeedback: number; printJobs: number; emailQueue: number;
+  emailLog: number; waiterCalls: number; tabDevices: number; splitBills: number;
+  spinResults: number; rewardCoupons: number; shiftLogs: number; managerExpenses: number;
+  financeTransactions: number; financeAuditLog: number; vendorPayments: number;
+  vendorPurchases: number; salaryPayments: number; dailyClosings: number; occupiedTables: number;
+}
+export interface TestDataResetAmounts {
+  systemSalesGross: number; systemSalesDiscount: number; systemSalesNet: number;
+  managerExpenses: number; financeIncome: number; financeExpense: number;
+  vendorPaid: number; salaryPaid: number; netCashFlow: number;
+}
+export interface TestDataAccountBalance {
+  accountId: string; name: string; openingBalance: number; currentBalance: number;
+}
+export interface TestDataResetSnapshot {
+  counts: TestDataResetCounts;
+  amounts: TestDataResetAmounts;
+  accountBalances: TestDataAccountBalance[];
+  isClean: boolean;
+}
+export interface TestDataResetResult {
+  ok: true;
+  resetId: string;
+  removed: { counts: TestDataResetCounts; amounts: TestDataResetAmounts };
+  before: TestDataResetSnapshot;
+  verification: TestDataResetSnapshot;
+  crossCheckAgrees: boolean;
+  message: string;
+}
+
+/** Preview what a test-data reset would remove. Read-only — deletes nothing. */
+export async function previewTestDataReset(pin: string): Promise<TestDataResetSnapshot> {
+  const res = await financeFetch<{ preview: TestDataResetSnapshot }>(
+    `/api/admin/reset-test-data?restaurantId=${rid()}`, pin,
+  );
+  return res.preview;
+}
+
+/**
+ * Executes the reset. `confirmText` must be exactly "RESET TEST DATA" (the
+ * server re-validates this — the client-side check is only for a fast error
+ * message, never the actual gate).
+ */
+export async function executeTestDataReset(pin: string, confirmText: string, note?: string): Promise<TestDataResetResult> {
+  return financeFetch<TestDataResetResult>('/api/admin/reset-test-data', pin, {
+    method: 'POST',
+    body: JSON.stringify({ confirmText, note, restaurantId: rid() }),
+  });
 }

@@ -1,7 +1,26 @@
 // GET /api/analytics?period=today|week|month|all&restaurantId=...
+//
+// Remediation ("Manager, Admin analytics, and Finance should not show
+// contradictory revenue/profit numbers for the same period"): summary.
+// totalRevenue and revenueByDay previously summed raw orders.total directly
+// — including dine-in orders individually, which Finance/computeSystemSales
+// intentionally recognizes only ONCE per closed tab (see that function's
+// header comment in lib/finance-server.ts) — and also included `void`
+// orders (only `cancelled` was excluded). Both now come from the same
+// authoritative computeSystemSales() engine Finance and the Manager
+// dashboards use, so a "today"/"week"/"month" figure here can never disagree
+// with Finance for the same period. topItems / peakHours / avgOrderValue /
+// byCategory / waiterPerformance are deliberately left as order/item-level
+// breakdowns — they answer a genuinely different question ("what got
+// ordered, and when") that a tab-aggregated revenue row can't answer (a
+// closed tab collapses several orders' line items into one revenue event),
+// so a small, expected difference between e.g. avgOrderValue here and
+// "average tab size" in Finance is not a bug.
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/supabase-server';
 import { todayMidnightIST, getISTHour } from '@/lib/date';
+import { requireRole } from '@/lib/session-server';
+import { computeSystemSales, sumSystemSales } from '@/lib/finance-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,6 +43,8 @@ function periodStart(period: string): string | null {
 }
 
 export async function GET(req: NextRequest) {
+  const auth = requireRole(req, ['admin', 'manager']);
+  if (!auth.ok) return auth.response;
   try {
     const sb          = getServerClient();
     const url         = new URL(req.url);
@@ -66,24 +87,38 @@ export async function GET(req: NextRequest) {
     }
     const peakHours = hourCounts.map((count, hour) => ({ hour, count }));
 
-    // ── Revenue by day (last 30 days) ─────────────────────────────────────────
+    // ── Authoritative revenue (same engine as Finance / Manager dashboards) ────
+    const systemSalesRows = await computeSystemSales(
+      sb, rid, since ?? '1970-01-01T00:00:00.000Z', new Date().toISOString(),
+    );
+    const systemSalesTotals = sumSystemSales(systemSalesRows);
+
+    // ── Revenue by day (last 30 days) — bucketed from the authoritative rows,
+    //    not raw orders, so a day's total here matches what Finance would
+    //    show for that same day (dine-in bucketed by tab-close date).
     const dayMap: Record<string, { revenue: number; orders: number }> = {};
-    for (const o of rows) {
-      const day = (o.created_at ?? '').slice(0, 10);
+    for (const r of systemSalesRows) {
+      const day = (r.occurredAt ?? '').slice(0, 10);
       if (!day) continue;
       if (!dayMap[day]) dayMap[day] = { revenue: 0, orders: 0 };
-      dayMap[day].revenue += Number(o.total);
+      dayMap[day].revenue += r.net;
       dayMap[day].orders += 1;
     }
     const revenueByDay = Object.entries(dayMap)
-      .map(([day, val]) => ({ day, revenue: val.revenue, orders: val.orders }))
+      .map(([day, val]) => ({ day, revenue: Math.round(val.revenue * 100) / 100, orders: val.orders }))
       .sort((a, b) => a.day.localeCompare(b.day))
       .slice(-30);
 
     // ── Summary ───────────────────────────────────────────────────────────────
-    const totalRevenue   = rows.reduce((s, o) => s + Number(o.total), 0);
+    const totalRevenue   = systemSalesTotals.net;
     const totalOrders    = rows.length;
-    const avgOrderValue  = totalOrders > 0 ? totalRevenue / totalOrders : 0;
+    // avgOrderValue is deliberately the average RAW order ticket size (an
+    // operational metric — "how big is a typical order"), not
+    // totalRevenue / totalOrders, since totalOrders counts individual
+    // orders while totalRevenue counts closed TABS once each for dine-in —
+    // dividing one by the other would understate a typical dine-in ticket.
+    const rawOrderTotal  = rows.reduce((s, o) => s + Number(o.total), 0);
+    const avgOrderValue  = totalOrders > 0 ? rawOrderTotal / totalOrders : 0;
     // Per-type counts for admin dashboard KPIs
     const countDineIn    = rows.filter(o => o.type === 'dine-in').length;
     const countPickup    = rows.filter(o => o.type === 'pickup').length;

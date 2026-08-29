@@ -2,6 +2,7 @@
 // POST /api/shifts — open shift
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId } from '@/lib/supabase-server';
+import { requireAnyStaff } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,6 +13,8 @@ function errMsg(err: unknown): string {
 }
 
 export async function GET(req: NextRequest) {
+  const auth = requireAnyStaff(req);
+  if (!auth.ok) return auth.response;
   try {
     const sb  = getServerClient();
     const url = new URL(req.url);
@@ -36,6 +39,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = requireAnyStaff(req);
+  if (!auth.ok) return auth.response;
   try {
     const sb   = getServerClient();
     const body = await req.json() as Record<string, unknown>;

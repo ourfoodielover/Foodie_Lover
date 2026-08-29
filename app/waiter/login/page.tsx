@@ -22,8 +22,8 @@ export default function WaiterLoginPage() {
     setBusy(true);
     setError('');
     try {
-      const staff = await lookupStaffByUsername(username.trim(), 'waiter');
-      if (!staff || !staff.active || staff.pin !== pin.trim()) {
+      const staff = await lookupStaffByUsername(username.trim(), 'waiter', pin.trim());
+      if (!staff) {
         setError('Incorrect username or PIN. Contact your admin.');
         setPin('');
         return;

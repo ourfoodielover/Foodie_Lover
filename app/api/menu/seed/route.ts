@@ -2,8 +2,9 @@
 // Batch-inserts all missing menu items from the complete restaurant catalog.
 // Safe to call at any time — checks existing names first, only inserts missing items.
 // Returns: { ok: true, inserted: N, skipped: N }
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId } from '@/lib/supabase-server';
+import { requireRole } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -123,7 +124,9 @@ const CATALOG = [
   { name: 'Arabic Mutton Mandi',        category:'Arabic Mandi', description: 'Slow-roasted succulent mutton served over fragrant Yemeni-spiced mandi rice.',                  badge:'',           img_url: IMG.mandi, variants: [{name:'1 Piece',price:280},{name:'2 Piece',price:540},{name:'3 Piece',price:780},{name:'4 Piece',price:1000}] },
 ] as const;
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const auth = requireRole(req, ['admin', 'manager']);
+  if (!auth.ok) return auth.response;
   try {
     const sb  = getServerClient();
     const rid = process.env.NEXT_PUBLIC_RESTAURANT_ID ?? 'rest_default';

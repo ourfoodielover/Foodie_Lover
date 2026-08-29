@@ -8,6 +8,7 @@
 //     project → Storage → New bucket → Name: menu-images → Public: true
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/supabase-server';
+import { requireRole } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,6 +17,8 @@ const MAX_BYTES     = 5 * 1024 * 1024; // 5 MB
 const BUCKET        = 'menu-images';
 
 export async function POST(req: NextRequest) {
+  const auth = requireRole(req, ['admin', 'manager']);
+  if (!auth.ok) return auth.response;
   try {
     const contentType = req.headers.get('content-type') ?? '';
     if (!contentType.includes('multipart/form-data')) {

@@ -1,12 +1,15 @@
 // GET /api/email/diagnostics
 // Returns email configuration status and recent queue activity.
 // Used by the Admin panel's Email Diagnostics section.
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/supabase-server';
+import { requireRole } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const auth = requireRole(req, ['admin']);
+  if (!auth.ok) return auth.response;
   const apiKey    = process.env.RESEND_API_KEY ?? '';
   const configured = Boolean(apiKey && !apiKey.startsWith('re_placeholder') && apiKey.length > 10);
 

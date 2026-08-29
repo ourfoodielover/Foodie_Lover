@@ -32,6 +32,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { processEmailQueue } from '@/lib/email-server';
+import { getSession } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30; // 30-second timeout (Vercel Hobby limit)
@@ -41,15 +42,20 @@ export const maxDuration = 30; // 30-second timeout (Vercel Hobby limit)
 function isAuthorized(req: NextRequest): boolean {
   const cronSecret = process.env.CRON_SECRET;
 
-  // If no CRON_SECRET configured, allow all (dev / local mode)
-  if (!cronSecret) return true;
+  // Remediation note: this used to fall open ("allow all") whenever
+  // CRON_SECRET was unset, which is exactly the state a fresh deploy is in
+  // until someone remembers to set it. It now fails CLOSED when unset —
+  // an admin session (checked by the caller, see GET below) is the only
+  // way in until CRON_SECRET is configured.
+  if (!cronSecret) return false;
 
   // Bearer token check (same header format Vercel Cron used — keeps compatibility
   // with any existing scripts or monitoring tools that call this endpoint)
   const authHeader = req.headers.get('authorization');
   if (authHeader === `Bearer ${cronSecret}`) return true;
 
-  // Allow same-machine calls (dev server / CI)
+  // Allow same-machine calls (dev server / CI) — only once a secret exists;
+  // this is a convenience for local dev, not a way to bypass auth in prod.
   const host = req.headers.get('host') ?? '';
   if (host.startsWith('localhost') || host.startsWith('127.0.0.1')) return true;
 
@@ -59,7 +65,10 @@ function isAuthorized(req: NextRequest): boolean {
 // ─── GET handler ──────────────────────────────────────────────────────────────
 
 export async function GET(req: NextRequest) {
-  if (!isAuthorized(req)) {
+  // Either a valid CRON_SECRET bearer token (external cron/monitor) OR an
+  // authenticated admin session (manual flush from the browser) is accepted.
+  const session = getSession(req);
+  if (!isAuthorized(req) && session?.role !== 'admin') {
     console.warn('[process-queue] Unauthorized access attempt');
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }

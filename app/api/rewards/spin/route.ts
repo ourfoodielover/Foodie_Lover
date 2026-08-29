@@ -20,72 +20,68 @@ export async function POST(req: NextRequest) {
   const body = await req.json() as {
     orderId?:       string;
     tabId?:         string;
-    customerEmail?: string;
-    customerPhone?: string;
     restaurantId?:  string;
-    // Token-based auth (from /spin page via email link) — mutually exclusive with customerEmail.
-    // When spinToken is provided, email/phone are fetched server-side from the order/tab.
+    // Token-based auth (from /spin page via email link) — the ONLY supported
+    // auth path. email/phone are always fetched server-side from the order/tab
+    // that the token was issued for; the caller cannot supply/override them.
     spinToken?:     string;
   };
-  const { orderId, tabId, customerEmail, customerPhone, spinToken } = body;
+  const { orderId, tabId, spinToken } = body;
   const restaurantId = body.restaurantId ?? process.env.NEXT_PUBLIC_RESTAURANT_ID ?? 'rest_default';
 
   if (!orderId && !tabId) {
     return NextResponse.json({ error: 'orderId or tabId required' }, { status: 400 });
+  }
+  if (!spinToken) {
+    return NextResponse.json({ error: 'spinToken required' }, { status: 400 });
   }
 
   const sb = getServerClient();
   let normEmail: string;
   let normPhone: string;
 
-  if (spinToken) {
-    // ── Token-based auth path (from /spin page via email link) ──────────────
-    // Validate token against spin_token stored on the order/tab.
-    // Fetch email/phone server-side — customer does not need to supply them.
-    if (orderId) {
-      const { data: entity } = await sb
-        .from('orders')
-        .select('spin_token, customer_email, phone')
-        .eq('id', orderId)
-        .single();
-      if (!entity || entity.spin_token !== spinToken) {
-        return NextResponse.json({ error: 'Invalid or expired spin token' }, { status: 403 });
-      }
-      normEmail = normalizeEmail((entity.customer_email as string) || '');
-      normPhone = normalizePhone((entity.phone as string) || '');
-    } else {
-      const { data: entity } = await sb
-        .from('customer_tabs')
-        .select('spin_token, customer_email, phone')
-        .eq('id', tabId!)
-        .single();
-      if (!entity || entity.spin_token !== spinToken) {
-        return NextResponse.json({ error: 'Invalid or expired spin token' }, { status: 403 });
-      }
-      normEmail = normalizeEmail((entity.customer_email as string) || '');
-      normPhone = normalizePhone((entity.phone as string) || '');
-      // Tab phone fallback: if tab has no phone, check if any order in the tab does
-      if (!normPhone) {
-        const { data: orderWithPhone } = await sb
-          .from('orders')
-          .select('phone')
-          .eq('tab_id', tabId!)
-          .not('phone', 'is', null)
-          .limit(1)
-          .maybeSingle();
-        if (orderWithPhone?.phone) {
-          normPhone = normalizePhone(orderWithPhone.phone as string);
-        }
-      }
+  // ── Token-based auth (from /spin page via email link) ────────────────────
+  // Validate token against spin_token stored on the order/tab.
+  // Fetch email/phone server-side — the caller cannot supply their own, which
+  // is what previously let anyone redirect someone else's reward to an
+  // attacker-controlled email via an unauthenticated legacy `customerEmail`
+  // body field. That legacy path had no caller left in the app (the /track
+  // page never posted to this route) and has been removed outright.
+  if (orderId) {
+    const { data: entity } = await sb
+      .from('orders')
+      .select('spin_token, customer_email, phone')
+      .eq('id', orderId)
+      .single();
+    if (!entity || entity.spin_token !== spinToken) {
+      return NextResponse.json({ error: 'Invalid or expired spin token' }, { status: 403 });
     }
+    normEmail = normalizeEmail((entity.customer_email as string) || '');
+    normPhone = normalizePhone((entity.phone as string) || '');
   } else {
-    // ── Legacy email-based auth path (from /track page) ─────────────────────
-    // Kept for backward compatibility — the track page passes customerEmail in body.
-    if (!customerEmail) {
-      return NextResponse.json({ error: 'customerEmail required' }, { status: 400 });
+    const { data: entity } = await sb
+      .from('customer_tabs')
+      .select('spin_token, customer_email, phone')
+      .eq('id', tabId!)
+      .single();
+    if (!entity || entity.spin_token !== spinToken) {
+      return NextResponse.json({ error: 'Invalid or expired spin token' }, { status: 403 });
     }
-    normEmail = normalizeEmail(customerEmail);
-    normPhone = customerPhone ? normalizePhone(customerPhone) : '';
+    normEmail = normalizeEmail((entity.customer_email as string) || '');
+    normPhone = normalizePhone((entity.phone as string) || '');
+    // Tab phone fallback: if tab has no phone, check if any order in the tab does
+    if (!normPhone) {
+      const { data: orderWithPhone } = await sb
+        .from('orders')
+        .select('phone')
+        .eq('tab_id', tabId!)
+        .not('phone', 'is', null)
+        .limit(1)
+        .maybeSingle();
+      if (orderWithPhone?.phone) {
+        normPhone = normalizePhone(orderWithPhone.phone as string);
+      }
+    }
   }
 
   // ── Fetch config ────────────────────────────────────────────────────────
@@ -98,16 +94,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Spin & Win not active' }, { status: 400 });
   }
 
-  // ── Contact requirements (token-based path) — mirror GET /api/rewards/eligibility ──
-  // Legacy email-based path: normEmail is already validated (customerEmail required in body).
-  // Token-based path: we fetched email/phone from the entity — now enforce config flags.
-  if (spinToken) {
-    if (config.require_email && !normEmail) {
-      return NextResponse.json({ error: 'Email address required for Spin & Win' }, { status: 403 });
-    }
-    if (config.require_phone && !normPhone) {
-      return NextResponse.json({ error: 'Phone number required for Spin & Win' }, { status: 403 });
-    }
+  // ── Contact requirements — mirror GET /api/rewards/eligibility ──────────
+  // email/phone were fetched server-side from the token-validated entity
+  // above — enforce config flags against them.
+  if (config.require_email && !normEmail) {
+    return NextResponse.json({ error: 'Email address required for Spin & Win' }, { status: 403 });
+  }
+  if (config.require_phone && !normPhone) {
+    return NextResponse.json({ error: 'Phone number required for Spin & Win' }, { status: 403 });
   }
 
   // ── Get qualifying entity (tab or order) ────────────────────────────────

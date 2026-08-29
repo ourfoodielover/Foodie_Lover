@@ -1,6 +1,7 @@
 // PATCH /api/split-bills/[id]  — update entries (mark entry paid, etc.)
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/supabase-server';
+import { requireRole } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 type Ctx = { params: Promise<{ id: string }> };
@@ -24,6 +25,8 @@ function errMsg(err: unknown): string {
 // ── PATCH ─────────────────────────────────────────────────────────────────────
 // Body: { entries: SplitEntry[] }   — replaces the full entries array
 export async function PATCH(req: NextRequest, ctx: Ctx) {
+  const auth = requireRole(req, ['manager', 'admin']);
+  if (!auth.ok) return auth.response;
   try {
     const { id } = await ctx.params;
     const sb     = getServerClient();

@@ -17,6 +17,9 @@ import {
   listStaff, addStaff, patchStaff, removeStaff, StaffMember,
   getAllIssues, OrderIssue,
   forceCloseTab,
+  getTodayRevenue, getSystemSalesSummary,
+  previewTestDataReset, executeTestDataReset,
+  TestDataResetSnapshot, TestDataResetResult,
 } from '@/lib/api';
 import {
   getSession, clearSession, AuthSession,
@@ -144,6 +147,17 @@ export default function AdminPage() {
   const [waiterStats,    setWaiterStats]    = useState<WaiterStats[]>([]);
   const [tableOccupancy, setTableOccupancy] = useState<TableOccupancyStats[]>([]);
   const [onlineStats,    setOnlineStats]    = useState<OnlineOrderStats | null>(null);
+  // Authoritative "today" revenue — same computeSystemSales() engine Finance
+  // and the Manager dashboards use (GET /api/manager/today-revenue), so this
+  // page can never disagree with them for the same period. Replaces a raw
+  // client-side sum of today's `status==='completed'` orders, which still
+  // double-counted a dine-in tab's rounds at the individual-order level
+  // instead of recognizing that tab's revenue once, at close (see
+  // computeSystemSales' header comment in lib/finance-server.ts).
+  const [todayRevenueApi, setTodayRevenueApi] = useState(0);
+  // Same authoritative engine, for the Sales Report tab's selected period —
+  // see the useEffect below that fetches it alongside fetchHistoricalOrders.
+  const [periodSales, setPeriodSales] = useState({ revenue: 0, gross: 0, discount: 0, orderCount: 0 });
 
   // ── Issue analytics state ──
   const [todayIssues,    setTodayIssues]    = useState<OrderIssue[]>([]);
@@ -157,6 +171,22 @@ export default function AdminPage() {
   const [clearBusy,   setClearBusy]   = useState(false);
   const [clearConfirm, setClearConfirm] = useState(false);
 
+  // ── Danger zone: reset test data (pre-production "start clean") ──
+  // Deliberately separate state from Clear All Orders above — this is a
+  // distinct, broader feature (Finance/vendor/salary/closings too, not just
+  // orders) with its own PIN entry and its own typed confirmation phrase.
+  const [resetPin,          setResetPin]          = useState('');
+  const [resetPreview,      setResetPreview]      = useState<TestDataResetSnapshot | null>(null);
+  const [resetPreviewBusy,  setResetPreviewBusy]  = useState(false);
+  const [resetPreviewErr,   setResetPreviewErr]   = useState('');
+  const [resetConfirmCheck, setResetConfirmCheck] = useState(false);
+  const [resetConfirmText,  setResetConfirmText]  = useState('');
+  const [resetNote,         setResetNote]         = useState('');
+  const [resetBusy,         setResetBusy]         = useState(false);
+  const [resetResult,       setResetResult]       = useState<TestDataResetResult | null>(null);
+  const [resetMsg,          setResetMsg]          = useState('');
+  const RESET_CONFIRM_PHRASE = 'RESET TEST DATA';
+
   // ── Targeted order deletion ──
   const [delMode,     setDelMode]     = useState<'id'|'date'|'range'>('id');
   const [delOrderId,  setDelOrderId]  = useState('');
@@ -167,6 +197,11 @@ export default function AdminPage() {
   const [delTimeTo,   setDelTimeTo]   = useState('23:59');
   const [delPin,      setDelPin]      = useState('');
   const [delPreview,  setDelPreview]  = useState<number|null>(null);
+  // Finance impact of the pending deletion — closed dine-in tabs whose recorded
+  // revenue will be reduced (recomputed from remaining orders) once these
+  // orders are deleted. See recomputeClosedTabTotal() in lib/finance-server.ts.
+  const [delPreviewClosedTabs,    setDelPreviewClosedTabs]    = useState(0);
+  const [delPreviewRevenueImpact, setDelPreviewRevenueImpact] = useState(0);
   const [delMsg,      setDelMsg]      = useState('');
   const [delBusy,     setDelBusy]     = useState(false);
 
@@ -315,6 +350,13 @@ export default function AdminPage() {
 
     } catch (e) {
       console.error('[Admin] Failed to load orders from Supabase:', e);
+    }
+    // ── Authoritative today revenue (same source Finance/Manager use) ─────────
+    try {
+      const revenue = await getTodayRevenue(todayMidnightIST().toISOString());
+      setTodayRevenueApi(revenue);
+    } catch (e) {
+      console.error('[Admin] Failed to load today revenue:', e);
     }
     // ── Issue analytics: fetch all today's issues ──────────────────────────────
     try {
@@ -518,6 +560,19 @@ export default function AdminPage() {
     void fetchHistoricalOrders(salesTab === 'today' ? 'today' : salesTab as 'week'|'month'|'all');
   }, [salesTab, authChecked, fetchHistoricalOrders]);
 
+  // Authoritative period revenue for the Sales Report headline stats — fetched
+  // over the exact same period boundary as fetchHistoricalOrders above, so
+  // "Net Revenue" / "Gross Rev." / "Discounts" here always match Finance for
+  // the same period instead of being independently re-summed from histOrders.
+  useEffect(() => {
+    if (!authChecked) return;
+    const from = sinceForPeriod(salesTab === 'today' ? 'today' : salesTab as 'week'|'month'|'all');
+    if (!from) { setPeriodSales({ revenue: 0, gross: 0, discount: 0, orderCount: 0 }); return; } // 'all' — not supported by this endpoint, falls back to histOrders sums
+    getSystemSalesSummary(from)
+      .then(s => setPeriodSales(s))
+      .catch(e => console.error('[Admin] Failed to load period system sales:', e));
+  }, [salesTab, authChecked]);
+
   useEffect(() => {
     if (!authChecked) return;
     void fetchHistoricalOrders(ordersDateFilter);
@@ -526,8 +581,6 @@ export default function AdminPage() {
   // ─── Today stats (IST — avoids UTC midnight mismatch) ────────────────────
   // todayOrders: all non-cancelled, non-void orders for today
   const todayOrders   = orders.filter(o => isToday(o.timestamp) && !['cancelled','void'].includes(o.status));
-  // todayRevenue: only COMPLETED orders — money actually collected, not in-progress
-  const todayRevenue  = orders.filter(o => isToday(o.timestamp) && o.status==='completed').reduce((s,o)=>s+(o.total||0),0);
   const todayDiscount = todayOrders.reduce((s,o)=>s+(o.discount||0),0);
   const todayCancel   = orders.filter(o => o.status === 'cancelled' && isToday(o.timestamp));
   // Active tables: count of tables with status 'occupied' from live Supabase data.
@@ -763,11 +816,25 @@ export default function AdminPage() {
   // ─── Sales data ───────────────────────────────────────────────────────────
   // histOrders is already server-scoped to the selected period; just strip non-revenue rows.
   const periodOrders = histOrders.filter(o => !['cancelled','void'].includes(o.status));
-  const pTotal  = periodOrders.reduce((s,o)=>s+(o.total||0),0);
-  const pGross  = periodOrders.reduce((s,o)=>s+(o.subtotal||o.total||0),0);
-  const pDisc   = periodOrders.reduce((s,o)=>s+(o.discount||0),0);
+  // Remediation ("Admin analytics ... should not show contradictory revenue
+  // numbers"): pTotal/pGross/pDisc are the headline "Net Revenue"/"Gross
+  // Rev."/"Discounts" stat cards, so they now come from the same
+  // computeSystemSales() engine Finance uses (periodSales, fetched above)
+  // instead of re-summing histOrders — which double-counted dine-in orders
+  // at the individual-order level instead of once per closed tab. Falls
+  // back to the raw histOrders sum only for salesTab==='all', which the
+  // authoritative endpoint doesn't support (no bounded `from`).
+  // pRawTotal/pCount/pAvg stay order-level on purpose — "average order
+  // ticket size" is a genuinely different, order-level metric (see
+  // app/api/analytics/route.ts's matching comment); the Hour/Day/Week
+  // breakdown table below is also order-level and may not sum exactly to
+  // pTotal for the same reason.
+  const pRawTotal = periodOrders.reduce((s,o)=>s+(o.total||0),0);
+  const pTotal  = salesTab==='all' ? pRawTotal                                          : periodSales.revenue;
+  const pGross  = salesTab==='all' ? periodOrders.reduce((s,o)=>s+(o.subtotal||o.total||0),0) : periodSales.gross;
+  const pDisc   = salesTab==='all' ? periodOrders.reduce((s,o)=>s+(o.discount||0),0)     : periodSales.discount;
   const pCount  = periodOrders.length;
-  const pAvg    = pCount>0?Math.round(pTotal/pCount):0;
+  const pAvg    = pCount>0?Math.round(pRawTotal/pCount):0;
 
   // Payment breakdown
   const payMap:Record<string,{count:number;total:number}> = {};
@@ -878,7 +945,7 @@ export default function AdminPage() {
       if (!result.ok) {
         setClearMsg(`❌ ${result.error ?? 'Failed to clear orders'}`);
       } else {
-        setClearMsg('✅ All orders cleared successfully! Database is now empty.');
+        setClearMsg(`✅ ${result.message ?? 'All orders cleared successfully!'}`);
         setClearPin('');
         setClearConfirm(false);
         // Refresh the page data
@@ -891,9 +958,71 @@ export default function AdminPage() {
     }
   }
 
+  // ── Reset test data (pre-production "start clean") ─────────────────────
+  // Separate from clearAllOrders() above — broader scope (Finance, vendor/
+  // salary payments, Daily Closings, Spin & Win, etc.), its own PIN entry,
+  // and its own typed confirmation phrase. See app/api/admin/reset-test-data
+  // and lib/reset-server.ts for the server side.
+  async function fetchResetPreview() {
+    if (resetPin.length < 4) { setResetPreviewErr('❌ Enter your Admin PIN (4+ digits) first'); return; }
+    setResetPreviewBusy(true);
+    setResetPreviewErr('');
+    setResetPreview(null);
+    setResetResult(null);
+    setResetMsg('');
+    try {
+      const snapshot = await previewTestDataReset(resetPin);
+      setResetPreview(snapshot);
+    } catch (e) {
+      setResetPreviewErr(`❌ ${e instanceof Error ? e.message : 'Failed to load preview'}`);
+    } finally {
+      setResetPreviewBusy(false);
+    }
+  }
+
+  async function executeReset() {
+    if (!resetPreview) { setResetMsg('❌ Load the preview first.'); return; }
+    if (!resetConfirmCheck) { setResetMsg('❌ Please check the confirmation checkbox first.'); return; }
+    if (resetConfirmText.trim() !== RESET_CONFIRM_PHRASE) { setResetMsg(`❌ Type exactly "${RESET_CONFIRM_PHRASE}" to confirm.`); return; }
+    if (resetPin.length < 4) { setResetMsg('❌ Enter your Admin PIN (4+ digits)'); return; }
+
+    const c = resetPreview.counts;
+    const a = resetPreview.amounts;
+    const confirmed = window.confirm(
+      `This will PERMANENTLY delete test transactional data for this restaurant:\n\n` +
+      `• ${c.orders} orders, ${c.customerTabs} customer tabs\n` +
+      `• ₹${a.systemSalesNet.toFixed(2)} System Sales, ₹${a.managerExpenses.toFixed(2)} Manager Expenses\n` +
+      `• ${c.financeTransactions} Finance transactions, ${c.vendorPayments} vendor payments, ${c.salaryPayments} salary payments\n` +
+      `• ${c.dailyClosings} Daily Closing snapshot(s), ${c.spinResults} spin results, ${c.rewardCoupons} reward coupons\n\n` +
+      `Menu, staff, PINs, Finance accounts/categories, vendors, salary config, and Spin & Win config will NOT be touched.\n\n` +
+      `This action cannot be undone. Continue?`,
+    );
+    if (!confirmed) return;
+
+    setResetBusy(true);
+    setResetMsg('⏳ Resetting test data…');
+    try {
+      const result = await executeTestDataReset(resetPin, resetConfirmText.trim(), resetNote.trim() || undefined);
+      setResetResult(result);
+      setResetMsg(result.verification.isClean
+        ? `✅ ${result.message}`
+        : `⚠️ ${result.message}`);
+      setResetConfirmCheck(false);
+      setResetConfirmText('');
+      setResetPreview(result.verification);
+      void refresh();
+    } catch (e) {
+      setResetMsg(`❌ ${e instanceof Error ? e.message : 'Reset failed — see server logs'}`);
+    } finally {
+      setResetBusy(false);
+    }
+  }
+
   // ── Preview count for targeted deletion ─────────────────────────────────
   async function fetchDelPreview() {
     setDelPreview(null);
+    setDelPreviewClosedTabs(0);
+    setDelPreviewRevenueImpact(0);
     if (delMode === 'id') { setDelPreview(delOrderId.trim() ? 1 : 0); return; }
     try {
       const params = new URLSearchParams({ mode: delMode });
@@ -905,8 +1034,10 @@ export default function AdminPage() {
         params.set('timeTo',   delTimeTo);
       }
       const r = await fetch(`/api/orders/delete-selective?${params}`);
-      const j = await r.json() as { count?: number; error?: string };
+      const j = await r.json() as { count?: number; closedTabsAffected?: number; estimatedRevenueImpact?: number; error?: string };
       setDelPreview(j.count ?? null);
+      setDelPreviewClosedTabs(j.closedTabsAffected ?? 0);
+      setDelPreviewRevenueImpact(j.estimatedRevenueImpact ?? 0);
     } catch { setDelPreview(null); }
   }
 
@@ -941,6 +1072,7 @@ export default function AdminPage() {
         setDelMsg(`✅ ${result.message}`);
         setDelOrderId(''); setDelDate(''); setDelDateFrom(''); setDelDateTo('');
         setDelPin(''); setDelPreview(null);
+        setDelPreviewClosedTabs(0); setDelPreviewRevenueImpact(0);
         void refresh();
       }
     } catch (e) {
@@ -1377,7 +1509,7 @@ export default function AdminPage() {
           <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(165px,1fr))',gap:'1rem',marginBottom:'1.25rem'}}>
             {[
               {icon:'📋',val:todayOrders.length,   label:"Today's Orders",   color:'#E65C00'},
-              {icon:'💰',val:`₹${todayRevenue}`,    label:'Net Revenue',      color:'#E65C00'},
+              {icon:'💰',val:`₹${Math.round(todayRevenueApi)}`,    label:'Net Revenue',      color:'#E65C00'},
               {icon:'🏷️',val:`₹${todayDiscount}`,  label:'Discounts Given',  color:'#16a34a'},
               {icon:'❌',val:todayCancel.length,    label:'Cancelled Today',  color:'#ef4444'},
               {icon:'🪑',val:activeTables,          label:'Active Tables',    color:'#3b82f6'},
@@ -1512,7 +1644,10 @@ export default function AdminPage() {
             const todayOrdsFull = orders.filter(o => isToday(o.timestamp));
             const eod = {
               totalOrders:   todayOrdsFull.filter(o => o.status === 'completed').length,
-              totalRevenue:  Math.round(todayOrdsFull.filter(o => !['cancelled','void'].includes(o.status)).reduce((s,o)=>s+(o.total||0),0)),
+              // Same authoritative figure as the "Net Revenue" stat above and
+              // Finance/Manager — was previously its own third independent
+              // client-side sum of today's orders.
+              totalRevenue:  Math.round(todayRevenueApi),
               avgOrderValue: (() => {
                 const done = todayOrdsFull.filter(o => o.status === 'completed');
                 return done.length > 0 ? Math.round(done.reduce((s,o)=>s+(o.total||0),0)/done.length) : 0;
@@ -1797,9 +1932,14 @@ export default function AdminPage() {
 
           {/* Breakdown table */}
           <div style={card()}>
-            <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:'0.98rem',fontWeight:700,marginBottom:'0.75rem',color:'#1A0800'}}>
+            <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:'0.98rem',fontWeight:700,marginBottom:'0.25rem',color:'#1A0800'}}>
               {salesTab==='today'?'⏰ Hour-by-Hour':salesTab==='week'?'📅 Day-by-Day':salesTab==='month'?'📆 Week-by-Week':'🗓️ Month-by-Month'} Breakdown
             </h3>
+            {salesTab!=='all' && (
+              <div style={{fontSize:'0.7rem',color:'#999',marginBottom:'0.6rem'}}>
+                Rows show individual order tickets by time slot; the TOTAL row below uses Finance&apos;s recognized-revenue figure (each dine-in table counted once, at bill close), so it may not exactly equal the sum of the rows above.
+              </div>
+            )}
             <div style={{overflowX:'auto'}}>
               <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.83rem'}}>
                 <thead><tr style={{background:'linear-gradient(135deg,#E65C00,#F9A826)',color:'white'}}>
@@ -2363,7 +2503,7 @@ export default function AdminPage() {
           <div style={card('#0d9488')}>
             <h3 style={{fontFamily:"'Playfair Display',serif",fontSize:'1rem',fontWeight:700,marginBottom:'0.2rem',color:'#1A0800'}}>⚙️ Configuration</h3>
             <p style={{fontSize:'0.78rem',color:'#888',marginBottom:'0.85rem'}}>
-              Where each setting's active value is currently coming from. Environment Variable always wins when configured — change it in Vercel and redeploy to take effect.
+              Where each setting&apos;s active value is currently coming from. Environment Variable always wins when configured — change it in Vercel and redeploy to take effect.
             </p>
             {configDiagErr && <div style={{fontSize:'0.78rem',color:'#ef4444',marginBottom:'0.6rem'}}>❌ {configDiagErr}</div>}
             {!configDiag && !configDiagErr && <div style={{fontSize:'0.8rem',color:'#999'}}>Loading…</div>}
@@ -2816,6 +2956,13 @@ export default function AdminPage() {
                 {delPreview===0
                   ? '✅ No orders match — nothing will be deleted.'
                   : `⚠️ ${delPreview} order${delPreview!==1?'s':''} will be permanently deleted.`}
+                {delPreview !== null && delPreview > 0 && delPreviewClosedTabs > 0 && (
+                  <div style={{fontWeight:600,marginTop:'0.35rem',color:'#92400e'}}>
+                    ⚠️ {delPreviewClosedTabs} of these orders belong to already-closed table{delPreviewClosedTabs!==1?'s':''} —
+                    deleting them will also reduce recorded Finance revenue for {delPreviewClosedTabs!==1?'those tables':'that table'} by
+                    up to ₹{delPreviewRevenueImpact.toFixed(2)}.
+                  </div>
+                )}
               </div>
             )}
 
@@ -2866,6 +3013,10 @@ export default function AdminPage() {
               <div style={{fontSize:'0.8rem',color:'#666',marginBottom:'0.6rem'}}>
                 Use this only to clear dummy/test data before going live. Once deleted, orders <strong>cannot be recovered</strong>.
               </div>
+              <div style={{fontSize:'0.78rem',color:'#92400e',background:'#fffbeb',border:'1px solid #fde68a',borderRadius:6,padding:'0.5rem 0.7rem',marginBottom:'0.75rem'}}>
+                ⚠️ This also reduces recorded Finance revenue to ₹0 for every closed dine-in table (since every order behind it is being
+                deleted). Discount/coupon amounts already applied to a closed table are left as-is.
+              </div>
               <label style={{display:'flex',alignItems:'flex-start',gap:'0.5rem',cursor:'pointer',marginBottom:'0.75rem'}}>
                 <input
                   type="checkbox"
@@ -2874,7 +3025,8 @@ export default function AdminPage() {
                   style={{marginTop:'0.15rem',accentColor:'#dc2626',width:16,height:16,flexShrink:0}}
                 />
                 <span style={{fontSize:'0.8rem',color:'#555',lineHeight:1.4}}>
-                  I understand this will permanently delete ALL orders from the live database and this action cannot be undone.
+                  I understand this will permanently delete ALL orders from the live database (and reduce closed tables&apos; recorded
+                  Finance revenue to ₹0) and this action cannot be undone.
                 </span>
               </label>
               <div style={{display:'flex',gap:'0.65rem',alignItems:'flex-end',flexWrap:'wrap' as const}}>
@@ -2913,6 +3065,173 @@ export default function AdminPage() {
                   fontWeight:600,
                 }}>
                   {clearMsg}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ── Danger Zone: Reset Test Data ── */}
+          <div style={{border:'2px solid #fecaca',borderRadius:12,padding:'1.25rem',background:'#fef2f2',marginBottom:'1.5rem'}}>
+            <div style={{display:'flex',alignItems:'center',gap:'0.6rem',marginBottom:'0.5rem'}}>
+              <span style={{fontSize:'1.4rem'}}>🧹</span>
+              <div>
+                <div style={{fontWeight:800,color:'#dc2626',fontSize:'0.95rem'}}>Danger Zone — Reset Test Data</div>
+                <div style={{fontSize:'0.75rem',color:'#ef4444',marginTop:'0.1rem'}}>
+                  Pre-production only: wipes ALL test orders, tabs, Finance transactions, vendor/salary payments, Daily
+                  Closings, and Spin &amp; Win results — brings System Sales, Manager Expenses, and Net Cash Flow to ₹0.
+                </div>
+              </div>
+            </div>
+            <div style={{background:'#fff',border:'1px solid #fecaca',borderRadius:8,padding:'0.9rem',marginBottom:'0.75rem'}}>
+              <div style={{fontSize:'0.8rem',color:'#666',marginBottom:'0.6rem'}}>
+                Use this once, right before going live, to clear out dummy/test activity while keeping every configuration
+                item intact: menu items &amp; variants, categories, restaurant settings, Admin/Manager/Kitchen PINs, staff
+                accounts, tables, kitchen routing, Finance accounts &amp; categories, vendors, staff salary rates, Spin &amp;
+                Win configuration, and email configuration. This does <strong>not</strong> reset or reseed the database —
+                only test transactional/operational history is removed. Requires your Admin PIN, and cannot be undone.
+              </div>
+
+              <div style={{display:'flex',gap:'0.65rem',alignItems:'flex-end',flexWrap:'wrap' as const,marginBottom:'0.75rem'}}>
+                <div style={{flex:1,minWidth:140}}>
+                  <label style={{fontSize:'0.72rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.25rem'}}>Admin PIN</label>
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    value={resetPin}
+                    onChange={e=>{ setResetPin(e.target.value.replace(/\D/g,'')); setResetPreview(null); setResetResult(null); setResetMsg(''); setResetPreviewErr(''); }}
+                    maxLength={8}
+                    placeholder="••••"
+                    style={{...inp,letterSpacing:'0.4em',textAlign:'center' as const}}
+                  />
+                </div>
+                <button
+                  onClick={fetchResetPreview}
+                  disabled={resetPreviewBusy}
+                  style={{...btn('#f97316'),padding:'0.65rem 1.1rem',fontSize:'0.8rem',whiteSpace:'nowrap' as const,opacity:resetPreviewBusy?0.55:1,cursor:resetPreviewBusy?'not-allowed':'pointer'}}
+                >
+                  {resetPreviewBusy ? '⏳ Loading…' : '🔍 Preview What Will Be Removed'}
+                </button>
+              </div>
+              {resetPreviewErr && (
+                <div style={{fontSize:'0.78rem',color:'#ef4444',fontWeight:600,marginBottom:'0.75rem'}}>{resetPreviewErr}</div>
+              )}
+
+              {resetPreview && (
+                <div style={{background:'#fafafa',border:'1px solid #eee',borderRadius:8,padding:'0.8rem',marginBottom:'0.75rem'}}>
+                  <div style={{fontWeight:700,fontSize:'0.82rem',color:'#1A0800',marginBottom:'0.5rem'}}>
+                    Will be permanently removed:
+                    {resetPreview.isClean && <span style={{color:'#16a34a',marginLeft:'0.5rem'}}>(already clean — nothing to remove)</span>}
+                  </div>
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill, minmax(150px,1fr))',gap:'0.4rem 0.9rem',fontSize:'0.76rem',color:'#555',marginBottom:'0.6rem'}}>
+                    <div>Orders: <strong>{resetPreview.counts.orders}</strong></div>
+                    <div>Customer tabs: <strong>{resetPreview.counts.customerTabs}</strong></div>
+                    <div>Finance transactions: <strong>{resetPreview.counts.financeTransactions}</strong></div>
+                    <div>Vendor payments: <strong>{resetPreview.counts.vendorPayments}</strong></div>
+                    <div>Salary payments: <strong>{resetPreview.counts.salaryPayments}</strong></div>
+                    <div>Daily Closings: <strong>{resetPreview.counts.dailyClosings}</strong></div>
+                    <div>Spin results: <strong>{resetPreview.counts.spinResults}</strong></div>
+                    <div>Reward coupons: <strong>{resetPreview.counts.rewardCoupons}</strong></div>
+                    <div>Occupied tables: <strong>{resetPreview.counts.occupiedTables}</strong></div>
+                    <div>Shift logs: <strong>{resetPreview.counts.shiftLogs}</strong></div>
+                    <div>Manager expenses: <strong>{resetPreview.counts.managerExpenses}</strong></div>
+                    <div>Print jobs: <strong>{resetPreview.counts.printJobs}</strong></div>
+                  </div>
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill, minmax(170px,1fr))',gap:'0.4rem 0.9rem',fontSize:'0.76rem',color:'#555',marginBottom:'0.6rem',borderTop:'1px dashed #ddd',paddingTop:'0.5rem'}}>
+                    <div>System Sales (net): <strong>₹{resetPreview.amounts.systemSalesNet.toFixed(2)}</strong></div>
+                    <div>Manager Expenses: <strong>₹{resetPreview.amounts.managerExpenses.toFixed(2)}</strong></div>
+                    <div>Finance Income: <strong>₹{resetPreview.amounts.financeIncome.toFixed(2)}</strong></div>
+                    <div>Finance Expense: <strong>₹{resetPreview.amounts.financeExpense.toFixed(2)}</strong></div>
+                    <div>Vendor Paid: <strong>₹{resetPreview.amounts.vendorPaid.toFixed(2)}</strong></div>
+                    <div>Salary Paid: <strong>₹{resetPreview.amounts.salaryPaid.toFixed(2)}</strong></div>
+                    <div>Net Cash Flow: <strong>₹{resetPreview.amounts.netCashFlow.toFixed(2)}</strong></div>
+                  </div>
+                  {resetPreview.accountBalances.length > 0 && (
+                    <div style={{borderTop:'1px dashed #ddd',paddingTop:'0.5rem'}}>
+                      <div style={{fontWeight:700,fontSize:'0.76rem',color:'#1A0800',marginBottom:'0.3rem'}}>Finance account balances (current → will return to opening balance):</div>
+                      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill, minmax(200px,1fr))',gap:'0.3rem 0.9rem',fontSize:'0.76rem',color:'#555'}}>
+                        {resetPreview.accountBalances.map(a => (
+                          <div key={a.accountId}>
+                            {a.name}: <strong>₹{a.currentBalance.toFixed(2)}</strong> → ₹{a.openingBalance.toFixed(2)}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {resetPreview && (
+                <>
+                  <label style={{display:'flex',alignItems:'flex-start',gap:'0.5rem',cursor:'pointer',marginBottom:'0.65rem'}}>
+                    <input
+                      type="checkbox"
+                      checked={resetConfirmCheck}
+                      onChange={e=>setResetConfirmCheck(e.target.checked)}
+                      style={{marginTop:'0.15rem',accentColor:'#dc2626',width:16,height:16,flexShrink:0}}
+                    />
+                    <span style={{fontSize:'0.8rem',color:'#555',lineHeight:1.4}}>
+                      I understand this will permanently delete all test orders, tabs, Finance transactions, vendor/salary
+                      payments, and Daily Closing history shown above from the live database, that account balances will
+                      return to their configured opening balances, and that this action cannot be undone.
+                    </span>
+                  </label>
+
+                  <div style={{marginBottom:'0.65rem'}}>
+                    <label style={{fontSize:'0.72rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.25rem'}}>
+                      Type <code style={{background:'#f3f4f6',padding:'0.1rem 0.4rem',borderRadius:4}}>{RESET_CONFIRM_PHRASE}</code> to confirm
+                    </label>
+                    <input
+                      type="text"
+                      value={resetConfirmText}
+                      onChange={e=>setResetConfirmText(e.target.value)}
+                      placeholder={RESET_CONFIRM_PHRASE}
+                      style={{...inp,maxWidth:280}}
+                    />
+                  </div>
+
+                  <div style={{marginBottom:'0.75rem'}}>
+                    <label style={{fontSize:'0.72rem',fontWeight:700,color:'#555',display:'block',marginBottom:'0.25rem'}}>Note (optional, saved in the audit record)</label>
+                    <input
+                      type="text"
+                      value={resetNote}
+                      onChange={e=>setResetNote(e.target.value)}
+                      placeholder="e.g. Final reset before launch day"
+                      style={{...inp,maxWidth:420}}
+                    />
+                  </div>
+
+                  <button
+                    onClick={executeReset}
+                    disabled={resetBusy || !resetConfirmCheck || resetConfirmText.trim() !== RESET_CONFIRM_PHRASE || resetPin.length < 4}
+                    style={{
+                      ...btn('#dc2626'),
+                      padding:'0.65rem 1.25rem',
+                      fontSize:'0.82rem',
+                      whiteSpace:'nowrap' as const,
+                      opacity: resetBusy || !resetConfirmCheck || resetConfirmText.trim() !== RESET_CONFIRM_PHRASE || resetPin.length < 4 ? 0.55 : 1,
+                      cursor: resetBusy || !resetConfirmCheck || resetConfirmText.trim() !== RESET_CONFIRM_PHRASE || resetPin.length < 4 ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    {resetBusy ? '⏳ Resetting…' : '🧹 Reset Test Data'}
+                  </button>
+                </>
+              )}
+
+              {resetMsg && (
+                <div style={{
+                  fontSize:'0.8rem',
+                  color:resetMsg.includes('✅')?'#16a34a':resetMsg.includes('⏳')?'#555':resetMsg.includes('⚠️')?'#b45309':'#ef4444',
+                  marginTop:'0.5rem',
+                  fontWeight:600,
+                  whiteSpace:'pre-line' as const,
+                }}>
+                  {resetMsg}
+                </div>
+              )}
+
+              {resetResult && (
+                <div style={{fontSize:'0.74rem',color:'#666',marginTop:'0.5rem',borderTop:'1px dashed #ddd',paddingTop:'0.5rem'}}>
+                  Reset ID: <code>{resetResult.resetId}</code> · Post-reset verification: {resetResult.verification.isClean ? '✅ clean' : '⚠️ not fully clean'} · Cross-check: {resetResult.crossCheckAgrees ? '✅ agrees' : '⚠️ mismatch — review'}
                 </div>
               )}
             </div>

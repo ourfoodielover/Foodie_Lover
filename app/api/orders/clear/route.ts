@@ -1,25 +1,13 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/supabase-server';
+import { requireRole } from '@/lib/session-server';
+import { verifyAdminPin, recomputeClosedTabTotal } from '@/lib/finance-server';
 
 export const dynamic = 'force-dynamic';
 
-async function verifyAdminPin(pin: string): Promise<boolean> {
-  try {
-    const sb  = getServerClient();
-    const rid = process.env.NEXT_PUBLIC_RESTAURANT_ID ?? 'rest_default';
-    const { data } = await sb
-      .from('restaurant_settings')
-      .select('value')
-      .eq('restaurant_id', rid)
-      .eq('key', 'admin_pin')
-      .maybeSingle();
-    return !!data && data.value === pin;
-  } catch {
-    return false;
-  }
-}
-
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
+  const auth = requireRole(req, ['admin']);
+  if (!auth.ok) return auth.response;
   try {
     const { pin } = await req.json() as { pin?: string };
 
@@ -95,7 +83,41 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: `Failed to clear orders: ${ordErr.message}` }, { status: 500 });
     }
 
-    return NextResponse.json({ ok: true, message: 'All orders cleared successfully.' });
+    // ── Reverse recognized revenue on every closed tab ──────────────────────
+    // Every order is now gone, so every closed tab's remaining-order sum is
+    // necessarily 0 — see recomputeClosedTabTotal() in lib/finance-server.ts
+    // for why this happens at all (admin decision: purging test orders
+    // should also purge their Finance trace, not leave ghost revenue behind)
+    // and for why this goes through the same per-tab, auditable helper
+    // (finance_audit_log entry per tab; tabs with an existing split bill are
+    // skipped rather than silently made inconsistent) instead of a single
+    // bulk UPDATE.
+    const { data: closedTabIds } = await sb
+      .from('customer_tabs')
+      .select('id')
+      .eq('status', 'closed');
+
+    const revenueAdjustments: { tabId: string; oldTotal: number; newTotal: number; discountCapped: boolean }[] = [];
+    const skippedTabs: { tabId: string; reason: string }[] = [];
+    for (const row of (closedTabIds ?? [])) {
+      const adj = await recomputeClosedTabTotal(sb, row.id as string, 'Admin (clear all orders)');
+      if (adj && 'skipped' in adj) skippedTabs.push(adj);
+      else if (adj) revenueAdjustments.push(adj);
+    }
+
+    const revenueNote = revenueAdjustments.length > 0
+      ? ` Finance revenue reversed on ${revenueAdjustments.length} closed table${revenueAdjustments.length !== 1 ? 's' : ''} (₹${revenueAdjustments.reduce((s, a) => s + a.oldTotal, 0).toFixed(2)} → ₹${revenueAdjustments.reduce((s, a) => s + a.newTotal, 0).toFixed(2)}).`
+      : '';
+    const skippedNote = skippedTabs.length > 0
+      ? ` ⚠️ ${skippedTabs.length} closed table${skippedTabs.length !== 1 ? 's' : ''} skipped (split bill exists) — review manually.`
+      : '';
+
+    return NextResponse.json({
+      ok: true,
+      closedTabsReversed: revenueAdjustments.length,
+      skippedTabs,
+      message: `All orders cleared successfully.${revenueNote}${skippedNote}`,
+    });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }

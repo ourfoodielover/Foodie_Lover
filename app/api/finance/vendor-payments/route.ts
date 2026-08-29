@@ -4,17 +4,25 @@
 // Each payment here (1) updates the parent vendor_purchases.amount_paid/status,
 // and (2) posts exactly one linked finance_transactions row (source=
 // 'vendor_payment', source_id=this payment's id) so Admin never has to
-// separately create a matching expense. Supabase's REST client has no
-// multi-statement transaction API, so the three writes below are issued
-// sequentially in an order chosen so a mid-failure never overstates a paid
-// amount: the payment row is written first (source of truth for "did this
-// payment happen"), then the purchase total, then the mirrored ledger entry.
-// If a later step fails, the operation returns an error and nothing is
-// silently double-counted — the payment row + updated purchase are enough on
-// their own to reconstruct the ledger entry if the last step needs a retry.
+// separately create a matching expense.
+//
+// Remediation (master-prompt finding #12): these three writes used to be
+// issued sequentially with no transaction and no idempotency key, so a
+// mid-sequence failure could leave a payment recorded with no ledger entry,
+// and a client retry after a timeout could double-post. POST now delegates
+// the whole read-validate-write sequence to the atomic
+// create_vendor_payment() Postgres function (migration_023_finance_atomicity
+// .sql), which takes a row lock on the parent purchase and accepts an
+// optional idempotency key so a retried request returns the original result
+// instead of creating a second payment. This route still does the
+// non-authoritative lookups (vendor name, category id, current purchase for
+// a fast 404) beforehand purely to build the description string and give a
+// quick not-found response — the RPC re-validates everything itself under
+// lock and is the actual source of truth.
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId } from '@/lib/supabase-server';
 import { requireAdminPin, errMsg, restaurantId, logFinanceAudit } from '@/lib/finance-server';
+import { requireRole } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,6 +41,8 @@ function rowToPayment(r: Record<string, unknown>) {
 }
 
 export async function GET(req: NextRequest) {
+  const roleAuth = requireRole(req, ['admin']);
+  if (!roleAuth.ok) return roleAuth.response;
   const auth = await requireAdminPin(req);
   if (!auth.ok) return auth.response;
   try {
@@ -55,6 +65,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const roleAuth = requireRole(req, ['admin']);
+  if (!roleAuth.ok) return roleAuth.response;
   const auth = await requireAdminPin(req);
   if (!auth.ok) return auth.response;
   try {
@@ -75,52 +87,63 @@ export async function POST(req: NextRequest) {
     if (pErr) throw pErr;
     if (!purchase || purchase.is_voided) return NextResponse.json({ error: 'Purchase not found' }, { status: 404 });
 
-    const dueBefore = Number(purchase.amount) - Number(purchase.amount_paid);
-    if (amount > dueBefore + 0.01) {
-      return NextResponse.json(
-        { error: `Payment (₹${amount}) exceeds the remaining balance due (₹${dueBefore.toFixed(2)}).` },
-        { status: 400 },
-      );
-    }
-
     const paymentId = newId('VPAY');
     const roundedAmt = Math.round(amount * 100) / 100;
     const paidAt = (body.paidAt as string) ?? new Date().toISOString();
     const createdBy = (body.by as string) ?? 'Admin';
-
-    const { error: payErr } = await sb.from('vendor_payments').insert({
-      id: paymentId, restaurant_id: rid, vendor_purchase_id: purchaseId,
-      vendor_id: purchase.vendor_id, account_id: accountId, amount: roundedAmt,
-      paid_at: paidAt, note: (body.note as string) ?? null, created_by: createdBy,
-    });
-    if (payErr) throw payErr;
-
-    const newAmountPaid = Math.round((Number(purchase.amount_paid) + roundedAmt) * 100) / 100;
-    const newStatus = newAmountPaid >= Number(purchase.amount) - 0.01 ? 'paid' : 'partially_paid';
-    const { error: updErr } = await sb.from('vendor_purchases').update({
-      amount_paid: newAmountPaid, status: newStatus, updated_at: new Date().toISOString(),
-    }).eq('id', purchaseId);
-    if (updErr) throw updErr;
+    const idempotencyKey = (body.idempotencyKey as string) || null;
 
     const { data: vendor } = await sb.from('vendors').select('name').eq('id', purchase.vendor_id).maybeSingle();
     const { data: vendorCat } = await sb.from('finance_categories')
       .select('id').eq('restaurant_id', rid).eq('kind', 'expense').eq('name', 'Vendor Payment').maybeSingle();
+    const description = `Vendor payment — ${(vendor?.name as string) ?? purchase.vendor_id}: ${purchase.description}`;
 
-    const { error: txErr } = await sb.from('finance_transactions').insert({
-      id: newId('FTXN'), restaurant_id: rid, type: 'expense', account_id: accountId,
-      category_id: vendorCat?.id ?? null,
-      amount: roundedAmt,
-      description: `Vendor payment — ${(vendor?.name as string) ?? purchase.vendor_id}: ${purchase.description}`,
-      occurred_at: paidAt, source: 'vendor_payment', source_id: paymentId, created_by: createdBy,
+    const { data: rpcData, error: rpcErr } = await sb.rpc('create_vendor_payment', {
+      p_payment_id: paymentId,
+      p_restaurant_id: rid,
+      p_vendor_purchase_id: purchaseId,
+      p_vendor_id: purchase.vendor_id,
+      p_account_id: accountId,
+      p_amount: roundedAmt,
+      p_paid_at: paidAt,
+      p_note: (body.note as string) ?? null,
+      p_created_by: createdBy,
+      p_category_id: vendorCat?.id ?? null,
+      p_description: description,
+      p_idempotency_key: idempotencyKey,
     });
-    if (txErr) throw txErr;
+    if (rpcErr) throw rpcErr;
 
-    await logFinanceAudit(sb, {
-      restaurantId: rid, entityType: 'vendor_payment', entityId: paymentId, action: 'create',
-      changedBy: createdBy, after: { purchaseId, amount: roundedAmt, accountId },
-    });
+    const result = rpcData as {
+      ok: boolean; error?: string; dueBefore?: number;
+      id?: string; purchaseStatus?: string; amountPaid?: number; already_exists?: boolean;
+    };
+    if (!result.ok) {
+      if (result.error === 'purchase_not_found') {
+        return NextResponse.json({ error: 'Purchase not found' }, { status: 404 });
+      }
+      if (result.error === 'exceeds_balance') {
+        const dueBefore = Number(result.dueBefore ?? 0);
+        return NextResponse.json(
+          { error: `Payment (₹${amount}) exceeds the remaining balance due (₹${dueBefore.toFixed(2)}).` },
+          { status: 400 },
+        );
+      }
+      throw new Error(`create_vendor_payment RPC failed: ${result.error ?? 'unknown'}`);
+    }
 
-    return NextResponse.json({ id: paymentId, purchaseStatus: newStatus, amountPaid: newAmountPaid }, { status: 201 });
+    const resultId = result.id ?? paymentId;
+    if (!result.already_exists) {
+      await logFinanceAudit(sb, {
+        restaurantId: rid, entityType: 'vendor_payment', entityId: resultId, action: 'create',
+        changedBy: createdBy, after: { purchaseId, amount: roundedAmt, accountId },
+      });
+    }
+
+    return NextResponse.json(
+      { id: resultId, purchaseStatus: result.purchaseStatus, amountPaid: result.amountPaid },
+      { status: 201 },
+    );
   } catch (err) {
     console.error('[POST /api/finance/vendor-payments]', err);
     return NextResponse.json({ error: errMsg(err) }, { status: 500 });

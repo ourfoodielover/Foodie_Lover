@@ -6,6 +6,7 @@
 import { NextResponse } from 'next/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getServerClient, newId } from '@/lib/supabase-server';
+import { verifyPin, isHashedPin, hashPin } from '@/lib/pin-hash';
 
 // ─── Admin authorization ────────────────────────────────────────────────────────
 // Finance is owner-level, sensitive functionality. The rest of this codebase's
@@ -32,7 +33,19 @@ export async function verifyAdminPin(pin: string | null | undefined): Promise<bo
       .eq('restaurant_id', rid)
       .eq('key', 'admin_pin')
       .maybeSingle();
-    return !!data && data.value === pin;
+    if (!data) return false;
+    // C3: admin_pin may be a legacy plaintext value or a salted hash —
+    // verifyPin() handles both. On a successful legacy-plaintext match,
+    // transparently upgrade the stored value to a hash (same lazy-migration
+    // behavior as /api/auth/verify-pin).
+    const ok = verifyPin(pin, data.value);
+    if (ok && !isHashedPin(data.value)) {
+      await sb.from('restaurant_settings')
+        .update({ value: hashPin(pin), updated_at: new Date().toISOString() })
+        .eq('restaurant_id', rid)
+        .eq('key', 'admin_pin');
+    }
+    return ok;
   } catch {
     return false;
   }
@@ -42,6 +55,22 @@ export async function verifyAdminPin(pin: string | null | undefined): Promise<bo
  * requireAdminPin — call at the top of every Finance route handler.
  * Returns { ok: true, pin } on success, or { ok: false, response } with a
  * ready-to-return 401/403 NextResponse on failure.
+ *
+ * Remediation (master-prompt finding #11 — "Improve Admin/Finance/
+ * destructive-operation privilege separation"): this PIN check used to be
+ * the ONLY server-side gate on every Finance route. The PIN itself is a
+ * single restaurant-wide shared secret with no session behind it — anyone
+ * who obtained the value (leak, guess, shoulder-surf) could call any
+ * Finance API directly (e.g. via curl with `x-admin-pin`) with no need to
+ * ever have actually authenticated. Every Finance route handler now also
+ * calls `requireRole(req, ['admin'])` from lib/session-server.ts BEFORE
+ * this check, so a caller must additionally hold a real, HMAC-signed
+ * session cookie for the 'admin' role — i.e. must have actually completed
+ * /admin/login (which calls /api/auth/verify-pin, and that route already
+ * issues this same session cookie on a correct PIN — see its C1 comment).
+ * This is defense-in-depth, not a replacement: the Finance admin PIN is
+ * kept as a second factor specific to Finance, layered on top of the
+ * general staff-session system the rest of the app now uses.
  */
 export async function requireAdminPin(
   req: Request,
@@ -353,4 +382,121 @@ export async function computeFinanceSummary(
     ledger: { income: round(income), expense: round(expense), vendorPaid: round(vendorPaid), salaryPaid: round(salaryPaid) },
     netCashFlow: round(systemSales.net + income - managerExpenseTotal - expense),
   };
+}
+
+// ─── Closed-tab revenue reversal on order purge ────────────────────────────────
+// By design, dine-in revenue is recognized once, at tab-close, from
+// customer_tabs.total — deleting the underlying `orders` rows afterward does
+// NOT touch that number (see computeSystemSales' header comment). That is
+// correct default behavior (deleting paperwork shouldn't silently rewrite
+// already-recognized revenue) but the admin explicitly asked for the
+// stronger behavior while this deployment is still being seeded with
+// dummy/test data: admin-initiated order deletion (app/api/orders/clear,
+// app/api/orders/delete-selective — both already admin-PIN + admin-session
+// gated) should also reverse the corresponding closed-tab revenue, so
+// purging test orders actually purges their Finance trace too.
+//
+// recomputeClosedTabTotal() is the one place that reversal happens: it
+// re-derives a CLOSED tab's `total` from whatever orders still remain
+// attached to it, using the exact same rule PATCH /api/tabs/[id]'s close
+// handler used to compute it originally (sum of non-cancelled/void order
+// totals). If every order for that tab was deleted, the recomputed total is
+// 0 — Finance will then show ₹0 net for that tab (floored, never negative).
+//
+// Auditability + consistency (follow-up remediation, same admin decision):
+//   1. SKIPPED when a split_bills record exists for the tab. A split bill's
+//      `entries` are a customer-facing breakdown that summed to the tab's
+//      total at the time it was created — silently shrinking `total`
+//      afterward would leave that breakdown contradicting the new total
+//      (e.g. paid split amounts adding up to more than the tab now shows).
+//      Rather than guess how to reconcile that, this leaves the tab
+//      untouched and reports it back to the caller so an admin can review
+//      it manually.
+//   2. `discount` + `coupon_discount` are capped so they can never exceed
+//      the recomputed `total` — leaving a tab where the discount is bigger
+//      than the bill it was discounted from is its own kind of
+//      contradictory state, independent of what Finance nets it to.
+//   3. Every actual adjustment writes a finance_audit_log row (via
+//      logFinanceAudit) — entity 'customer_tab', action
+//      'revenue_reversed_on_order_deletion' — recording old/new total and
+//      old/new discount so the reversal has the same audit trail any other
+//      Finance-affecting action gets.
+export async function recomputeClosedTabTotal(
+  sb: SupabaseClient,
+  tabId: string,
+  changedBy: string,
+): Promise<
+  | { tabId: string; oldTotal: number; newTotal: number; discountCapped: boolean }
+  | { tabId: string; skipped: true; reason: string }
+  | null
+> {
+  const { data: tab } = await sb.from('customer_tabs')
+    .select('id, restaurant_id, total, discount, coupon_discount, status')
+    .eq('id', tabId).maybeSingle();
+  if (!tab || tab.status !== 'closed') return null;
+
+  const { data: remainingOrders } = await sb
+    .from('orders')
+    .select('total, status')
+    .eq('tab_id', tabId)
+    .not('status', 'in', '("cancelled","void")');
+  const newTotal = Math.round(
+    (remainingOrders ?? []).reduce((s, o) => s + (Number(o.total) || 0), 0) * 100,
+  ) / 100;
+  const oldTotal = Number(tab.total) || 0;
+  const oldDiscount = Number(tab.discount) || 0;
+  const oldCouponDiscount = Number(tab.coupon_discount) || 0;
+  if (
+    Math.round(newTotal * 100) === Math.round(oldTotal * 100) &&
+    oldDiscount + oldCouponDiscount <= newTotal + 0.01
+  ) {
+    return null; // nothing would actually change
+  }
+
+  const { data: existingSplit } = await sb
+    .from('split_bills')
+    .select('id')
+    .eq('tab_id', tabId)
+    .maybeSingle();
+  if (existingSplit) {
+    return {
+      tabId,
+      skipped: true,
+      reason: 'A split bill exists for this table — its breakdown would no longer match a recomputed total. Skipped; review and adjust manually in Manager if needed.',
+    };
+  }
+
+  // Cap discount+coupon so neither can exceed the new (possibly smaller) total —
+  // proportionally, so a mix of manual discount + coupon shrinks together
+  // rather than one silently zeroing out the other.
+  let newDiscount = oldDiscount;
+  let newCouponDiscount = oldCouponDiscount;
+  const discountCapped = oldDiscount + oldCouponDiscount > newTotal + 0.01;
+  if (discountCapped) {
+    const combined = oldDiscount + oldCouponDiscount;
+    const scale = combined > 0 ? newTotal / combined : 0;
+    newDiscount = Math.round(oldDiscount * scale * 100) / 100;
+    newCouponDiscount = Math.round(oldCouponDiscount * scale * 100) / 100;
+  }
+
+  const { error } = await sb.from('customer_tabs')
+    .update({
+      total: newTotal, discount: newDiscount, coupon_discount: newCouponDiscount,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', tabId);
+  if (error) throw error;
+
+  await logFinanceAudit(sb, {
+    restaurantId: tab.restaurant_id as string,
+    entityType:   'customer_tab',
+    entityId:     tabId,
+    action:       'revenue_reversed_on_order_deletion',
+    changedBy,
+    before: { total: oldTotal, discount: oldDiscount, couponDiscount: oldCouponDiscount },
+    after:  { total: newTotal, discount: newDiscount, couponDiscount: newCouponDiscount },
+    note:   'Closed tab revenue recomputed after admin order deletion (see app/api/orders/clear and /delete-selective).',
+  });
+
+  return { tabId, oldTotal, newTotal, discountCapped };
 }

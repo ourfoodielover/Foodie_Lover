@@ -1,16 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient } from '@/lib/supabase-server';
+import { requireRole } from '@/lib/session-server';
 
 export const dynamic = 'force-dynamic';
 const RID = process.env.NEXT_PUBLIC_RESTAURANT_ID ?? 'rest_default';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const auth = requireRole(req, ['admin']);
+  if (!auth.ok) return auth.response;
   const sb = getServerClient();
   const { data } = await sb.from('spin_config').select('*').eq('restaurant_id', RID).single();
   return NextResponse.json(data ?? { enabled: false, min_order_amount: 500, eligible_order_types: ['dine-in', 'pickup', 'delivery'], require_email: true, require_phone: true });
 }
 
 export async function POST(req: NextRequest) {
+  const auth = requireRole(req, ['admin']);
+  if (!auth.ok) return auth.response;
   const body = await req.json() as Record<string, unknown>;
   const sb = getServerClient();
   const { error } = await sb.from('spin_config').upsert({

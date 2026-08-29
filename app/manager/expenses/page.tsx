@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession, AuthSession } from '@/lib/auth';
 import {
-  getOrders,
+  getTodayRevenue,
   listExpenses, addExpenseApi, deleteExpenseApi, computeExpenseStats,
   Expense, ExpenseStats, ExpenseCategory, EXPENSE_CATEGORIES,
 } from '@/lib/api';
@@ -95,9 +95,17 @@ export default function ExpensesPage() {
   // ── Data refresh — all from Supabase ─────────────────────────────────────
   const refresh = useCallback(async () => {
     try {
-      const [allExpenses, todayOrders] = await Promise.all([
+      // Remediation (finding #8): revenue is now fetched from the same
+      // authoritative engine Finance uses (computeSystemSales via
+      // GET /api/manager/today-revenue) instead of being re-derived
+      // client-side from raw orders — the old method counted in-progress
+      // (unpaid) orders as revenue and double-counted dine-in rounds that
+      // are correctly recognized only once, at tab-close, elsewhere in the
+      // app. See lib/finance-server.ts's computeSystemSales for the
+      // canonical recognition rule.
+      const [allExpenses, revenue] = await Promise.all([
         listExpenses(),
-        getOrders({ since: todayMidnightIST().toISOString(), limit: 200 }),
+        getTodayRevenue(todayMidnightIST().toISOString()),
       ]);
       // Newest first
       const sorted = [...allExpenses].sort(
@@ -105,10 +113,7 @@ export default function ExpensesPage() {
       );
       setExpenses(sorted);
       setStats(computeExpenseStats(sorted));
-      const rev = todayOrders
-        .filter(o => !['cancelled', 'void'].includes(o.status))
-        .reduce((s, o) => s + (o.total || 0), 0);
-      setTodayRevenue(rev);
+      setTodayRevenue(revenue);
     } catch {
       setTodayRevenue(0);
     }
@@ -161,7 +166,15 @@ export default function ExpensesPage() {
   // Guard: ensure both values are finite numbers before subtraction
   const safeRevenue  = isFinite(todayRevenue)       ? todayRevenue        : 0;
   const safeExpenses = isFinite(stats.todayTotal)   ? stats.todayTotal    : 0;
-  const netProfit    = safeRevenue - safeExpenses;
+  // Net Margin Today = Net System Sales − Manager-logged Operating Expenses
+  // ONLY. Deliberately excludes Finance-ledger effects (vendor/salary
+  // payments, manual income/expense) — those live under Finance/Admin,
+  // outside a Manager session's access (finding #11 privilege separation).
+  // Do not rename this "Net Profit" or "Net Cash Flow" — see the Gross
+  // Sales → Net System Sales → Net Cash Flow waterfall documented in
+  // docs/FOODIE_LOVER_CURRENT_CODEBASE_REFERENCE.md; this is a narrower,
+  // Manager-scoped figure, not the full Finance cash-flow number.
+  const netMargin    = safeRevenue - safeExpenses;
 
   if (!authChecked) {
     return (
@@ -298,11 +311,11 @@ export default function ExpensesPage() {
                 accent="#16a34a"
               />
               <SummaryCard
-                icon={netProfit >= 0 ? '📈' : '📉'}
-                label="Today Net Profit"
-                value={`${netProfit >= 0 ? '+' : '−'}₹${fmt(Math.abs(netProfit))}`}
-                sub="Revenue − Expenses"
-                accent={netProfit >= 0 ? '#16a34a' : '#ef4444'}
+                icon={netMargin >= 0 ? '📈' : '📉'}
+                label="Today Net Margin"
+                value={`${netMargin >= 0 ? '+' : '−'}₹${fmt(Math.abs(netMargin))}`}
+                sub="Revenue − Manager Expenses (excl. Finance ledger)"
+                accent={netMargin >= 0 ? '#16a34a' : '#ef4444'}
               />
             </div>
           );

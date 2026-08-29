@@ -435,7 +435,8 @@ function SalariesTab({ pin, adminName, staff, accounts, accountName, onLedgerCha
     setBusy(true); setMsg('');
     try {
       const active = configs.find(c => c.isActive);
-      await createSalaryPayment(pin, { staffId: selected, salaryConfigId: active?.id, accountId: payAccount, periodLabel: payPeriod, amount: amt, note: payNote || undefined, by: adminName });
+      const idempotencyKey = `salpay_${selected}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      await createSalaryPayment(pin, { staffId: selected, salaryConfigId: active?.id, accountId: payAccount, periodLabel: payPeriod, amount: amt, note: payNote || undefined, by: adminName, idempotencyKey });
       setMsg('✅ Salary payment recorded');
       setPayAmount(''); setPayPeriod(''); setPayNote('');
       void loadStaffFinance(selected); onLedgerChanged();
@@ -1207,7 +1208,8 @@ function VendorsTab({ pin, adminName, accounts, accountName, onLedgerChanged }: 
     if (!isFinite(amt) || amt <= 0) { setMsg('❌ Enter a valid amount'); return; }
     setBusy(true); setMsg('');
     try {
-      await createVendorPayment(pin, { vendorPurchaseId: payTarget.id, accountId: payAccount, amount: amt, note: payNote || undefined, by: adminName });
+      const idempotencyKey = `vpay_${payTarget.id}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      await createVendorPayment(pin, { vendorPurchaseId: payTarget.id, accountId: payAccount, amount: amt, note: payNote || undefined, by: adminName, idempotencyKey });
       setPayTarget(null); setPayAmount(''); setPayNote(''); setPayAccount('');
       void refresh(); onLedgerChanged();
       setPayments(p => { const cp = { ...p }; delete cp[payTarget.id]; return cp; });

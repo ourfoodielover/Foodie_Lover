@@ -15,6 +15,7 @@ import {
   getSplitBillForTabApi, createSplitBillApi, markSplitEntryPaidApi, SplitBillData,
   getActiveIssues, resolveIssue, OrderIssue,
   getMenu as getMenuApi, saveMenuItem as saveMenuItemApi, deleteMenuItem as deleteMenuItemApi,
+  getTodayRevenue, listExpenses, computeExpenseStats,
 } from '@/lib/api';
 
 interface OfferRule {
@@ -128,7 +129,14 @@ export default function ManagerPage() {
   // End-of-day report
   const [showEOD, setShowEOD]                 = useState(false);
 
-  // Expenses
+  // Revenue + Expenses — both fetched from the same authoritative sources
+  // Finance and Manager Expenses use (see the refresh() Promise.all below),
+  // so this page can never show a different "today" revenue/margin number
+  // for the same period than Finance or Manager Expenses does. See
+  // lib/finance-server.ts computeSystemSales() for the recognition rule and
+  // docs/FOODIE_LOVER_CURRENT_CODEBASE_REFERENCE.md for the full
+  // Gross Sales → Net System Sales → Net Cash Flow waterfall definition.
+  const [todayRevenueApi, setTodayRevenueApi] = useState(0);
   const [todayExpenses, setTodayExpenses]     = useState(0);
 
   // Issues
@@ -187,15 +195,30 @@ export default function ManagerPage() {
       // Fetch ALL of today's orders (active + completed + cancelled) so the
       // EOD report has access to completed-order revenue and void counts.
       // Bounded by midnight-today to avoid loading unbounded history.
-      const [allTabs, allOrders, issues, menuItems] = await Promise.all([
+      //
+      // Remediation (finding #8, extended): revenue and expenses come from
+      // the same authoritative sources Finance and Manager Expenses use
+      // (GET /api/manager/today-revenue wraps computeSystemSales; the
+      // expenses table via listExpenses/computeExpenseStats) instead of
+      // being re-derived here from the `orders` array, which previously (a)
+      // summed every order regardless of status — counting in-progress/
+      // unpaid orders as revenue — and (b) double-counted dine-in rounds
+      // that Finance recognizes only once, at tab-close. `todayExpenses`
+      // was also previously dead state (declared, never set) — Net Profit
+      // Today was silently just Revenue Today with 0 expenses subtracted.
+      const [allTabs, allOrders, issues, menuItems, revenue, expenseList] = await Promise.all([
         getTabs(),
         getOrders({ since: todayMidnightIST().toISOString(), limit: 200 }),
         getActiveIssues(),
         getMenuApi(),
+        getTodayRevenue(todayMidnightIST().toISOString()).catch(() => 0),
+        listExpenses().catch(() => []),
       ]);
       setTabs(allTabs);
       setOrders(allOrders);
       setMenu(menuItems as MenuItem[]);
+      setTodayRevenueApi(revenue);
+      setTodayExpenses(computeExpenseStats(expenseList).todayTotal);
       // Admin PIN is NOT loaded into client state — verified server-side only.
       // Only escalated issues go to manager (open ones are waiter/delivery responsibility)
       setEscalatedIssues(issues.filter(i => i.escalated || i.status === 'escalated'));
@@ -472,11 +495,15 @@ export default function ManagerPage() {
   const awaitingTabs = tabs.filter(t => t.status === 'awaiting_payment');
   const openTabs     = tabs.filter(t => t.status === 'open');
   const closedTabs   = tabs.filter(t => t.status === 'closed' && !!t.closedAt && isToday(t.closedAt));
-  // todayRevenue from orders state (already fetched from API)
-  const todayRevenue  = orders
-    .filter(o => { try { return isToday(o.timestamp); } catch { return false; } })
-    .reduce((s, o) => s + (o.total || 0), 0);
-  const todayNetProfit = todayRevenue - todayExpenses;
+  // Net Margin Today = Net System Sales (todayRevenueApi, authoritative — see
+  // refresh() above) − Manager-logged Operating Expenses (todayExpenses).
+  // This intentionally does NOT include Finance-ledger effects (vendor/
+  // salary payments, manual income/expense) — those are Finance/Admin-scope
+  // data a Manager session doesn't have access to (see finding #11's
+  // privilege separation). It is therefore a narrower figure than Finance's
+  // "Net Cash Flow" by design, not a bug — never label this "Net Profit" or
+  // "Net Cash Flow", both of which mean something mathematically different.
+  const todayNetMargin = todayRevenueApi - todayExpenses;
 
   const shown =
     tabFilter === 'awaiting' ? awaitingTabs :
@@ -521,7 +548,11 @@ export default function ManagerPage() {
   const eodReport = {
     date:           new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' }),
     totalOrders:    completedOrds.length,
-    totalRevenue:   Math.round(todayOrds.filter(o => !['cancelled', 'void'].includes(o.status)).reduce((s, o) => s + (o.total || 0), 0)),
+    // Same authoritative Net System Sales figure as the stats bar / Finance /
+    // Manager Expenses — was previously its own third independent client-side
+    // sum of today's non-cancelled/void orders, which double-counted dine-in
+    // rounds already counted once at tab-close and could disagree with both.
+    totalRevenue:   Math.round(todayRevenueApi),
     avgOrderValue:  avgVal,
     completedTabs:  tabs.filter(t => t.status === 'closed' && isToday(t.createdAt)).length,
     discountsTotal: Math.round(todayOrds.reduce((s, o) => s + (o.discount || 0), 0)),
@@ -766,14 +797,14 @@ export default function ManagerPage() {
       {(() => {
         const fmt  = (n: number) => (isFinite(n) ? n : 0).toLocaleString('en-IN');
         const safe = (n: number) => isFinite(n) ? n : 0;
-        const profit = safe(todayNetProfit);
+        const margin = safe(todayNetMargin);
         return (
           <div style={{ background: '#065f46', color: 'white', padding: '0.6rem 1.5rem', display: 'flex', gap: '2rem', overflowX: 'auto' }}>
             {[
-              { icon: '💰', val: `₹${fmt(todayRevenue)}`,                              label: 'Revenue Today',   color: '#6ee7b7' },
+              { icon: '💰', val: `₹${fmt(todayRevenueApi)}`,                           label: 'Revenue Today',   color: '#6ee7b7' },
               { icon: '💸', val: `₹${fmt(todayExpenses)}`,                             label: 'Expenses Today',  color: '#fca5a5' },
-              { icon: profit >= 0 ? '📈' : '📉',
-                val: `${profit >= 0 ? '+' : '−'}₹${fmt(Math.abs(profit))}`,            label: 'Net Profit Today',color: profit >= 0 ? '#6ee7b7' : '#fca5a5' },
+              { icon: margin >= 0 ? '📈' : '📉',
+                val: `${margin >= 0 ? '+' : '−'}₹${fmt(Math.abs(margin))}`,            label: 'Net Margin Today',color: margin >= 0 ? '#6ee7b7' : '#fca5a5' },
               { icon: '🧾', val: awaitingTabs.length,                                   label: 'Awaiting Payment',color: '#fde68a' },
               { icon: '🟢', val: openTabs.length,                                       label: 'Open Tabs',       color: '#6ee7b7' },
               { icon: '✅', val: closedTabs.length,                                     label: 'Closed Today',    color: '#a7f3d0' },
