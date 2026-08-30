@@ -1,15 +1,22 @@
-// GET  /api/finance/salary-payments?restaurantId=&staffId=
+// GET  /api/finance/salary-payments?restaurantId=&employeeId=
 // POST /api/finance/salary-payments  — record a salary disbursement
+//
+// Keyed by `employeeId` (supabase/migration_025_employee_payroll.sql) —
+// works identically for a staff-linked employee (e.g. Waiter) and a
+// payroll-only employee with no login account (e.g. Head Chef).
 //
 // Each payment posts exactly one linked finance_transactions row
 // (source='salary_payment') automatically — Admin does not separately create
-// a matching expense for the same salary payment.
+// a matching expense for the same salary payment (prevents double-counting;
+// see create_employee_salary_payment()'s comment for how this is enforced).
 //
-// Remediation (master-prompt finding #12): POST delegates the insert-payment
-// + insert-ledger-row sequence to the atomic create_salary_payment()
-// Postgres function (migration_023_finance_atomicity.sql), which accepts an
-// optional idempotency key so a retried request after a network timeout
-// returns the original result instead of creating a duplicate payment.
+// POST delegates the insert-payment + insert-ledger-row sequence to the
+// atomic create_employee_salary_payment() Postgres function
+// (migration_025_employee_payroll.sql — modeled on the existing, untouched
+// create_salary_payment() from migration_023_finance_atomicity.sql), which
+// accepts an optional idempotency key so a retried request after a network
+// timeout returns the original result instead of creating a duplicate
+// payment.
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId } from '@/lib/supabase-server';
 import { requireAdminPin, errMsg, restaurantId, logFinanceAudit } from '@/lib/finance-server';
@@ -20,7 +27,8 @@ export const dynamic = 'force-dynamic';
 function rowToPayment(r: Record<string, unknown>) {
   return {
     id:             r.id as string,
-    staffId:        r.staff_id as string,
+    employeeId:     r.employee_id as string | null,
+    staffId:        (r.staff_id as string | null) ?? undefined,
     salaryConfigId: (r.salary_config_id as string | null) ?? undefined,
     accountId:      r.account_id as string,
     periodLabel:    r.period_label as string,
@@ -40,10 +48,10 @@ export async function GET(req: NextRequest) {
     const sb  = getServerClient();
     const url = new URL(req.url);
     const rid = restaurantId(null, url);
-    const staffId = url.searchParams.get('staffId');
+    const employeeId = url.searchParams.get('employeeId');
 
     let query = sb.from('salary_payments').select('*').eq('restaurant_id', rid).eq('is_voided', false);
-    if (staffId) query = query.eq('staff_id', staffId);
+    if (employeeId) query = query.eq('employee_id', employeeId);
     const { data, error } = await query.order('paid_at', { ascending: false });
     if (error) throw error;
     return NextResponse.json((data ?? []).map(r => rowToPayment(r as Record<string, unknown>)));
@@ -63,8 +71,8 @@ export async function POST(req: NextRequest) {
     const body = await req.json() as Record<string, unknown>;
     const rid  = restaurantId(body);
 
-    const staffId = String(body.staffId ?? '');
-    if (!staffId) return NextResponse.json({ error: 'staffId is required' }, { status: 400 });
+    const employeeId = String(body.employeeId ?? '');
+    if (!employeeId) return NextResponse.json({ error: 'employeeId is required' }, { status: 400 });
     const accountId = String(body.accountId ?? '');
     if (!accountId) return NextResponse.json({ error: 'accountId is required' }, { status: 400 });
     const periodLabel = String(body.periodLabel ?? '').trim();
@@ -74,7 +82,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'amount must be a positive number' }, { status: 400 });
     }
 
-    const { data: staff } = await sb.from('staff').select('name').eq('id', staffId).maybeSingle();
+    const { data: employee } = await sb.from('employees').select('id, name, linked_staff_id')
+      .eq('id', employeeId).eq('restaurant_id', rid).maybeSingle();
+    if (!employee) return NextResponse.json({ error: 'Employee not found' }, { status: 404 });
+
     const roundedAmt = Math.round(amount * 100) / 100;
     const paidAt = (body.paidAt as string) ?? new Date().toISOString();
     const createdBy = (body.by as string) ?? 'Admin';
@@ -83,12 +94,13 @@ export async function POST(req: NextRequest) {
     const id = newId('SALP');
     const { data: salaryCat } = await sb.from('finance_categories')
       .select('id').eq('restaurant_id', rid).eq('kind', 'expense').eq('name', 'Staff Salary').maybeSingle();
-    const description = `Salary — ${(staff?.name as string) ?? staffId} (${periodLabel})`;
+    const description = `Salary — ${employee.name} (${periodLabel})`;
 
-    const { data: rpcData, error: rpcErr } = await sb.rpc('create_salary_payment', {
+    const { data: rpcData, error: rpcErr } = await sb.rpc('create_employee_salary_payment', {
       p_payment_id: id,
       p_restaurant_id: rid,
-      p_staff_id: staffId,
+      p_employee_id: employeeId,
+      p_staff_id: employee.linked_staff_id ?? null,
       p_salary_config_id: (body.salaryConfigId as string) ?? null,
       p_account_id: accountId,
       p_period_label: periodLabel,
@@ -104,14 +116,14 @@ export async function POST(req: NextRequest) {
 
     const result = rpcData as { ok: boolean; error?: string; id?: string; already_exists?: boolean };
     if (!result.ok) {
-      throw new Error(`create_salary_payment RPC failed: ${result.error ?? 'unknown'}`);
+      throw new Error(`create_employee_salary_payment RPC failed: ${result.error ?? 'unknown'}`);
     }
 
     const resultId = result.id ?? id;
     if (!result.already_exists) {
       await logFinanceAudit(sb, {
         restaurantId: rid, entityType: 'salary_payment', entityId: resultId, action: 'create',
-        changedBy: createdBy, after: { staffId, periodLabel, amount: roundedAmt },
+        changedBy: createdBy, after: { employeeId, periodLabel, amount: roundedAmt },
       });
     }
 

@@ -39,13 +39,15 @@ import {
   listVendors, createVendor, updateVendor,
   listVendorPurchases, createVendorPurchase, voidVendorPurchase,
   listVendorPayments, createVendorPayment, voidVendorPayment,
+  listEmployees, createEmployee, updateEmployee, deleteEmployee,
   listSalaryConfig, setSalaryConfig, listSalaryPayments, createSalaryPayment, voidSalaryPayment,
   getDailyClosing, listDailyClosings, closeDay, reopenDay,
   getFinanceAuditLog,
   listStaff,
   listExpenses, computeExpenseStats,
+  EMPLOYEE_ROLE_SUGGESTIONS, EMPLOYMENT_TYPES,
   type FinanceAccount, type FinanceCategory, type FinanceTransaction, type SystemSalesResponse, type FinanceSummary,
-  type Vendor, type VendorPurchase, type VendorPayment, type SalaryConfig, type SalaryPayment, type DailyClosing, type FinanceAuditEntry,
+  type Vendor, type VendorPurchase, type VendorPayment, type Employee, type SalaryConfig, type SalaryPayment, type DailyClosing, type FinanceAuditEntry,
   type StaffMember, type Expense, type ExpenseStats,
 } from '@/lib/api';
 import { todayIST, fmtDateLong, fmtDate, fmtTime, fmtDateTime } from '@/lib/date';
@@ -150,14 +152,20 @@ function FinanceApp({ pin, adminName, onLock }: { pin: string; adminName: string
   const [accounts,   setAccounts]   = useState<FinanceAccount[]>([]);
   const [categories, setCategories] = useState<FinanceCategory[]>([]);
   const [staff,      setStaff]      = useState<StaffMember[]>([]);
+  const [employees,  setEmployees]  = useState<Employee[]>([]);
   const [refDataError, setRefDataError] = useState('');
 
   const loadRefData = useCallback(async () => {
     try {
-      const [acc, cats, stf] = await Promise.all([
-        listFinanceAccounts(pin), listFinanceCategories(pin), listStaff(),
+      // Employees (payroll/HR — see supabase/migration_025_employee_payroll.sql)
+      // are sensitive Finance data, so they're fetched through the same
+      // PIN-gated financeFetch() every other Finance list uses, unlike
+      // `staff` (plain login accounts, session-only — reused here purely to
+      // populate the "link to an existing account" dropdown in Add Employee).
+      const [acc, cats, stf, emps] = await Promise.all([
+        listFinanceAccounts(pin), listFinanceCategories(pin), listStaff(), listEmployees(pin, true),
       ]);
-      setAccounts(acc); setCategories(cats); setStaff(stf);
+      setAccounts(acc); setCategories(cats); setStaff(stf); setEmployees(emps);
       setRefDataError('');
     } catch (e) {
       setRefDataError(e instanceof Error ? e.message : 'Failed to load Finance reference data');
@@ -226,7 +234,7 @@ function FinanceApp({ pin, adminName, onLock }: { pin: string; adminName: string
       {tab === 'transactions' && <TransactionsTab pin={pin} adminName={adminName} accounts={accounts} categories={categories} range={range} accountName={accountName} categoryName={categoryName} refreshKey={txRefreshKey} onChanged={bumpRefresh} />}
       {tab === 'expenses'     && <ExpensesTab range={range} />}
       {tab === 'vendors'      && <VendorsTab pin={pin} adminName={adminName} accounts={accounts} accountName={accountName} onLedgerChanged={bumpRefresh} />}
-      {tab === 'salaries'     && <SalariesTab pin={pin} adminName={adminName} staff={staff} accounts={accounts} accountName={accountName} onLedgerChanged={bumpRefresh} />}
+      {tab === 'salaries'     && <SalariesTab pin={pin} adminName={adminName} staff={staff} employees={employees} onEmployeesChanged={loadRefData} accounts={accounts} accountName={accountName} onLedgerChanged={bumpRefresh} />}
       {tab === 'accounts'     && <AccountsTab pin={pin} accounts={accounts} onChanged={loadRefData} />}
       {tab === 'reports'      && <ReportsTab pin={pin} range={range} accountName={accountName} categoryName={categoryName} />}
 
@@ -378,12 +386,17 @@ function OverviewTab({ pin, range, accounts, onAddTransaction, refreshKey }: {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Salaries tab — reuses the existing `staff` table (via listStaff()); adds a
-// rate history (staff_salary_config) and payment log (salary_payments) on top.
+// Salaries tab — driven by `employees` (payroll/HR master, independent of
+// `staff` login accounts — see supabase/migration_025_employee_payroll.sql).
+// An employee MAY be linked to a staff login (Waiter/Delivery/etc.) or not
+// (Head Chef, Cleaner, Security, ...) — either way the same rate-history
+// (staff_salary_config) and payment-log (salary_payments) flow applies,
+// keyed by employeeId.
 // ════════════════════════════════════════════════════════════════════════════
 
-function SalariesTab({ pin, adminName, staff, accounts, accountName, onLedgerChanged }: {
-  pin: string; adminName: string; staff: StaffMember[]; accounts: FinanceAccount[]; accountName: (id: string) => string; onLedgerChanged: () => void;
+function SalariesTab({ pin, adminName, staff, employees, onEmployeesChanged, accounts, accountName, onLedgerChanged }: {
+  pin: string; adminName: string; staff: StaffMember[]; employees: Employee[]; onEmployeesChanged: () => void;
+  accounts: FinanceAccount[]; accountName: (id: string) => string; onLedgerChanged: () => void;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [configs, setConfigs] = useState<SalaryConfig[]>([]);
@@ -391,6 +404,7 @@ function SalariesTab({ pin, adminName, staff, accounts, accountName, onLedgerCha
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
+  const [showInactive, setShowInactive] = useState(false);
 
   const [rateType, setRateType] = useState<'monthly'|'daily'|'hourly'>('monthly');
   const [rateAmount, setRateAmount] = useState('');
@@ -400,21 +414,27 @@ function SalariesTab({ pin, adminName, staff, accounts, accountName, onLedgerCha
   const [payPeriod, setPayPeriod] = useState('');
   const [payNote, setPayNote] = useState('');
 
-  const loadStaffFinance = useCallback(async (staffId: string) => {
+  const [formOpen, setFormOpen] = useState<'add' | 'edit' | null>(null);
+
+  const visibleEmployees = showInactive ? employees : employees.filter(e => e.isActive);
+  const selectedEmployee = employees.find(e => e.id === selected) ?? null;
+
+  const loadEmployeeFinance = useCallback(async (employeeId: string) => {
     setLoading(true);
     try {
-      const [c, p] = await Promise.all([listSalaryConfig(pin, staffId), listSalaryPayments(pin, staffId)]);
+      const [c, p] = await Promise.all([listSalaryConfig(pin, employeeId), listSalaryPayments(pin, employeeId)]);
       setConfigs(c); setPayments(p);
       const active = c.find(x => x.isActive);
-      if (active) { setRateType(active.salaryType); setRateAmount(String(active.amount)); }
+      setRateType(active?.salaryType ?? 'monthly');
+      setRateAmount(active ? String(active.amount) : '');
     } finally {
       setLoading(false);
     }
   }, [pin]);
 
   useEffect(() => {
-    if (selected) void loadStaffFinance(selected);
-  }, [selected, loadStaffFinance]);
+    if (selected) void loadEmployeeFinance(selected);
+  }, [selected, loadEmployeeFinance]);
 
   async function saveRate() {
     if (!selected || !rateAmount) return;
@@ -422,9 +442,9 @@ function SalariesTab({ pin, adminName, staff, accounts, accountName, onLedgerCha
     if (!isFinite(amt) || amt < 0) { setMsg('❌ Enter a valid amount'); return; }
     setBusy(true); setMsg('');
     try {
-      await setSalaryConfig(pin, { staffId: selected, salaryType: rateType, amount: amt, by: adminName });
+      await setSalaryConfig(pin, { employeeId: selected, salaryType: rateType, amount: amt, by: adminName });
       setMsg('✅ Rate saved');
-      void loadStaffFinance(selected);
+      void loadEmployeeFinance(selected);
     } catch (e) { setMsg(`❌ ${e instanceof Error ? e.message : 'Failed'}`); } finally { setBusy(false); }
   }
 
@@ -436,10 +456,10 @@ function SalariesTab({ pin, adminName, staff, accounts, accountName, onLedgerCha
     try {
       const active = configs.find(c => c.isActive);
       const idempotencyKey = `salpay_${selected}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      await createSalaryPayment(pin, { staffId: selected, salaryConfigId: active?.id, accountId: payAccount, periodLabel: payPeriod, amount: amt, note: payNote || undefined, by: adminName, idempotencyKey });
+      await createSalaryPayment(pin, { employeeId: selected, salaryConfigId: active?.id, accountId: payAccount, periodLabel: payPeriod, amount: amt, note: payNote || undefined, by: adminName, idempotencyKey });
       setMsg('✅ Salary payment recorded');
       setPayAmount(''); setPayPeriod(''); setPayNote('');
-      void loadStaffFinance(selected); onLedgerChanged();
+      void loadEmployeeFinance(selected); onLedgerChanged(); onEmployeesChanged();
     } catch (e) { setMsg(`❌ ${e instanceof Error ? e.message : 'Failed'}`); } finally { setBusy(false); }
   }
 
@@ -447,35 +467,86 @@ function SalariesTab({ pin, adminName, staff, accounts, accountName, onLedgerCha
     if (!confirm('Void this salary payment?')) return;
     try {
       await voidSalaryPayment(pin, id, adminName, 'Voided by admin');
-      if (selected) void loadStaffFinance(selected);
+      if (selected) void loadEmployeeFinance(selected);
       onLedgerChanged();
     } catch (e) { alert(e instanceof Error ? e.message : 'Failed'); }
   }
 
+  async function toggleActive(emp: Employee) {
+    try {
+      await updateEmployee(pin, emp.id, { isActive: !emp.isActive, by: adminName });
+      onEmployeesChanged();
+    } catch (e) { alert(e instanceof Error ? e.message : 'Failed'); }
+  }
+
+  async function removeEmployee(emp: Employee) {
+    if (!confirm(`Delete "${emp.name}" permanently? This cannot be undone.`)) return;
+    try {
+      await deleteEmployee(pin, emp.id, adminName);
+      if (selected === emp.id) setSelected(null);
+      onEmployeesChanged();
+    } catch (e) { alert(e instanceof Error ? e.message : 'Failed to delete'); }
+  }
+
   return (
     <div style={{ display: 'flex', gap: '1.25rem', flexWrap: 'wrap' }}>
-      <div style={{ width: 240, flexShrink: 0 }}>
+      <div style={{ width: 260, flexShrink: 0 }}>
         <div style={card()}>
-          <h3 style={{ ...h3, marginBottom: '0.6rem' }}>👥 Staff</h3>
-          {staff.length === 0 && <div style={{ color: '#999', fontSize: '0.78rem' }}>No staff members found.</div>}
-          {staff.map(s => (
-            <button key={s.id} onClick={() => setSelected(s.id)} style={{ display: 'flex', justifyContent: 'space-between', width: '100%', textAlign: 'left', padding: '0.4rem 0.5rem', borderRadius: 6, border: 'none', background: selected === s.id ? '#fff5eb' : 'transparent', color: selected === s.id ? ORANGE : '#333', fontWeight: 600, cursor: 'pointer', fontSize: '0.8rem' }}>
-              <span>{s.name}</span>
-              <span style={{ fontSize: '0.65rem', color: '#999', textTransform: 'capitalize' }}>{s.role}</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
+            <h3 style={{ ...h3, marginBottom: 0 }}>👥 Employees</h3>
+            <button onClick={() => setFormOpen('add')} style={{ ...btn(), fontSize: '0.7rem', padding: '0.35rem 0.6rem' }}>＋ Add</button>
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.7rem', color: '#888', marginBottom: '0.5rem', cursor: 'pointer' }}>
+            <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} />
+            Show inactive
+          </label>
+          {visibleEmployees.length === 0 && <div style={{ color: '#999', fontSize: '0.78rem' }}>No employees yet — add one to start tracking payroll.</div>}
+          {visibleEmployees.map(e => (
+            <button key={e.id} onClick={() => setSelected(e.id)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', textAlign: 'left', padding: '0.4rem 0.5rem', borderRadius: 6, border: 'none', background: selected === e.id ? '#fff5eb' : 'transparent', color: selected === e.id ? ORANGE : (e.isActive ? '#333' : '#aaa'), fontWeight: 600, cursor: 'pointer', fontSize: '0.8rem', opacity: e.isActive ? 1 : 0.65 }}>
+              <span>{e.name}{!e.isActive && ' (Inactive)'}{e.linkedStaffId && ' 🔗'}</span>
+              <span style={{ fontSize: '0.65rem', color: '#999', textTransform: 'capitalize' }}>{e.role}</span>
             </button>
           ))}
         </div>
       </div>
 
       <div style={{ flex: 1, minWidth: 300 }}>
-        {!selected ? (
-          <div style={{ ...card(), textAlign: 'center', color: '#999' }}>Select a staff member to manage salary.</div>
+        {!selectedEmployee ? (
+          <div style={{ ...card(), textAlign: 'center', color: '#999' }}>Select an employee to manage salary, or add a new one — no application login is required for kitchen/support roles.</div>
         ) : loading ? (
           <div style={{ padding: '1.5rem', textAlign: 'center', color: '#999' }}>Loading…</div>
         ) : (
           <>
+            <div style={card('#374151')}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <div>
+                  <h3 style={{ ...h3, marginBottom: '0.2rem' }}>{selectedEmployee.name}{!selectedEmployee.isActive && <span style={{ color: '#ef4444', fontSize: '0.72rem', marginLeft: '0.5rem' }}>Inactive</span>}</h3>
+                  <div style={{ fontSize: '0.76rem', color: '#666' }}>
+                    <span style={{ textTransform: 'capitalize' }}>{selectedEmployee.role}</span> · {selectedEmployee.employmentType.replace('_', ' ')}
+                    {selectedEmployee.linkedStaffName && ` · 🔗 linked to app account "${selectedEmployee.linkedStaffName}"`}
+                    {selectedEmployee.phone && ` · ${selectedEmployee.phone}`}
+                  </div>
+                  {selectedEmployee.notes && <div style={{ fontSize: '0.72rem', color: '#999', marginTop: '0.2rem' }}>{selectedEmployee.notes}</div>}
+                </div>
+                <div style={{ display: 'flex', gap: '0.4rem', flexShrink: 0 }}>
+                  <button onClick={() => setFormOpen('edit')} style={{ ...btn('#374151'), fontSize: '0.7rem', padding: '0.35rem 0.6rem' }}>✏️ Edit</button>
+                  <button onClick={() => toggleActive(selectedEmployee)} style={{ ...btn(selectedEmployee.isActive ? '#ef4444' : '#16a34a'), fontSize: '0.7rem', padding: '0.35rem 0.6rem' }}>
+                    {selectedEmployee.isActive ? 'Deactivate' : 'Activate'}
+                  </button>
+                  {!selectedEmployee.hasHistory && (
+                    <button onClick={() => removeEmployee(selectedEmployee)} style={{ ...btn('#991b1b'), fontSize: '0.7rem', padding: '0.35rem 0.6rem' }}>🗑️ Delete</button>
+                  )}
+                </div>
+              </div>
+              {selectedEmployee.hasHistory && (
+                <div style={{ fontSize: '0.68rem', color: '#999', marginTop: '0.5rem' }}>
+                  Has salary/payment history — deactivate instead of delete to preserve records.
+                </div>
+              )}
+            </div>
+
             <div style={card('#7c3aed')}>
-              <h3 style={h3}>💼 Salary Rate — {staff.find(s => s.id === selected)?.name}</h3>
+              <h3 style={h3}>💼 Salary Rate</h3>
               <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr auto', gap: '0.6rem', alignItems: 'flex-end' }}>
                 <div>
                   <label style={label}>Type</label>
@@ -541,6 +612,135 @@ function SalariesTab({ pin, adminName, staff, accounts, accountName, onLedgerCha
             </div>
           </>
         )}
+      </div>
+
+      {formOpen && (
+        <EmployeeFormModal
+          pin={pin} adminName={adminName} staff={staff}
+          employee={formOpen === 'edit' ? selectedEmployee : null}
+          onClose={() => setFormOpen(null)}
+          onSaved={(id) => { setFormOpen(null); onEmployeesChanged(); if (id) setSelected(id); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Add / Edit Employee modal ──────────────────────────────────────────────
+// employees.role is free text (see EMPLOYEE_ROLE_SUGGESTIONS) — the select
+// below offers common designations plus "Other" for a custom one, and never
+// requires the value to match a `staff.role` login role. linkedStaffId is
+// entirely optional: leaving it unset creates a payroll-only employee with
+// no application access whatsoever.
+
+function EmployeeFormModal({ pin, adminName, staff, employee, onClose, onSaved }: {
+  pin: string; adminName: string; staff: StaffMember[]; employee: Employee | null;
+  onClose: () => void; onSaved: (id?: string) => void;
+}) {
+  const isEdit = !!employee;
+  const roleIsCustom = !!employee && !(EMPLOYEE_ROLE_SUGGESTIONS as readonly string[]).includes(employee.role);
+
+  const [name, setName] = useState(employee?.name ?? '');
+  const [roleChoice, setRoleChoice] = useState(roleIsCustom ? 'Other' : (employee?.role ?? 'Waiter'));
+  const [roleCustom, setRoleCustom] = useState(roleIsCustom ? (employee?.role ?? '') : '');
+  const [phone, setPhone] = useState(employee?.phone ?? '');
+  const [email, setEmail] = useState(employee?.email ?? '');
+  const [joiningDate, setJoiningDate] = useState(employee?.joiningDate?.slice(0, 10) ?? '');
+  const [employmentType, setEmploymentType] = useState<typeof EMPLOYMENT_TYPES[number]>(employee?.employmentType ?? 'full_time');
+  const [linkedStaffId, setLinkedStaffId] = useState(employee?.linkedStaffId ?? '');
+  const [notes, setNotes] = useState(employee?.notes ?? '');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  const effectiveRole = roleChoice === 'Other' ? roleCustom.trim() : roleChoice;
+
+  async function save() {
+    if (!name.trim()) { setMsg('Name is required.'); return; }
+    if (!effectiveRole) { setMsg('Role / designation is required.'); return; }
+    setBusy(true); setMsg('');
+    try {
+      const payload = {
+        name: name.trim(), role: effectiveRole,
+        phone: phone.trim() || undefined, email: email.trim() || undefined,
+        joiningDate: joiningDate || undefined, employmentType,
+        linkedStaffId: linkedStaffId || undefined, notes: notes.trim() || undefined,
+        by: adminName,
+      };
+      if (isEdit && employee) {
+        await updateEmployee(pin, employee.id, { ...payload, linkedStaffId: linkedStaffId || null });
+        onSaved(employee.id);
+      } else {
+        const { id } = await createEmployee(pin, payload);
+        onSaved(id);
+      }
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Failed to save employee');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, padding: '1rem' }}>
+      <div style={{ background: 'white', borderRadius: 12, padding: '1.5rem', width: 460, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto' }}>
+        <h3 style={h3}>{isEdit ? '✏️ Edit Employee' : '＋ Add Employee'}</h3>
+
+        <label style={label}>Name *</label>
+        <input value={name} onChange={e => setName(e.target.value)} style={{ ...inp, marginBottom: '0.75rem' }} placeholder="e.g. Ramesh Kumar" />
+
+        <label style={label}>Role / Designation *</label>
+        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: roleChoice === 'Other' ? '0.5rem' : '0.75rem' }}>
+          <select value={roleChoice} onChange={e => setRoleChoice(e.target.value)} style={inp}>
+            {EMPLOYEE_ROLE_SUGGESTIONS.map(r => <option key={r} value={r}>{r}</option>)}
+            <option value="Other">Other (custom)…</option>
+          </select>
+        </div>
+        {roleChoice === 'Other' && (
+          <input value={roleCustom} onChange={e => setRoleCustom(e.target.value)} style={{ ...inp, marginBottom: '0.75rem' }} placeholder="Custom designation" />
+        )}
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem', marginBottom: '0.75rem' }}>
+          <div>
+            <label style={label}>Phone</label>
+            <input value={phone} onChange={e => setPhone(e.target.value)} style={inp} />
+          </div>
+          <div>
+            <label style={label}>Email</label>
+            <input value={email} onChange={e => setEmail(e.target.value)} style={inp} />
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem', marginBottom: '0.75rem' }}>
+          <div>
+            <label style={label}>Joining Date</label>
+            <input type="date" value={joiningDate} onChange={e => setJoiningDate(e.target.value)} style={inp} />
+          </div>
+          <div>
+            <label style={label}>Employment Type</label>
+            <select value={employmentType} onChange={e => setEmploymentType(e.target.value as typeof EMPLOYMENT_TYPES[number])} style={inp}>
+              {EMPLOYMENT_TYPES.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <label style={label}>Linked Application Account (optional)</label>
+        <select value={linkedStaffId} onChange={e => setLinkedStaffId(e.target.value)} style={{ ...inp, marginBottom: '0.3rem' }}>
+          <option value="">— None (no login account) —</option>
+          {staff.map(s => <option key={s.id} value={s.id}>{s.name} ({s.role})</option>)}
+        </select>
+        <div style={{ fontSize: '0.68rem', color: '#999', marginBottom: '0.75rem' }}>
+          Only needed if this employee also has a Waiter/Kitchen/Delivery/Manager login. Adding an employee never creates a login, and this link never grants one.
+        </div>
+
+        <label style={label}>Notes</label>
+        <textarea value={notes} onChange={e => setNotes(e.target.value)} style={{ ...inp, marginBottom: '0.75rem', minHeight: 60, resize: 'vertical' }} />
+
+        {msg && <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#ef4444', marginBottom: '0.6rem' }}>{msg}</div>}
+
+        <div style={{ display: 'flex', gap: '0.6rem', justifyContent: 'flex-end' }}>
+          <button onClick={onClose} style={btn('#e5e7eb', '#333')}>Cancel</button>
+          <button onClick={save} disabled={busy} style={{ ...btn(), opacity: busy ? 0.6 : 1 }}>{busy ? 'Saving…' : isEdit ? 'Save Changes' : 'Add Employee'}</button>
+        </div>
       </div>
     </div>
   );

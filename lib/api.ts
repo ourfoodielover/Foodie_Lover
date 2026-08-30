@@ -1410,12 +1410,30 @@ export interface VendorPayment {
   id: string; vendorPurchaseId: string; vendorId: string; accountId: string;
   amount: number; paidAt: string; note?: string; createdBy?: string; isVoided: boolean;
 }
+export interface Employee {
+  id: string; name: string; role: string; phone?: string; email?: string;
+  joiningDate?: string; employmentType: 'full_time'|'part_time'|'contract'|'temporary';
+  linkedStaffId?: string; linkedStaffName?: string; isActive: boolean; notes?: string;
+  createdAt: string; updatedAt: string;
+  /** true if this employee has any salary rate configured or payment ever recorded — blocks hard delete. */
+  hasHistory: boolean;
+}
+// Common payroll designations shown as quick-pick suggestions in the Admin
+// "Add/Edit Employee" form. Purely a UI convenience — employees.role is free
+// text server-side (supabase/migration_025_employee_payroll.sql), so Admin
+// can always type a custom designation instead ("Other").
+export const EMPLOYEE_ROLE_SUGGESTIONS = [
+  'Head Chef', 'Chef', 'Assistant Chef', 'Kitchen Helper', 'Waiter', 'Delivery',
+  'Cashier', 'Manager', 'Supervisor', 'Cleaner', 'Security',
+] as const;
+export const EMPLOYMENT_TYPES = ['full_time', 'part_time', 'contract', 'temporary'] as const;
+
 export interface SalaryConfig {
-  id: string; staffId: string; salaryType: 'monthly'|'daily'|'hourly';
+  id: string; employeeId: string; staffId?: string; salaryType: 'monthly'|'daily'|'hourly';
   amount: number; effectiveFrom: string; isActive: boolean; createdAt: string;
 }
 export interface SalaryPayment {
-  id: string; staffId: string; salaryConfigId?: string; accountId: string;
+  id: string; employeeId: string; staffId?: string; salaryConfigId?: string; accountId: string;
   periodLabel: string; amount: number; paidAt: string; note?: string; isVoided: boolean;
 }
 export interface DailyClosing {
@@ -1529,21 +1547,44 @@ export async function voidVendorPayment(pin: string, id: string, by: string, rea
   await financeFetch(`/api/finance/vendor-payments/${id}?${params}`, pin, { method: 'DELETE' });
 }
 
-// Salary config + payments
-export async function listSalaryConfig(pin: string, staffId?: string): Promise<SalaryConfig[]> {
+// Employees (payroll/HR master — independent of `staff` login accounts;
+// see supabase/migration_025_employee_payroll.sql)
+export async function listEmployees(pin: string, includeInactive = false): Promise<Employee[]> {
+  return financeFetch(`/api/finance/employees?restaurantId=${rid()}${includeInactive ? '&includeInactive=1' : ''}`, pin);
+}
+export async function createEmployee(pin: string, data: {
+  name: string; role: string; phone?: string; email?: string; joiningDate?: string;
+  employmentType?: typeof EMPLOYMENT_TYPES[number]; linkedStaffId?: string; notes?: string; by?: string;
+}): Promise<{ id: string }> {
+  return financeFetch('/api/finance/employees', pin, { method: 'POST', body: JSON.stringify({ ...data, restaurantId: rid(), pin }) });
+}
+export async function updateEmployee(pin: string, id: string, data: Partial<{
+  name: string; role: string; phone: string; email: string; joiningDate: string;
+  employmentType: typeof EMPLOYMENT_TYPES[number]; linkedStaffId: string | null; notes: string; isActive: boolean; by: string;
+}>): Promise<void> {
+  await financeFetch(`/api/finance/employees/${id}`, pin, { method: 'PATCH', body: JSON.stringify({ ...data, restaurantId: rid(), pin }) });
+}
+export async function deleteEmployee(pin: string, id: string, by?: string): Promise<void> {
   const params = new URLSearchParams({ restaurantId: rid() });
-  if (staffId) params.set('staffId', staffId);
+  if (by) params.set('by', by);
+  await financeFetch(`/api/finance/employees/${id}?${params}`, pin, { method: 'DELETE' });
+}
+
+// Salary config + payments — keyed by employeeId
+export async function listSalaryConfig(pin: string, employeeId?: string): Promise<SalaryConfig[]> {
+  const params = new URLSearchParams({ restaurantId: rid() });
+  if (employeeId) params.set('employeeId', employeeId);
   return financeFetch(`/api/finance/salary-config?${params}`, pin);
 }
-export async function setSalaryConfig(pin: string, data: { staffId: string; salaryType: 'monthly'|'daily'|'hourly'; amount: number; effectiveFrom?: string; by?: string }): Promise<{ id: string }> {
+export async function setSalaryConfig(pin: string, data: { employeeId: string; salaryType: 'monthly'|'daily'|'hourly'; amount: number; effectiveFrom?: string; by?: string }): Promise<{ id: string }> {
   return financeFetch('/api/finance/salary-config', pin, { method: 'POST', body: JSON.stringify({ ...data, restaurantId: rid(), pin }) });
 }
-export async function listSalaryPayments(pin: string, staffId?: string): Promise<SalaryPayment[]> {
+export async function listSalaryPayments(pin: string, employeeId?: string): Promise<SalaryPayment[]> {
   const params = new URLSearchParams({ restaurantId: rid() });
-  if (staffId) params.set('staffId', staffId);
+  if (employeeId) params.set('employeeId', employeeId);
   return financeFetch(`/api/finance/salary-payments?${params}`, pin);
 }
-export async function createSalaryPayment(pin: string, data: { staffId: string; salaryConfigId?: string; accountId: string; periodLabel: string; amount: number; paidAt?: string; note?: string; by?: string; idempotencyKey?: string }): Promise<{ id: string }> {
+export async function createSalaryPayment(pin: string, data: { employeeId: string; salaryConfigId?: string; accountId: string; periodLabel: string; amount: number; paidAt?: string; note?: string; by?: string; idempotencyKey?: string }): Promise<{ id: string }> {
   return financeFetch('/api/finance/salary-payments', pin, { method: 'POST', body: JSON.stringify({ ...data, restaurantId: rid(), pin }) });
 }
 export async function voidSalaryPayment(pin: string, id: string, by: string, reason?: string): Promise<void> {
