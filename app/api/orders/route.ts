@@ -120,6 +120,53 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'deliveryAddress is required for delivery orders' }, { status: 400 });
     }
 
+    // ── Staff-session validation for staff-submitted orders (Security) ─────────
+    // This route is intentionally public for customer QR / online ordering
+    // (no session exists for those callers) — see the file header. But
+    // `createdByStaffId`/`createdByStaffName` are set ONLY by the Waiter
+    // "Take Order" screen (components/WaiterTakeOrder.tsx); previously
+    // nothing checked that the caller actually held a staff session for
+    // that id, i.e. a crafted request could claim to be any waiter with no
+    // authentication at all. Whenever the body claims to be staff-submitted,
+    // it now must present a valid staff session, and the session's own
+    // account id is used — never the client-supplied one — so a waiter
+    // cannot submit an order under another staff member's name.
+    if (body.createdByStaffId) {
+      const auth = requireAnyStaff(req);
+      if (!auth.ok) return auth.response;
+      body.createdByStaffId = auth.session.staffId ?? body.createdByStaffId;
+    }
+
+    // ── Tab-status revalidation (Order More eligibility, §A5/§A19) ─────────────
+    // Neither the "append to awaiting_waiter order" path below nor plain
+    // new-order creation with a tabId previously checked customer_tabs.status
+    // before attaching an order to it. Any tab this table/session references
+    // must still be 'open' — a tab mid-checkout ('awaiting_payment') or
+    // already 'closed' must never silently accept another order (whether the
+    // request came from the waiter's "Order More" or the customer QR page —
+    // this guard protects both paths identically, per the task spec's
+    // "backend must enforce this too").
+    if (body.tabId) {
+      const { data: tabRow, error: tabErr } = await sb
+        .from('customer_tabs')
+        .select('id, status, restaurant_id')
+        .eq('id', String(body.tabId))
+        .maybeSingle();
+      if (tabErr) throw tabErr;
+      if (!tabRow) {
+        return NextResponse.json({ error: 'Table session not found' }, { status: 404 });
+      }
+      if ((tabRow as Record<string, unknown>).restaurant_id !== rid) {
+        return NextResponse.json({ error: 'Table session not found' }, { status: 404 });
+      }
+      if ((tabRow as Record<string, unknown>).status !== 'open') {
+        return NextResponse.json(
+          { error: 'Billing/payment is already in progress for this customer. Cannot add more items to a closed or finalizing table session.' },
+          { status: 409 },
+        );
+      }
+    }
+
     // ── Idempotency check (remediation of audit finding C5) ────────────────────
     // If the client supplied an idempotencyKey and an order with that key
     // already exists, this is a retry/offline-replay of a submission that

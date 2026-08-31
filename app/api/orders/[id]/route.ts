@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerClient, newId, rowToOrder, broadcast } from '@/lib/supabase-server';
 import { enqueueReceiptEmail, sendReceiptEmail, sendOrderReadyEmail, sendOrderConfirmationEmail, sendOutForDeliveryEmail, triggerSpinInviteForOrder } from '@/lib/email-server';
 import { getSession, requireAnyStaff } from '@/lib/session-server';
+import { resolveKitchenMode } from '@/lib/config-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -332,6 +333,25 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       // receives the order via the 'order_confirmed' Realtime broadcast below.
       if (body.action === 'confirm_and_print') {
         try {
+          // ── "ORDER MORE" ticket labeling (dine-in only, §A11) ────────────
+          // This order is an additional round on the SAME table/customer
+          // tab when its tab already has at least one OTHER order that has
+          // moved past awaiting_waiter (i.e. a previous round was already
+          // sent to the kitchen). Computed server-side from the DB — never
+          // trusted from the client — so it can't be spoofed and applies
+          // uniformly whether this round came from the waiter or customer
+          // QR ordering.
+          let isOrderMore = false;
+          if (current.type === 'dine-in' && current.tab_id) {
+            const { count } = await sb
+              .from('orders')
+              .select('id', { count: 'exact', head: true })
+              .eq('tab_id', current.tab_id as string)
+              .neq('id', id)
+              .not('status', 'in', '("awaiting_waiter","cancelled","void")');
+            isOrderMore = (count ?? 0) > 0;
+          }
+
           confirmPrintJobId = newId('PJ');
           await sb.from('print_jobs').insert({
             id:            confirmPrintJobId,
@@ -339,7 +359,10 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
             order_id:      id,
             job_type:      'kot',
             status:        'queued',
-            payload:       buildKotPayload(current as Record<string, unknown>, current.order_items ?? []),
+            payload:       buildKotPayload(current as Record<string, unknown>, current.order_items ?? [], {
+              isOrderMore,
+              existingTabId: isOrderMore ? (current.tab_id as string) : null,
+            }),
             requested_by:  body.by ?? 'Waiter',
             is_reprint:    false,
           });
@@ -442,6 +465,128 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       });
     }
 
+    // ── Pickup "Order More" ───────────────────────────────────────────────────
+    // Appends newly-ordered items to an ALREADY-confirmed Pickup order,
+    // instead of creating a brand-new order/customer (task spec Part A6-A9).
+    // Deliberately kept on the SAME order_id (no new "session"/child-order
+    // abstraction — see migration_026's header comment) so Finance, Spin &
+    // Win and receipts — all keyed per order_id for pickup — need zero
+    // changes and can never double-count.
+    //
+    // Delivery is intentionally NOT included here yet (task spec §B4: don't
+    // build an unrequested workflow) — only the printing groundwork (phone +
+    // reusable KOT payload shape) is made delivery-ready.
+    //
+    // requireAnyStaff already ran at the top of this handler for any body
+    // that isn't the public customer_confirm shape, so this action is
+    // already staff-only; the atomic eligibility/ownership checks below
+    // (order exists in THIS restaurant, is type=pickup, is still in an
+    // active kitchen status) run again inside add_pickup_order_items() under
+    // a row lock, so a stale client can't attach items to a finished order
+    // even if two requests race (§A19).
+    let orderMorePrintJobId: string | undefined;
+    let orderMoreResult: { alreadyExists?: boolean; error?: string } | undefined;
+    if (body.action === 'order_more') {
+      const { data: current, error: curErr } = await sb
+        .from('orders')
+        .select('*')
+        .eq('id', id)
+        .single();
+      if (curErr || !current) {
+        return NextResponse.json({ error: 'Order not found' }, { status: 404 });
+      }
+      if (!Array.isArray(body.items) || body.items.length === 0) {
+        return NextResponse.json({ error: 'items array is required and must not be empty' }, { status: 400 });
+      }
+      if (body.subtotal == null || isNaN(Number(body.subtotal)) || body.total == null || isNaN(Number(body.total))) {
+        return NextResponse.json({ error: 'subtotal and total must be valid numbers' }, { status: 400 });
+      }
+
+      const newItems = (body.items as Record<string, unknown>[]).map(item => ({
+        id:         newId('OI'),
+        menuItemId: item.menuItemId ?? null,
+        name:       item.name,
+        qty:        item.qty,
+        price:      item.price,
+        subtotal:   item.subtotal,
+      }));
+
+      const { data: rpcData, error: rpcErr } = await sb.rpc('add_pickup_order_items', {
+        p_event_id:        newId('EV'),
+        p_order_id:        id,
+        p_restaurant_id:   rid,
+        p_items:           newItems,
+        p_add_subtotal:    Number(body.subtotal),
+        p_add_total:       Number(body.total),
+        p_notes:           (body.notes as string) ?? null,
+        p_performed_by:    (body.by as string) ?? 'Waiter',
+        p_idempotency_key: (body.idempotencyKey as string) ?? null,
+      });
+      if (rpcErr) throw rpcErr;
+
+      const result = rpcData as {
+        ok: boolean; error?: string; alreadyExists?: boolean;
+        orderId?: string; newItemIds?: string[]; newSubtotal?: number; newTotal?: number;
+      };
+      if (!result.ok) {
+        const httpStatus =
+          result.error === 'order_not_found' ? 404 :
+          result.error === 'invalid_type'    ? 400 :
+          result.error === 'not_eligible'    ? 409 : 500;
+        const msg =
+          result.error === 'invalid_type' ? 'Order More is only available for Pickup orders.' :
+          result.error === 'not_eligible' ? 'This order can no longer accept additional items (already completed, cancelled, or not yet confirmed).' :
+          result.error === 'order_not_found' ? 'Order not found' :
+          'Could not add items to this order';
+        return NextResponse.json({ error: msg }, { status: httpStatus });
+      }
+      orderMoreResult = result;
+
+      // ── New items ONLY are queued to kitchen/printer (§A9/§B3) ──────────────
+      // Follows the SAME routing this order was already confirmed with
+      // (order.kitchen_route), not a fresh waiter choice — a single pickup
+      // order shouldn't split between printer and kitchen display across
+      // rounds. Falls back to the restaurant's configured default only for
+      // the (very old-data) edge case where kitchen_route was never set.
+      if (!result.alreadyExists) {
+        const kitchenRoute = (current.kitchen_route as string) && current.kitchen_route !== 'not_set'
+          ? (current.kitchen_route as string)
+          : (await resolveKitchenMode(rid)).value;
+
+        if (kitchenRoute === 'printer') {
+          try {
+            const { data: newItemRows } = await sb
+              .from('order_items')
+              .select('*')
+              .in('id', result.newItemIds ?? []);
+            orderMorePrintJobId = newId('PJ');
+            await sb.from('print_jobs').insert({
+              id:            orderMorePrintJobId,
+              restaurant_id: rid,
+              order_id:      id,
+              job_type:      'kot',
+              status:        'queued',
+              // ONLY the newly-added items — never the items already sent
+              // to the kitchen on the original ticket (§A9/§B3).
+              payload:       buildKotPayload(current as Record<string, unknown>, newItemRows ?? [], {
+                isOrderMore:   true,
+                existingTabId: null,
+              }),
+              requested_by:  (body.by as string) ?? 'Waiter',
+              is_reprint:    false,
+            });
+          } catch (printErr) {
+            console.error(`[order_more] Print job creation failed for order ${id} (non-fatal):`, printErr);
+            orderMorePrintJobId = undefined;
+          }
+        }
+        // kitchen_route === 'kitchen_display': no print job — the updated
+        // item list reaches Kitchen Display via the existing 5s poll +
+        // the 'order_event_added' broadcast below, exactly like every
+        // other order update on that screen.
+      }
+    }
+
     const { error: updErr } = await sb.from('orders').update(updates).eq('id', id);
     if (updErr) throw updErr;
 
@@ -472,6 +617,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       body.action  === 'switch_to_kitchen'        ? 'order_confirmed'        :
       body.action  === 'reject'                   ? 'order_rejected'         :
       body.action  === 'reprint'                  ? 'print_job_queued'       :
+      body.action  === 'order_more'               ? 'order_event_added'      :
       'order_status_changed';
     await broadcast(rid, event, order);
 
@@ -563,8 +709,10 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
 
     return NextResponse.json({
       ...order,
-      ...(confirmPrintJobId ? { printJobId: confirmPrintJobId } : {}),
-      ...(reprintJobId      ? { printJobId: reprintJobId }      : {}),
+      ...(confirmPrintJobId    ? { printJobId: confirmPrintJobId }    : {}),
+      ...(reprintJobId         ? { printJobId: reprintJobId }         : {}),
+      ...(orderMorePrintJobId  ? { printJobId: orderMorePrintJobId }  : {}),
+      ...(orderMoreResult      ? { alreadyExists: !!orderMoreResult.alreadyExists } : {}),
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -582,6 +730,15 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
 function buildKotPayload(
   order: Record<string, unknown>,
   items: Record<string, unknown>[],
+  opts?: {
+    // "ORDER MORE" ticket labeling (task spec §A11 / §B3) — set by the
+    // caller when this ticket represents an ADDITIONAL round on a tab/order
+    // that already has other confirmed items, so the print agent can print
+    // a distinct header. Only ever computed server-side (never trusted from
+    // a client body) — see call sites in PATCH below.
+    isOrderMore?: boolean;
+    existingTabId?: string | null;
+  },
 ): Record<string, unknown> {
   return {
     orderId:        order.id,
@@ -589,7 +746,17 @@ function buildKotPayload(
     type:           order.type,
     tableId:        order.table_id ?? null,
     customerName:   order.customer_name ?? null,
+    // Phone is printed for Pickup and Delivery only — never Dine-In (task
+    // spec §B7: no new customer-phone printing on dine-in kitchen tickets).
+    // Source of truth is the same `orders.phone` column already used
+    // everywhere else (no new phone field — §B5); coerced to a plain string
+    // or null so the print agent can never render "undefined"/"null" (§B6).
+    customerPhone: order.type !== 'dine-in'
+      ? (typeof order.phone === 'string' && order.phone.trim() ? order.phone.trim() : null)
+      : null,
     deliveryAddress: order.delivery_address ?? null,
+    isOrderMore:    !!opts?.isOrderMore,
+    existingTabId:  opts?.existingTabId ?? null,
     items: (items ?? [])
       .slice()
       .sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')))

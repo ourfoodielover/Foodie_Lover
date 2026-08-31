@@ -39,8 +39,9 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
-  getTables, getTabs, createTab, getMenu, createOrder,
+  getTables, getTabs, createTab, getMenu, createOrder, getOrders,
   confirmAndPrintOrder, confirmAndKitchenOrder, getKitchenRoutingMode,
+  orderMoreOnPickup, genIdempotencyKey,
   Table, CustomerTab, MenuItem, Order,
 } from '@/lib/api';
 import type { AuthSession } from '@/lib/auth';
@@ -54,7 +55,7 @@ interface Props {
 }
 
 // ─── Local types ────────────────────────────────────────────────────────────
-type Step = 'type' | 'table' | 'tableGuests' | 'newGuestForm' | 'pickupGuest' | 'menu' | 'cart' | 'success';
+type Step = 'type' | 'table' | 'tableGuests' | 'newGuestForm' | 'pickupGuest' | 'pickupActive' | 'menu' | 'cart' | 'success';
 type OrderTypeChoice = 'dine-in' | 'pickup';
 
 interface CartEntry {
@@ -69,6 +70,11 @@ interface OrderContext {
   customerName: string;
   customerEmail?: string;
   customerPhone?: string;
+  // Set ONLY for a Pickup "Order More" flow — when present, Send appends
+  // the cart's items to this already-confirmed order instead of creating a
+  // new order/customer (task spec Part A6-A9).
+  orderMoreTargetId?:  string;
+  orderMoreTargetNum?: number;
 }
 
 interface SuccessInfo {
@@ -120,6 +126,16 @@ const backBtnStyle: React.CSSProperties = {
 };
 
 function money(n: number) { return `₹${(isFinite(n) ? n : 0).toLocaleString('en-IN')}`; }
+// "Started 7:15 PM" — used to tell same-named active customers apart (task
+// spec §4) without exposing anything more sensitive than a clock time.
+// Never throws on a bad/missing timestamp — falls back to '' so a broken
+// date can never render as "Invalid Date" on the guest card.
+function formatStartedTime(iso?: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true });
+}
 function qtyCircleBtn(bg: string, c: string): React.CSSProperties {
   return { width: 26, height: 26, borderRadius: '50%', border: 'none', background: bg, color: c, fontWeight: 900, cursor: 'pointer', fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center' };
 }
@@ -139,6 +155,14 @@ export default function WaiterTakeOrder({ session, onClose }: Props) {
   const [selectedTable, setSelectedTable] = useState<Table | null>(null);
   const [tableTabs, setTableTabs] = useState<CustomerTab[]>([]);
   const [loadingTabs, setLoadingTabs] = useState(false);
+  // Existing-orders count per open tab at the selected table — shown as
+  // "Existing Orders: N" on each guest card (task spec §A2/§A3 example format).
+  const [tabOrderCounts, setTabOrderCounts] = useState<Record<string, number>>({});
+
+  // ── Pickup: active (in-kitchen) pickup orders eligible for Order More ─────
+  const [activePickupOrders, setActivePickupOrders] = useState<Order[]>([]);
+  const [loadingPickupOrders, setLoadingPickupOrders] = useState(false);
+  const [pickupOrdersError, setPickupOrdersError] = useState('');
 
   // ── New guest / pickup guest form ─────────────────────────────────────────
   const [guestName, setGuestName] = useState('');
@@ -191,37 +215,84 @@ export default function WaiterTakeOrder({ session, onClose }: Props) {
       finally { setLoadingTables(false); }
     }
   }
-  function choosePickup() {
+  // Pickup now opens on an "Active Pickup Orders" list (task spec §A6) —
+  // never straight into a blank guest form — so a second round for a
+  // customer already in the kitchen pipeline becomes Order More instead of
+  // a brand-new, disconnected order.
+  async function choosePickup() {
     setOrderType('pickup');
+    setStep('pickupActive');
+    setLoadingPickupOrders(true); setPickupOrdersError('');
+    try {
+      const all = await getOrders({ type: 'pickup', activeOnly: true, limit: 100 });
+      // Eligible for Order More only while still actively in the kitchen
+      // pipeline — not yet confirmed ('awaiting_waiter') is excluded because
+      // that round hasn't even reached the kitchen yet (§A7).
+      setActivePickupOrders(all.filter(o => ['pending', 'preparing', 'prepared'].includes(o.status)));
+    } catch (e) {
+      setPickupOrdersError(e instanceof Error ? e.message : 'Could not load active pickup orders');
+    } finally {
+      setLoadingPickupOrders(false);
+    }
+  }
+
+  function startNewPickupOrder() {
     setGuestName(''); setGuestPhone(''); setGuestEmail(''); setGuestError('');
     setStep('pickupGuest');
   }
 
-  // ── Step: Select Table → load that table's existing open tabs ─────────────
+  // "Order More" on an existing pickup order — jumps straight to the menu
+  // using that order's own customer info, skipping the guest form entirely
+  // (there's nothing new to ask — the customer already exists).
+  function selectPickupOrderMore(order: Order) {
+    setCtx({
+      type:               'pickup',
+      customerName:       order.customerName || 'Walk-in Guest',
+      customerEmail:      order.customerEmail || undefined,
+      customerPhone:      order.phone || undefined,
+      orderMoreTargetId:  order.id,
+      orderMoreTargetNum: order.orderNum,
+    });
+    setCart({}); setNotes('');
+    setStep('menu');
+  }
+
+  // ── Step: Select Table → load ACTIVE CUSTOMER SESSIONS for that table ─────
+  // "Active" here means any open customer_tab at this table, regardless of
+  // which channel created it — a session a customer started themselves by
+  // scanning the table QR code is exactly as eligible for waiter Order More
+  // as one the waiter opened. There is no separate "waiter tab" concept —
+  // customer_tabs has no source/channel column at all, so nothing here needs
+  // to special-case or filter by how the session began (task spec §1/§13).
+  // Scoped server-side by tableId (GET /api/tabs?tableId=...) instead of
+  // fetching every open tab restaurant-wide and filtering in the browser —
+  // the server also returns each tab's live orderCount in the same query
+  // (task spec §27 — avoid N+1).
   async function selectTable(table: Table) {
     setSelectedTable(table);
     setLoadingTabs(true);
     setTableTabs([]);
+    setTabOrderCounts({});
     try {
-      const open = await getTabs('open');
-      const atThisTable = open.filter(t => t.tableId === table.id);
+      // Only 'open' tabs are ever returned here — a tab that's already
+      // 'awaiting_payment' (billing in progress) or 'closed' never appears
+      // as an Order More option (task spec §11/§12).
+      const atThisTable = await getTabs('open', undefined, table.id);
       setTableTabs(atThisTable);
-      if (atThisTable.length === 0) {
-        // Nothing to choose from — skip straight to the New Guest form.
-        setGuestName(''); setGuestPhone(''); setGuestEmail(''); setGuestParty('2'); setGuestError('');
-        setStep('newGuestForm');
-      } else {
-        setStep('tableGuests');
-      }
+      setTabOrderCounts(Object.fromEntries(atThisTable.map(t => [t.id, t.orderCount ?? 0])));
+      setStep('tableGuests');
     } catch (e) {
-      setTablesError(e instanceof Error ? e.message : 'Could not load this table’s customers');
-      setStep('tableGuests'); // still let staff retry or add a new guest
+      setTablesError(e instanceof Error ? e.message : 'Could not load this table’s active customers');
+      setStep('tableGuests'); // still let staff retry or start a new customer
     } finally {
       setLoadingTabs(false);
     }
   }
 
-  // ── Existing customer selected — add items to their existing tab ──────────
+  // ── Existing customer session selected (QR- or waiter-opened — doesn't
+  //    matter which) — Order More adds items to THIS EXACT customer_tab.id,
+  //    never by table+name (task spec §26: name is display-only, the tab id
+  //    is the real identity; two customers can share a name safely). ───────
   function selectExistingTab(tab: CustomerTab) {
     setCtx({
       type: 'dine-in',
@@ -352,6 +423,33 @@ export default function WaiterTakeOrder({ session, onClose }: Props) {
     }));
     const subtotal = items.reduce((s, i) => s + i.subtotal, 0);
 
+    // ── Pickup "Order More" — append to the existing order, don't create a
+    //    new one. Kitchen routing is decided server-side from that order's
+    //    own kitchen_route (already set when it was first confirmed), so
+    //    there's no printer/kitchen-display choice to make here. ───────────
+    if (ctx.orderMoreTargetId) {
+      try {
+        const res = await orderMoreOnPickup(ctx.orderMoreTargetId, {
+          items, subtotal, total: subtotal,
+          notes: notes.trim() || undefined,
+          by: session.name,
+          idempotencyKey: genIdempotencyKey('wtr_more'),
+        });
+        const routedLabel = res.alreadyExists
+          ? '✅ Already sent (duplicate tap ignored)'
+          : res.printJobId ? '🖨️ New items sent to kitchen printer' : '🖥️ New items sent to Kitchen Display';
+        setSuccessInfo({ ctx, itemCount: cartCount, total: subtotal, orderNum: ctx.orderMoreTargetNum, routedLabel, routedOk: true });
+        setCart({}); setNotes('');
+        setStep('success');
+      } catch (e) {
+        setSendError(e instanceof Error ? e.message : 'Could not add items to this order. Please try again.');
+      } finally {
+        setSending(false);
+        sendingRef.current = false;
+      }
+      return;
+    }
+
     let created: Order | null = null;
     try {
       created = await createOrder({
@@ -366,6 +464,10 @@ export default function WaiterTakeOrder({ session, onClose }: Props) {
         notes:           notes.trim() || undefined,
         createdByStaffId:   session.accountId,
         createdByStaffName: session.name,
+        // Stable per-submission key — a double-tap or a network retry of
+        // this exact click returns the original order instead of creating
+        // a duplicate (task spec §A18).
+        idempotencyKey:  genIdempotencyKey('wtr'),
       });
     } catch (e) {
       // Nothing was persisted — safe to let the waiter retry freely. Cart is
@@ -404,7 +506,8 @@ export default function WaiterTakeOrder({ session, onClose }: Props) {
 
   function takeAnotherOrder() {
     setStep('type'); setOrderType(null);
-    setSelectedTable(null); setTableTabs([]);
+    setSelectedTable(null); setTableTabs([]); setTabOrderCounts({});
+    setActivePickupOrders([]); setPickupOrdersError('');
     setCtx(null); setCart({}); setNotes('');
     setGuestName(''); setGuestPhone(''); setGuestEmail(''); setGuestParty('2'); setGuestError('');
     setSuccessInfo(null); setSendError('');
@@ -423,8 +526,9 @@ export default function WaiterTakeOrder({ session, onClose }: Props) {
               onClick={() => {
                 if (step === 'table') setStep('type');
                 else if (step === 'tableGuests') setStep('table');
-                else if (step === 'newGuestForm') setStep(tableTabs.length > 0 ? 'tableGuests' : 'table');
-                else if (step === 'pickupGuest') setStep('type');
+                else if (step === 'newGuestForm') setStep('tableGuests');
+                else if (step === 'pickupActive') setStep('type');
+                else if (step === 'pickupGuest') setStep('pickupActive');
                 else if (step === 'cart') setStep('menu');
                 // 'menu' has no back — the tab/order context already exists; exiting uses ✕ below.
               }}
@@ -439,8 +543,9 @@ export default function WaiterTakeOrder({ session, onClose }: Props) {
                step === 'table'        ? '🍽 Select Table' :
                step === 'tableGuests'  ? formatTableName(selectedTable?.id) || selectedTable?.name || 'Table' :
                step === 'newGuestForm' ? `New Guest — ${formatTableName(selectedTable?.id) || selectedTable?.name || ''}` :
-               step === 'pickupGuest'  ? '🛍 Pickup Order' :
-               step === 'menu'         ? (ctx?.tableLabel ? `${ctx.tableLabel} — ${ctx.customerName}` : ctx?.customerName || 'Menu') :
+               step === 'pickupActive' ? '🛍 Pickup Orders' :
+               step === 'pickupGuest'  ? '🛍 New Pickup Order' :
+               step === 'menu'         ? (ctx?.orderMoreTargetId ? `Order More — ${ctx.customerName}` : ctx?.tableLabel ? `${ctx.tableLabel} — ${ctx.customerName}` : ctx?.customerName || 'Menu') :
                step === 'cart'         ? '🧾 Your Order' : ''}
             </div>
           </div>
@@ -515,7 +620,11 @@ export default function WaiterTakeOrder({ session, onClose }: Props) {
           </div>
         )}
 
-        {/* ═══════════ STEP: Existing Customers at this table ═══════════ */}
+        {/* ═══════════ STEP: Active Customer Sessions at this table ═══════════
+             Every open customer_tab at this table, regardless of whether it
+             was started by the customer's own QR scan or a waiter — there is
+             no "waiter-only" view of this table's sessions (task spec §1-3).
+             Selection always uses the tab's own id, never table+name (§26). */}
         {step === 'tableGuests' && (
           <div style={{ padding: '1.25rem', maxWidth: 520, margin: '0 auto' }}>
             {loadingTabs && <div style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>Loading…</div>}
@@ -523,33 +632,50 @@ export default function WaiterTakeOrder({ session, onClose }: Props) {
             {!loadingTabs && (
               <>
                 <div style={{ fontSize: '0.78rem', color: '#888', fontWeight: 700, marginBottom: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.02em' }}>
-                  Existing Customers
+                  {formatTableName(selectedTable?.id) || selectedTable?.name || 'Table'} — Active Customers
                 </div>
-                {tableTabs.map(tab => (
-                  <button
-                    key={tab.id}
-                    onClick={() => selectExistingTab(tab)}
-                    style={{
-                      width: '100%', textAlign: 'left', background: 'white', border: '2px solid #f0e4d7',
-                      borderRadius: 14, padding: '1rem 1.1rem', marginBottom: '0.7rem', cursor: 'pointer',
-                      display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontFamily: 'Poppins,sans-serif',
-                    }}
-                  >
-                    <span>
-                      <div style={{ fontWeight: 800, fontSize: '1rem', color: INK }}>👤 {tab.customerName || 'Guest'}</div>
-                      <div style={{ fontSize: '0.72rem', color: '#999', marginTop: '0.1rem' }}>Party of {tab.partySize}</div>
-                    </span>
-                    <span style={{ textAlign: 'right' }}>
-                      <div style={{ fontWeight: 900, color: ORANGE, fontSize: '1.05rem' }}>{money(tab.total)}</div>
-                      <div style={{ fontSize: '0.66rem', color: '#aaa' }}>Current Bill</div>
-                    </span>
-                  </button>
-                ))}
+                {tableTabs.length === 0 && (
+                  <div style={{ textAlign: 'center', color: '#aaa', fontSize: '0.85rem', padding: '1.5rem 0.5rem' }}>
+                    No active customers at this table right now.
+                  </div>
+                )}
+                {tableTabs.map((tab) => {
+                  // Same display name can legitimately appear twice (two
+                  // separate QR scans, or a QR guest and a walk-in both
+                  // called "Guest") — the started-time line is what lets the
+                  // waiter tell them apart; the tab's own id (never the name)
+                  // is what's actually sent to the server on selection (§4/§26).
+                  const displayName = tab.customerName || 'Guest';
+                  const started = formatStartedTime(tab.createdAt);
+                  return (
+                    <button
+                      key={tab.id}
+                      onClick={() => selectExistingTab(tab)}
+                      style={{
+                        width: '100%', textAlign: 'left', background: 'white', border: '2px solid #f0e4d7',
+                        borderRadius: 14, padding: '1rem 1.1rem', marginBottom: '0.7rem', cursor: 'pointer',
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontFamily: 'Poppins,sans-serif',
+                      }}
+                    >
+                      <span>
+                        <div style={{ fontWeight: 800, fontSize: '1rem', color: INK }}>👤 {displayName}</div>
+                        <div style={{ fontSize: '0.72rem', color: '#999', marginTop: '0.1rem' }}>
+                          {started ? `Started ${started} · ` : ''}Party of {tab.partySize} · Orders: {tabOrderCounts[tab.id] ?? tab.orderCount ?? '…'}
+                        </div>
+                      </span>
+                      <span style={{ textAlign: 'right' }}>
+                        <div style={{ fontWeight: 900, color: ORANGE, fontSize: '1.05rem' }}>{money(tab.total)}</div>
+                        <div style={{ fontSize: '0.66rem', color: '#aaa' }}>Current Bill</div>
+                        <div style={{ fontSize: '0.68rem', fontWeight: 900, color: PURPLE, marginTop: '0.25rem' }}>Order More →</div>
+                      </span>
+                    </button>
+                  );
+                })}
                 <button
                   onClick={() => { setGuestName(''); setGuestPhone(''); setGuestEmail(''); setGuestParty('2'); setGuestError(''); setStep('newGuestForm'); }}
                   style={{ ...btn('white', ORANGE), width: '100%', border: `2.5px dashed ${ORANGE}`, marginTop: '0.4rem' }}
                 >
-                  ＋ New Guest
+                  {tableTabs.length === 0 ? '＋ Start New Order' : '＋ Start New Customer / New Order'}
                 </button>
               </>
             )}
@@ -584,7 +710,52 @@ export default function WaiterTakeOrder({ session, onClose }: Props) {
           </div>
         )}
 
-        {/* ═══════════ STEP: Pickup guest info ═══════════ */}
+        {/* ═══════════ STEP: Active Pickup Orders (New vs Order More) ═══════════ */}
+        {step === 'pickupActive' && (
+          <div style={{ padding: '1.25rem', maxWidth: 520, margin: '0 auto' }}>
+            <button
+              onClick={startNewPickupOrder}
+              style={{ ...btn(ORANGE), width: '100%', border: `2.5px dashed ${ORANGE}`, background: 'white', color: ORANGE, marginBottom: '1.1rem' }}
+            >
+              ＋ New Pickup Order
+            </button>
+
+            <div style={{ fontSize: '0.78rem', color: '#888', fontWeight: 700, marginBottom: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.02em' }}>
+              Active Pickup Orders
+            </div>
+            {loadingPickupOrders && <div style={{ textAlign: 'center', color: '#999', padding: '1.5rem' }}>Loading…</div>}
+            {pickupOrdersError && <div style={{ color: '#ef4444', fontWeight: 700, padding: '0.75rem', textAlign: 'center' }}>⚠️ {pickupOrdersError}</div>}
+            {!loadingPickupOrders && !pickupOrdersError && activePickupOrders.length === 0 && (
+              <div style={{ textAlign: 'center', color: '#aaa', fontSize: '0.85rem', padding: '1.5rem' }}>No active pickup orders right now.</div>
+            )}
+            {!loadingPickupOrders && activePickupOrders.map(o => (
+              <button
+                key={o.id}
+                onClick={() => selectPickupOrderMore(o)}
+                style={{
+                  width: '100%', textAlign: 'left', background: 'white', border: '2px solid #f0e4d7',
+                  borderRadius: 14, padding: '1rem 1.1rem', marginBottom: '0.7rem', cursor: 'pointer',
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontFamily: 'Poppins,sans-serif',
+                }}
+              >
+                <span>
+                  <div style={{ fontWeight: 800, fontSize: '1rem', color: INK }}>
+                    #{o.orderNum ?? o.id} — {o.customerName || 'Walk-in Guest'}
+                  </div>
+                  <div style={{ fontSize: '0.72rem', color: '#999', marginTop: '0.1rem' }}>
+                    {o.phone ? `📞 ${o.phone} · ` : ''}{o.status === 'pending' ? 'In Queue' : o.status === 'preparing' ? 'Preparing' : 'Ready'}
+                  </div>
+                </span>
+                <span style={{ textAlign: 'right' }}>
+                  <div style={{ fontWeight: 900, color: ORANGE, fontSize: '1.05rem' }}>{money(o.total)}</div>
+                  <div style={{ fontSize: '0.68rem', fontWeight: 900, color: PURPLE, marginTop: '0.25rem' }}>Order More →</div>
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* ═══════════ STEP: Pickup guest info (New Pickup Order only) ═══════════ */}
         {step === 'pickupGuest' && (
           <div style={{ padding: '1.25rem', maxWidth: 480, margin: '0 auto' }}>
             <div style={{ background: '#fff7ed', border: '1.5px solid #fed7aa', borderRadius: 12, padding: '0.75rem 1rem', fontSize: '0.78rem', color: '#9a3412', marginBottom: '1.1rem' }}>
@@ -713,7 +884,9 @@ export default function WaiterTakeOrder({ session, onClose }: Props) {
               <div style={{ fontWeight: 800, color: INK }}>
                 {ctx.tableLabel ? `${ctx.tableLabel} — ${ctx.customerName}` : ctx.customerName}
               </div>
-              <div style={{ fontSize: '0.72rem', color: '#999' }}>{ctx.type === 'dine-in' ? '🍽 Dine-In' : '🛍 Pickup'}</div>
+              <div style={{ fontSize: '0.72rem', color: '#999' }}>
+                {ctx.type === 'dine-in' ? '🍽 Dine-In' : '🛍 Pickup'}{ctx.orderMoreTargetId ? ` · Order More (#${ctx.orderMoreTargetNum ?? ''})` : ''}
+              </div>
             </div>
 
             {cartEntries.length === 0 ? (
@@ -767,7 +940,13 @@ export default function WaiterTakeOrder({ session, onClose }: Props) {
                   ← Continue Adding
                 </button>
 
-                {routingMode === 'ask' ? (
+                {ctx.orderMoreTargetId ? (
+                  // Order More reuses the routing this order was already
+                  // confirmed with (decided server-side) — no choice to make here.
+                  <button disabled={sending} onClick={() => handleSend()} style={{ ...btn('#16a34a'), width: '100%', fontSize: '1.1rem', padding: '1.1rem', opacity: sending ? 0.6 : 1 }}>
+                    {sending ? '⏳ Sending…' : '✅ SEND ORDER MORE'}
+                  </button>
+                ) : routingMode === 'ask' ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
                     <div style={{ textAlign: 'center', fontSize: '0.75rem', color: PURPLE, fontWeight: 700 }}>How should this go to the kitchen?</div>
                     <button disabled={sending} onClick={() => handleSend('printer')} style={{ ...btn('#f59e0b', '#1A0800'), width: '100%', opacity: sending ? 0.6 : 1 }}>

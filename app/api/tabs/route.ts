@@ -59,16 +59,49 @@ export async function GET(req: NextRequest) {
     const status = url.searchParams.get('status');
     // 'since' limits results to rows with created_at >= value (ISO string).
     // Used by the admin page to only fetch today's closed tabs instead of all history.
-    const since  = url.searchParams.get('since');
+    const since    = url.searchParams.get('since');
+    // 'tableId' scopes to one physical table's sessions — used by the Waiter
+    // "Take Order" screen (Table → Active Customers) so it queries exactly
+    // the tabs it needs instead of fetching every open tab restaurant-wide
+    // and filtering client-side (see components/WaiterTakeOrder.tsx).
+    const tableId  = url.searchParams.get('tableId');
     let query = sb.from('customer_tabs').select('*').eq('restaurant_id', rid);
-    if (status) query = query.eq('status', status);
-    if (since)  query = query.gte('created_at', since);
+    if (status)  query = query.eq('status', status);
+    if (tableId) query = query.eq('table_id', tableId);
+    if (since)   query = query.gte('created_at', since);
     const { data, error } = await query.order('created_at', { ascending: false });
     if (error) {
       console.error('[GET /api/tabs] Supabase error:', error.message, '| code:', error.code);
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
-    return NextResponse.json((data ?? []).map(rowToTab));
+    const tabs = (data ?? []).map(rowToTab);
+
+    // ── Order counts (table-scoped queries only) ────────────────────────────
+    // Only computed when tableId is given — that request is bounded to a
+    // handful of tabs for one table (the Waiter "Active Customers" screen),
+    // so one extra grouped query is cheap. Broader callers (Manager/Admin
+    // fetching every tab, or historical "since" queries) don't pay for it,
+    // since they don't need a per-tab order count and the set could be large.
+    if (tableId && tabs.length > 0) {
+      const tabIds = tabs.map(t => t.id as string);
+      const { data: orderRows, error: ordersErr } = await sb
+        .from('orders')
+        .select('tab_id')
+        .in('tab_id', tabIds)
+        .not('status', 'in', '("cancelled","void")');
+      if (ordersErr) {
+        console.error('[GET /api/tabs] order-count query error (non-fatal):', ordersErr.message);
+        return NextResponse.json(tabs);
+      }
+      const counts: Record<string, number> = {};
+      (orderRows ?? []).forEach(o => {
+        const k = (o as Record<string, unknown>).tab_id as string;
+        if (k) counts[k] = (counts[k] ?? 0) + 1;
+      });
+      return NextResponse.json(tabs.map(t => ({ ...t, orderCount: counts[t.id as string] ?? 0 })));
+    }
+
+    return NextResponse.json(tabs);
   } catch (err) {
     console.error('[GET /api/tabs] unexpected error:', err);
     return NextResponse.json({ error: errMsg(err) }, { status: 500 });

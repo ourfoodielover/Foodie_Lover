@@ -75,9 +75,27 @@ function row(left, right) {
 }
 
 // ── Ticket builders ────────────────────────────────────────────────────────────
+// Safe phone formatter — used for both KOT and receipt tickets. NEVER prints
+// "undefined" / "null" / "[object Object]": any non-string, empty, or
+// whitespace-only value is treated as "no phone" and the line is omitted
+// entirely (task spec §B6 — a missing phone must never break printing).
+function safePhone(raw) {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 function buildKot(payload) {
   const parts = [CMD.INIT, CMD.ALIGN_CENTER, CMD.DOUBLE_ON];
-  parts.push(line('KITCHEN ORDER TICKET'));
+  // "ORDER MORE" tickets (task spec §A11/§B3) get their own bold header so
+  // kitchen/counter staff can never mistake an additional round for a full
+  // re-print of the original order — the item list below is ALWAYS only
+  // the newly-ordered items for that ticket, never the full order again.
+  if (payload.isOrderMore) {
+    parts.push(line('ORDER MORE'));
+  } else {
+    parts.push(line('KITCHEN ORDER TICKET'));
+  }
   parts.push(CMD.DOUBLE_OFF);
   parts.push(CMD.BOLD_ON);
   parts.push(line(`#${payload.orderNumber ?? payload.orderId}`));
@@ -88,9 +106,17 @@ function buildKot(payload) {
   const typeLabel =
     payload.type === 'delivery' ? 'DELIVERY' :
     payload.type === 'pickup'   ? 'PICKUP'   : 'DINE-IN';
-  parts.push(line(`Type:  ${typeLabel}`));
+  parts.push(line(`Type:  ${typeLabel}${payload.isOrderMore ? ' — ORDER MORE' : ''}`));
+  if (payload.isOrderMore && payload.existingTabId) {
+    parts.push(line(`Existing Tab #${payload.existingTabId}`));
+  }
   if (payload.tableId)        parts.push(line(`Table: ${payload.tableId}`));
   if (payload.customerName)   parts.push(line(`Guest: ${payload.customerName}`));
+  // Phone — Pickup and Delivery only (never Dine-In: server already omits
+  // it there — task spec §B7). Placed right after the guest name so it
+  // reads as part of "who this order is for", ahead of the address line.
+  const kotPhone = safePhone(payload.customerPhone);
+  if (kotPhone) parts.push(line(`Phone: ${kotPhone}`));
   if (payload.deliveryAddress) {
     parts.push(line(`Addr:  ${String(payload.deliveryAddress).slice(0, CHARS - 7)}`));
   }
@@ -125,6 +151,12 @@ function buildReceipt(payload) {
   parts.push(divider('='));
   parts.push(line(`Order #${payload.orderNumber ?? payload.orderId}`));
   if (payload.customerName) parts.push(line(`Guest: ${payload.customerName}`));
+  // Same Pickup/Delivery-only phone rule as the KOT ticket (§B1/§B2/§B7).
+  const receiptPhone = safePhone(payload.customerPhone);
+  if (receiptPhone) parts.push(line(`Phone: ${receiptPhone}`));
+  if (payload.deliveryAddress) {
+    parts.push(line(`Addr:  ${String(payload.deliveryAddress).slice(0, CHARS - 7)}`));
+  }
   parts.push(divider('-'));
   for (const item of payload.items ?? []) {
     parts.push(row(String(item.name).slice(0, CHARS - 6), `x${item.qty}`));

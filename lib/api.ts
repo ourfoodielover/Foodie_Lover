@@ -126,6 +126,11 @@ export interface CustomerTab {
   couponId?:      string | null;
   couponCode?:    string | null;
   couponDiscount?:number;       // discount given by the redeemed coupon
+  // Only populated when getTabs() is called with a tableId (server computes
+  // it in one grouped query for that table's tabs) — count of non-cancelled/
+  // void orders on this tab, REGARDLESS of which channel created them
+  // (QR self-order or Waiter-assisted). Undefined for any other getTabs() call.
+  orderCount?:    number;
 }
 
 // ─── Tab Device type ──────────────────────────────────────────────────────────
@@ -394,6 +399,43 @@ export async function switchToKitchenDisplay(
 }
 
 /**
+ * genIdempotencyKey — stable per-submission key for any write that must
+ * survive a double-tap or an offline/network retry without creating a
+ * duplicate (matches the pattern app/online/page.tsx already uses for
+ * createOrder). Call once per user action, not once per render.
+ */
+export function genIdempotencyKey(prefix: string): string {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * orderMoreOnPickup — Waiter "Order More" for an already-confirmed Pickup
+ * order (task spec Part A6-A9 / B3). Appends ONLY the newly-ordered items
+ * to the SAME order (no new order/customer is created) — the server
+ * revalidates that the order is still type='pickup' and still in an active
+ * kitchen status (pending/preparing/prepared) before accepting the items,
+ * and only the new items are sent to the kitchen/printer, following
+ * whichever routing (printer vs kitchen display) that order was already
+ * confirmed with.
+ */
+export async function orderMoreOnPickup(
+  orderId: string,
+  data: {
+    items:           { name: string; qty: number; price: number; subtotal: number; menuItemId?: string }[];
+    subtotal:        number;
+    total:           number;
+    notes?:          string;
+    by:              string;
+    idempotencyKey:  string;
+  },
+): Promise<Order & { printJobId?: string; alreadyExists?: boolean }> {
+  return apiFetch<Order & { printJobId?: string; alreadyExists?: boolean }>(`/api/orders/${orderId}`, {
+    method: 'PATCH',
+    body:   JSON.stringify({ action: 'order_more', ...data }),
+  });
+}
+
+/**
  * getKitchenRoutingMode — the restaurant-wide default for how a confirmed
  * order reaches the kitchen: 'printer' (KOT ticket), 'kitchen_display'
  * (Kitchen Display board), or 'ask' (waiter chooses per order). Wraps the
@@ -533,11 +575,15 @@ export async function deleteStaffMember(id: string): Promise<void> {
 // call it from a staff portal (waiter/manager/admin). Customer-facing code
 // (the table QR portal) that already knows its own tab id must use getTab()
 // instead, which is public and scoped to exactly that one tab.
-export async function getTabs(status?: string, since?: string): Promise<CustomerTab[]> {
+export async function getTabs(status?: string, since?: string, tableId?: string): Promise<CustomerTab[]> {
   const params = new URLSearchParams({ restaurantId: rid() });
-  if (status) params.set('status', status);
+  if (status)  params.set('status', status);
   // 'since' limits to tabs created on/after this ISO timestamp — avoids fetching all history
-  if (since)  params.set('since', since);
+  if (since)   params.set('since', since);
+  // 'tableId' scopes to one physical table's active sessions — e.g. the
+  // Waiter "Take Order" screen's Table → Active Customers step. When set,
+  // each returned tab also carries orderCount (see CustomerTab.orderCount).
+  if (tableId) params.set('tableId', tableId);
   return apiFetch<CustomerTab[]>(`/api/tabs?${params}`);
 }
 export async function getTab(id: string): Promise<CustomerTab | null> {
