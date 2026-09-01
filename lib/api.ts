@@ -1721,3 +1721,82 @@ export async function executeTestDataReset(pin: string, confirmText: string, not
     body: JSON.stringify({ confirmText, note, restaurantId: rid() }),
   });
 }
+
+// ─── Bill / Receipt printing (client wrappers over /api/billing/*) ────────────
+// Server-authoritative: these never send/trust a total — the server always
+// recomputes from the DB (see lib/billing-server.ts). "View Bill" and
+// "Print Bill" both call the SAME server computation, so the on-screen
+// preview can never disagree with what gets printed.
+
+export interface BillLineItem {
+  name:     string;
+  qty:      number;
+  price:    number;
+  subtotal: number;
+}
+
+export interface BillRound {
+  orderId:     string;
+  orderNumber: number | null;
+  source:      string | null;
+  createdAt:   string | null;
+  items:       BillLineItem[];
+}
+
+export interface BillData {
+  kind:             'dine-in' | 'pickup' | 'delivery';
+  restaurantName:   string;
+  tabId?:           string;
+  orderId?:         string;
+  orderIds:         string[];
+  orderNumber?:     number | null;
+  tableLabel?:      string | null;
+  customerName:     string;
+  phone:            string | null;
+  deliveryAddress?: string | null;
+  items:            BillLineItem[];
+  rounds?:          BillRound[];
+  subtotal:         number;
+  discount:         number;
+  discountReason:   string | null;
+  couponCode:       string | null;
+  couponDiscount:   number;
+  total:            number;
+  isPaid:           boolean;
+  paymentMethod:    string | null;
+  amountDue:        number;
+  generatedAt:      string;
+}
+
+/** Fetches the server-computed Dine-In bill for one exact customer_tab (never table-wide). */
+export async function getDineInBill(tabId: string): Promise<BillData> {
+  return apiFetch<BillData>(`/api/billing/tab/${tabId}?restaurantId=${rid()}`);
+}
+
+/** Fetches the server-computed Pickup/Delivery bill for one order (all rounds included). */
+export async function getOrderBill(orderId: string): Promise<BillData> {
+  return apiFetch<BillData>(`/api/billing/order/${orderId}?restaurantId=${rid()}`);
+}
+
+/**
+ * printBill — queues a real print_jobs row (CUSTOMER_BILL or
+ * CUSTOMER_RECEIPT) through the existing print-job → print-agent pipeline.
+ * NOT browser printing. Pass a fresh idempotencyKey per user tap (via
+ * genIdempotencyKey) for a normal Print action; for an intentional Reprint
+ * set isReprint: true (a new key, or none, is fine — reprints are allowed
+ * to create another job on purpose).
+ */
+export async function printBill(params: {
+  kind:            'dine-in' | 'pickup' | 'delivery';
+  tabId?:          string;
+  orderId?:        string;
+  docType:         'CUSTOMER_BILL' | 'CUSTOMER_RECEIPT';
+  by:              string;
+  isReprint?:      boolean;
+  idempotencyKey?: string;
+}): Promise<{ ok: true; printJobId: string; docType: string; bill: BillData; alreadyExists?: boolean }> {
+  return apiFetch(`/api/billing/print`, {
+    method: 'POST',
+    body:   JSON.stringify({ ...params, restaurantId: rid() }),
+  });
+}

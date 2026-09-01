@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession, clearSession, AuthSession } from '@/lib/auth';
 import { formatTableName } from '@/lib/format';
+import BillModal from '@/components/BillModal';
 import { todayMidnightIST, isToday, clockIST, fmtTime } from '@/lib/date';
 import { MENU_CATEGORIES } from '@/lib/categories';
 import {
@@ -58,6 +59,8 @@ const emptyItem = (): Partial<MenuItem> => ({ category: CATEGORIES[0], name: '',
 export default function ManagerPage() {
   const router = useRouter();
   const [session, setSession]         = useState<AuthSession | null>(null);
+  const [billModalTabId, setBillModalTabId]     = useState<string | null>(null);
+  const [billModalOrderId, setBillModalOrderId] = useState<string | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
 
   const [tabs, setTabs]               = useState<CustomerTab[]>([]);
@@ -1289,6 +1292,14 @@ export default function ManagerPage() {
                 </div>
               </div>
 
+              {/* ── Bill / Receipt printing — real print_jobs, not browser print ── */}
+              <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+                <button
+                  onClick={() => setBillModalTabId(selTab.id)}
+                  style={{ ...btn('#7c3aed'), flex: 1, fontSize: '0.8rem', padding: '0.55rem' }}
+                >🧾 View / Print Bill{selTab.status === 'closed' ? ' / Receipt' : ''}</button>
+              </div>
+
               {/* ── Split Billing Section ── */}
               {selTab.status !== 'closed' && (
                 <div style={{ marginBottom: '1rem' }}>
@@ -1935,6 +1946,15 @@ export default function ManagerPage() {
                   </div>
                 </div>
 
+                {/* Bill / Receipt printing — real print_jobs, not browser print.
+                    Kitchen ticket printing (new items only) is unaffected —
+                    this is the separate financial document (all billable
+                    items for the whole pickup session, incl. Order More). */}
+                <button
+                  onClick={() => setBillModalOrderId(o.id)}
+                  style={{ ...btn('#7c3aed'), width: '100%', fontSize: '0.8rem', padding: '0.5rem', marginBottom: '0.85rem' }}
+                >🧾 View / Print Bill{o.status === 'completed' ? ' / Receipt' : ''}</button>
+
                 {/* Available offers */}
                 {applicable.length > 0 && (
                   <div style={{ marginBottom: '0.85rem', padding: '0.75rem', background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 10 }}>
@@ -2349,6 +2369,23 @@ export default function ManagerPage() {
         </div>
       )}
 
+      {/* ── Dine-In / Pickup Bill / Receipt viewer + print ── */}
+      {billModalTabId && (
+        <BillModal
+          kind="dine-in"
+          tabId={billModalTabId}
+          staffName={session?.name ?? 'Manager'}
+          onClose={() => setBillModalTabId(null)}
+        />
+      )}
+      {billModalOrderId && (
+        <BillModal
+          kind="pickup"
+          orderId={billModalOrderId}
+          staffName={session?.name ?? 'Manager'}
+          onClose={() => setBillModalOrderId(null)}
+        />
+      )}
     </div>
   );
 }

@@ -41,7 +41,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
 
     const { data: job, error: fetchErr } = await sb
       .from('print_jobs')
-      .select('id, restaurant_id, order_id, job_type, attempts, is_reprint')
+      .select('id, restaurant_id, order_id, tab_id, job_type, attempts, is_reprint')
       .eq('id', id)
       .single();
     if (fetchErr || !job) {
@@ -66,12 +66,16 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     const { error: updErr } = await sb.from('print_jobs').update(updates).eq('id', id);
     if (updErr) throw updErr;
 
-    // Audit trail on the order itself
+    // Audit trail on the order itself — order_events.order_id is NOT NULL,
+    // so this only runs when the job actually has an order_id. A Dine-In
+    // bill/receipt print job is tab-scoped (order_id is null, tab_id is set
+    // instead — see migration_027) and simply has no per-order audit row;
+    // nothing else in this handler depends on that event existing.
     const eventType =
       body.status === 'printed' ? 'Printed' :
       body.status === 'failed'  ? 'PrintFailed' :
       undefined;
-    if (eventType) {
+    if (eventType && job.order_id) {
       await sb.from('order_events').insert({
         id:           newId('EV'),
         order_id:     job.order_id,
@@ -84,7 +88,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     }
 
     await broadcast(job.restaurant_id as string, 'print_job_updated', {
-      printJobId: id, orderId: job.order_id, status: body.status,
+      printJobId: id, orderId: job.order_id, tabId: job.tab_id ?? null, status: body.status,
     });
 
     return NextResponse.json({ ok: true });

@@ -35,9 +35,15 @@ export async function GET(req: NextRequest) {
     const printerId = url.searchParams.get('printerId'); // optional: filter by station
     const limit     = Math.min(parseInt(url.searchParams.get('limit') ?? '20'), 100);
 
+    // tab_id (migration_027): set on a Dine-In bill/receipt job in place of
+    // order_id (a dine-in bill spans multiple orders on one tab, so there is
+    // no single order_id to reference). Included here for forward
+    // compatibility with the separate print-agent project, which is not
+    // modified by this change — order_id-only jobs (every kitchen ticket,
+    // every Pickup/Delivery bill/receipt) simply carry tab_id: null.
     let query = sb
       .from('print_jobs')
-      .select('id, order_id, job_type, status, printer_id, payload, attempts, is_reprint, created_at')
+      .select('id, order_id, tab_id, job_type, status, printer_id, payload, attempts, is_reprint, created_at')
       .eq('restaurant_id', rid)
       .in('status', ['queued', 'failed'])
       .order('created_at', { ascending: true })

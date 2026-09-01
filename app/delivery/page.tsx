@@ -9,6 +9,7 @@ import {
 } from '@/lib/api';
 import { useRealtime } from '@/lib/realtime-client';
 import { getSession, clearSession, AuthSession } from '@/lib/auth';
+import BillModal from '@/components/BillModal';
 
 const STATUS_LABEL: Record<string, string> = {
   prepared:           '✅ Ready for Pickup',
@@ -35,6 +36,7 @@ function elapsedMins(iso: string, nowMs: number) {
 export default function DeliveryPage() {
   const router = useRouter();
   const [session, setSession]         = useState<AuthSession | null>(null);
+  const [billModalOrderId, setBillModalOrderId] = useState<string | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [orders, setOrders]               = useState<Order[]>([]);
   const [reDeliveryIssues, setReDeliveryIssues] = useState<OrderIssue[]>([]);
@@ -461,6 +463,18 @@ export default function DeliveryPage() {
                   </div>
                 )}
 
+                {/* Bill / Receipt — real print_jobs, uses the existing print-agent
+                    pipeline (no insecure public endpoint, no assumption of a
+                    Bluetooth printer on the delivery phone). Shows the actual
+                    amount to collect for COD; Print Receipt is only enabled
+                    once payment is actually recorded. */}
+                {(order.status === 'out_for_delivery' || order.status === 'delivered') && (
+                  <button
+                    onClick={() => setBillModalOrderId(order.id)}
+                    style={{ width: '100%', marginBottom: '0.6rem', padding: '0.5rem', borderRadius: 10, border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 800, fontSize: '0.78rem', background: '#7c3aed', color: 'white' }}
+                  >🧾 View / Print Receipt</button>
+                )}
+
 
                 {/* Action buttons */}
                 {(order.status === 'prepared' || order.status === 'served') && (
@@ -666,6 +680,15 @@ export default function DeliveryPage() {
           );
         })}
       </div>
+
+      {billModalOrderId && (
+        <BillModal
+          kind="delivery"
+          orderId={billModalOrderId}
+          staffName={session?.name ?? 'Delivery'}
+          onClose={() => setBillModalOrderId(null)}
+        />
+      )}
     </div>
   );
 }

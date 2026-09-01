@@ -46,6 +46,7 @@ import {
 } from '@/lib/api';
 import type { AuthSession } from '@/lib/auth';
 import { formatTableName } from '@/lib/format';
+import BillModal from '@/components/BillModal';
 import { MENU_CATEGORIES_WITH_ALL } from '@/lib/categories';
 
 // ─── Props ──────────────────────────────────────────────────────────────────
@@ -146,6 +147,10 @@ function qtyCircleBtn(bg: string, c: string): React.CSSProperties {
 
 export default function WaiterTakeOrder({ session, onClose }: Props) {
   const [step, setStep] = useState<Step>('type');
+  // View/Print Bill for one exact active customer_tab, without requiring a
+  // customer-initiated "Request Bill" first (task spec: manual print via
+  // Table → Active Customers → Customer → View/Print Bill).
+  const [billTabId, setBillTabId] = useState<string | null>(null);
   const [orderType, setOrderType] = useState<OrderTypeChoice | null>(null);
 
   // ── Dine-in: table + existing-guest selection ─────────────────────────────
@@ -648,9 +653,12 @@ export default function WaiterTakeOrder({ session, onClose }: Props) {
                   const displayName = tab.customerName || 'Guest';
                   const started = formatStartedTime(tab.createdAt);
                   return (
-                    <button
+                    <div
                       key={tab.id}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => selectExistingTab(tab)}
+                      onKeyDown={e => { if (e.key === 'Enter') selectExistingTab(tab); }}
                       style={{
                         width: '100%', textAlign: 'left', background: 'white', border: '2px solid #f0e4d7',
                         borderRadius: 14, padding: '1rem 1.1rem', marginBottom: '0.7rem', cursor: 'pointer',
@@ -663,12 +671,18 @@ export default function WaiterTakeOrder({ session, onClose }: Props) {
                           {started ? `Started ${started} · ` : ''}Party of {tab.partySize} · Orders: {tabOrderCounts[tab.id] ?? tab.orderCount ?? '…'}
                         </div>
                       </span>
-                      <span style={{ textAlign: 'right' }}>
-                        <div style={{ fontWeight: 900, color: ORANGE, fontSize: '1.05rem' }}>{money(tab.total)}</div>
-                        <div style={{ fontSize: '0.66rem', color: '#aaa' }}>Current Bill</div>
-                        <div style={{ fontSize: '0.68rem', fontWeight: 900, color: PURPLE, marginTop: '0.25rem' }}>Order More →</div>
+                      <span style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.3rem' }}>
+                        <div>
+                          <div style={{ fontWeight: 900, color: ORANGE, fontSize: '1.05rem' }}>{money(tab.total)}</div>
+                          <div style={{ fontSize: '0.66rem', color: '#aaa' }}>Current Bill</div>
+                        </div>
+                        <button
+                          onClick={e => { e.stopPropagation(); setBillTabId(tab.id); }}
+                          style={{ background: PURPLE, color: 'white', border: 'none', borderRadius: 8, padding: '0.2rem 0.55rem', fontSize: '0.68rem', fontWeight: 800, cursor: 'pointer', fontFamily: 'inherit' }}
+                        >🧾 Bill</button>
+                        <div style={{ fontSize: '0.68rem', fontWeight: 900, color: PURPLE }}>Order More →</div>
                       </span>
-                    </button>
+                    </div>
                   );
                 })}
                 <button
@@ -1028,6 +1042,16 @@ export default function WaiterTakeOrder({ session, onClose }: Props) {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ═══════════ Bill / Receipt viewer for one exact customer_tab ═══════════ */}
+      {billTabId && (
+        <BillModal
+          kind="dine-in"
+          tabId={billTabId}
+          staffName={session.name}
+          onClose={() => setBillTabId(null)}
+        />
       )}
     </div>
   );

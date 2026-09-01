@@ -15,6 +15,7 @@ import { useRealtime } from '@/lib/realtime-client';
 import { getSession, clearSession, AuthSession } from '@/lib/auth';
 import { formatTableName } from '@/lib/format';
 import { fmtTime } from '@/lib/date';
+import BillModal from '@/components/BillModal';
 
 // ── Staff-Assisted Ordering: "Take Order" experience ────────────────────────
 // Lazy-loaded so it never affects the waiter dashboard's initial bundle/load
@@ -64,6 +65,7 @@ function WaiterPageInner() {
   const router       = useRouter();
   const searchParams = useSearchParams();
   const [session, setSession]         = useState<AuthSession | null>(null);
+  const [billModalTabId, setBillModalTabId] = useState<string | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
 
   const [orders, setOrders]           = useState<Order[]>([]);
@@ -774,8 +776,14 @@ function WaiterPageInner() {
                 return (
                   <div key={tab.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.25rem 0', fontSize: '0.78rem', color: '#7c2d12' }}>
                     <span>{tab.tableId ? formatTableName(tab.tableId) : '—'} — {tab.customerName || 'Guest'}</span>
-                    <span style={{ background: '#fed7aa', color: '#9a3412', padding: '0.15rem 0.5rem', borderRadius: 10, fontSize: '0.7rem', fontWeight: 700 }}>
-                      ⚡ {readyOrders.length} ready — serve now
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <span style={{ background: '#fed7aa', color: '#9a3412', padding: '0.15rem 0.5rem', borderRadius: 10, fontSize: '0.7rem', fontWeight: 700 }}>
+                        ⚡ {readyOrders.length} ready — serve now
+                      </span>
+                      <button
+                        onClick={() => setBillModalTabId(tab.id)}
+                        style={{ background: '#7c3aed', color: 'white', border: 'none', borderRadius: 8, padding: '0.15rem 0.5rem', fontSize: '0.68rem', fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}
+                      >🧾 Bill</button>
                     </span>
                   </div>
                 );
@@ -795,8 +803,12 @@ function WaiterPageInner() {
                   .reduce((s, o) => s + (o.total || 0), 0);
                 const billAmt = Math.max(0, liveSubtotal - (tab.discount || 0));
                 return (
-                  <div key={tab.id} style={{ fontSize: '0.78rem', color: '#713f12', padding: '0.15rem 0' }}>
-                    {tab.tableId ? formatTableName(tab.tableId) : '—'} — {tab.customerName || 'Guest'} · ₹{billAmt}
+                  <div key={tab.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem', color: '#713f12', padding: '0.15rem 0' }}>
+                    <span>{tab.tableId ? formatTableName(tab.tableId) : '—'} — {tab.customerName || 'Guest'} · ₹{billAmt}</span>
+                    <button
+                      onClick={() => setBillModalTabId(tab.id)}
+                      style={{ background: '#7c3aed', color: 'white', border: 'none', borderRadius: 8, padding: '0.15rem 0.5rem', fontSize: '0.68rem', fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}
+                    >🧾 View/Print Bill</button>
                   </div>
                 );
               })}
@@ -1194,6 +1206,16 @@ function WaiterPageInner() {
             onClose={() => { setTakeOrderOpen(false); void refresh(); }}
           />
         </Suspense>
+      )}
+
+      {/* ── Dine-In Bill / Receipt viewer + print ── */}
+      {billModalTabId && (
+        <BillModal
+          kind="dine-in"
+          tabId={billModalTabId}
+          staffName={session?.name ?? 'Waiter'}
+          onClose={() => setBillModalTabId(null)}
+        />
       )}
     </div>
   );
