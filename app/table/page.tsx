@@ -192,6 +192,13 @@ function TablePageInner() {
   // ── Menu & cart ──
   const [menu, setMenu]                   = useState<MenuItem[]>([]);
   const [catFilter, setCatFilter]         = useState('All');
+  // Menu search (QR Dine-In) — mirrors app/online/page.tsx's search fields
+  // (name / desc / category, case-insensitive substring match) for
+  // consistent behavior. Deliberately NOT ANDed with catFilter — a search
+  // should surface a match regardless of which category tab happens to be
+  // selected (e.g. searching "biryani" while viewing "Starters" should
+  // still find Chicken Dum Biryani under "Biryani").
+  const [menuSearch, setMenuSearch]       = useState('');
   const [cart, setCart]                   = useState<Record<string, CartEntry>>({});
   const [specialNote, setSpecialNote]     = useState('');
   // Variant picker modal state
@@ -1181,7 +1188,14 @@ function TablePageInner() {
   if (view === 'menu') {
     // If bill has been requested, block further ordering
     const billRequested = tab?.tabStatus === 'awaiting_payment';
-    const filtered = catFilter === 'All' ? menu : menu.filter(m => m.category === catFilter);
+    const q = menuSearch.trim().toLowerCase();
+    const filtered = q
+      ? menu.filter(m =>
+          m.name.toLowerCase().includes(q) ||
+          (m.desc ?? '').toLowerCase().includes(q) ||
+          (m.category ?? '').toLowerCase().includes(q),
+        )
+      : (catFilter === 'All' ? menu : menu.filter(m => m.category === catFilter));
 
     return (
       <div style={{ minHeight: '100vh', background: 'linear-gradient(180deg,#faf7f2 0%,#f5f0e8 100%)', fontFamily: 'Poppins,sans-serif', paddingBottom: cartCount > 0 ? '100px' : '1rem' }}>
@@ -1206,9 +1220,34 @@ function TablePageInner() {
               </button>
             )}
           </div>
+
+          {/* ── Menu search — same field set as Online Order (name/desc/category) ── */}
+          <div style={{ position: 'relative', marginBottom: '0.6rem' }}>
+            <span style={{ position: 'absolute', left: '0.85rem', top: '50%', transform: 'translateY(-50%)', fontSize: '0.95rem', pointerEvents: 'none' }}>🔍</span>
+            <input
+              type="search"
+              value={menuSearch}
+              onChange={e => setMenuSearch(e.target.value)}
+              placeholder="Search dishes..."
+              inputMode="search"
+              style={{
+                width: '100%', boxSizing: 'border-box', padding: '0.6rem 2.2rem 0.6rem 2.3rem',
+                borderRadius: 24, border: '1.5px solid rgba(255,255,255,0.25)', background: 'rgba(255,255,255,0.95)',
+                color: '#1A0800', fontFamily: 'Poppins,sans-serif', fontSize: '0.85rem', outline: 'none',
+              }}
+            />
+            {menuSearch && (
+              <button
+                onClick={() => setMenuSearch('')}
+                aria-label="Clear search"
+                style={{ position: 'absolute', right: '0.7rem', top: '50%', transform: 'translateY(-50%)', background: '#e5e7eb', border: 'none', borderRadius: '50%', width: 22, height: 22, cursor: 'pointer', fontSize: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900, color: '#666' }}
+              >×</button>
+            )}
+          </div>
+
           <div style={{ display: 'flex', gap: '0.35rem', overflowX: 'auto', paddingBottom: '0.65rem', scrollbarWidth: 'none' }}>
             {CATEGORIES.map(c => (
-              <button key={c} className="cat-pill" onClick={() => setCatFilter(c)} style={{
+              <button key={c} className="cat-pill" onClick={() => { setCatFilter(c); setMenuSearch(''); }} style={{
                 padding: '0.28rem 0.75rem', borderRadius: 20, whiteSpace: 'nowrap',
                 border: `1.5px solid ${catFilter === c ? '#F9A826' : 'rgba(255,255,255,0.2)'}`,
                 background: catFilter === c ? 'linear-gradient(135deg,#F9A826,#E65C00)' : 'rgba(255,255,255,0.08)',
@@ -1232,6 +1271,26 @@ function TablePageInner() {
             <button onClick={() => setView('tracking')} style={{ ...btn('#f59e0b', '#1A0800'), fontSize: '0.72rem', padding: '0.35rem 0.75rem', marginLeft: 'auto', whiteSpace: 'nowrap' }}>
               View Bill →
             </button>
+          </div>
+        )}
+
+        {/* Search results count / no-results state */}
+        {menuSearch && (
+          <div style={{ padding: '0.85rem 1rem 0', fontSize: '0.78rem', color: '#888', fontWeight: 500 }}>
+            {filtered.length} item{filtered.length !== 1 ? 's' : ''} for &quot;{menuSearch}&quot;
+          </div>
+        )}
+        {menuSearch && filtered.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '2.5rem 1.5rem', color: '#999' }}>
+            <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>🔍</div>
+            <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#555', marginBottom: '0.3rem' }}>
+              No dishes found for &quot;{menuSearch}&quot;
+            </div>
+            <div style={{ fontSize: '0.78rem', marginBottom: '1rem' }}>Try a different search term.</div>
+            <button
+              onClick={() => setMenuSearch('')}
+              style={{ background: 'linear-gradient(135deg,#E65C00,#FF7A1A)', color: 'white', border: 'none', borderRadius: 20, fontWeight: 700, cursor: 'pointer', fontFamily: 'Poppins,sans-serif', padding: '0.5rem 1.2rem', fontSize: '0.8rem' }}
+            >Clear Search</button>
           </div>
         )}
 
