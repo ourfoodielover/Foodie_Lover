@@ -282,23 +282,56 @@ export async function computeOrderBill(
   };
 }
 
+// ── Canonical financial-item contract (Android TicketBuilder.buildBill() /
+//    buildReceipt()) ──────────────────────────────────────────────────────
+// FIX (post-physical-test): the Android print-agent rejected the first real
+// CUSTOMER_BILL job — job PJ_1788335816977_88r2yg, job_type='receipt',
+// status='failed' after 5 attempts — with "missing unitPrice/lineTotal ...
+// a financial document cannot show quantity only". Root cause: this file
+// was putting the internal BillLineItem shape (`qty`/`price`/`subtotal` —
+// used elsewhere for the View-Bill API/UI, see BillLineItem above) directly
+// into the print_jobs payload, but Android's financial formatter requires
+// `quantity`/`unitPrice`/`lineTotal`. KOT items (`buildKotPayload()` in
+// app/api/orders/[id]/route.ts, only ever `{name, qty}`) are NOT affected —
+// this mapping is applied only inside buildBillReceiptPayload(), which KOT
+// never calls.
+interface FinancialItem {
+  name:       string;
+  quantity:   number;
+  unitPrice:  number;
+  lineTotal:  number;
+}
+
+function toFinancialItem(item: BillLineItem): FinancialItem {
+  return {
+    name:      item.name,
+    quantity:  item.qty,
+    unitPrice: item.price,
+    lineTotal: item.subtotal,
+  };
+}
+
 /**
  * buildBillReceiptPayload — the JSON stored in print_jobs.payload for a
  * CUSTOMER_BILL or CUSTOMER_RECEIPT job. Same flexible-JSON approach as the
  * existing buildKotPayload() (app/api/orders/[id]/route.ts) — the print
  * agent (a separate, out-of-scope project) reads this to render a thermal
- * ticket. `docType` is the new discriminator this task adds; job_type in
- * the DB row stays 'receipt' for both CUSTOMER_BILL and CUSTOMER_RECEIPT
- * (job_type only needs the coarse "kitchen vs financial document"
- * distinction — see migration_027's header comment).
+ * ticket. `job_type` in the DB row stays 'receipt' for both CUSTOMER_BILL
+ * and CUSTOMER_RECEIPT (job_type only needs the coarse "kitchen vs
+ * financial document" distinction — see migration_027's header comment);
+ * `payload.documentType` is the authoritative Bill-vs-Receipt discriminator
+ * Android actually reads. `docType` (this task's original field name) is
+ * kept alongside it, set to the identical value, purely for transition
+ * compatibility with anything already reading it — it is NOT the contract
+ * Android validates against.
  *
- * `docType: 'CUSTOMER_BILL'` ALWAYS forces paymentStatus to 'PENDING' and
- * amountDue to `total`, regardless of what computeXBill() found — a Bill
- * (as opposed to a Receipt) must never claim PAID even if, by the time it's
- * printed, the underlying order/tab happens to already be paid (e.g. a
- * stale "View Bill" click right after Manager finished collecting payment
- * in another tab). Only 'CUSTOMER_RECEIPT' is allowed to say PAID, and only
- * when `bill.isPaid` is actually true.
+ * `documentType: 'CUSTOMER_BILL'` ALWAYS forces paymentStatus to 'PENDING',
+ * regardless of what computeXBill() found — a Bill (as opposed to a
+ * Receipt) must never claim PAID even if, by the time it's printed, the
+ * underlying order/tab happens to already be paid (e.g. a stale "View
+ * Bill" click right after Manager finished collecting payment in another
+ * tab). Only 'CUSTOMER_RECEIPT' is allowed to say PAID, and only when
+ * `bill.isPaid` is actually true.
  */
 export function buildBillReceiptPayload(
   docType:      'CUSTOMER_BILL' | 'CUSTOMER_RECEIPT',
@@ -313,8 +346,17 @@ export function buildBillReceiptPayload(
   // COD-style "collect on delivery" callout — only meaningful for an unpaid
   // delivery receipt; never shown once paymentStatus is PAID.
   const amountToCollect = bill.kind === 'delivery' && paymentStatus === 'PENDING' ? bill.total : undefined;
+  // Single combined reduction, derived as subtotal-minus-total (rather than
+  // a raw discount+couponDiscount sum) so it always reconciles exactly
+  // against the printed subtotal/total lines even in the (rare) edge case
+  // where discount+couponDiscount would otherwise exceed subtotal.
+  const discountAmount = Math.max(0, bill.subtotal - bill.total);
 
   return {
+    // Canonical Bill-vs-Receipt discriminator Android's formatter reads.
+    documentType: docType,
+    // Transition-compatibility alias — same value, old field name. Safe to
+    // remove once the Android side is confirmed to read documentType only.
     docType,
     restaurantName: bill.restaurantName,
     orderType:      bill.kind,               // 'dine-in' | 'pickup' | 'delivery'
@@ -328,9 +370,22 @@ export function buildBillReceiptPayload(
     // for Dine-In, only if the tab actually captured one — never fabricated.
     customerPhone:  bill.phone,
     deliveryAddress: bill.deliveryAddress ?? null,
-    items:          bill.items,
-    rounds:         bill.rounds ?? undefined, // dine-in only — lets the print agent label "Round 1 / Round 2"
+    // Canonical financial-item contract (name/quantity/unitPrice/lineTotal)
+    // — see toFinancialItem() above. Applied to both the flat `items` list
+    // (pickup/delivery, and dine-in's flattened view) and each dine-in
+    // round's own item list, so a future dine-in physical test doesn't hit
+    // the identical bug inside `rounds[].items`.
+    items: bill.items.map(toFinancialItem),
+    rounds: bill.rounds
+      ? bill.rounds.map(r => ({ ...r, items: r.items.map(toFinancialItem) }))
+      : undefined,                            // dine-in only — lets the print agent label "Round 1 / Round 2"
     subtotal:       bill.subtotal,
+    // Canonical combined discount field Android reads. `discount` /
+    // `couponDiscount` / `discountReason` / `couponCode` are kept alongside
+    // for internal/waiter-facing use and as extra (non-required, harmless)
+    // context — discountAmount is what Android's model is confirmed (by
+    // the field name in the corrected-payload example) to require.
+    discountAmount,
     discount:        bill.discount,
     discountReason:  bill.discountReason,
     couponCode:      bill.couponCode,
